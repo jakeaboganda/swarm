@@ -4,11 +4,20 @@ use protocol::messages::{AgentId, ClientMessage, EntityState, ServerMessage, Sta
 use protocol::Vec3 as WireVec3;
 use transport::{ConnectionEvent, TransportHandle};
 
-use crate::agent::{AgentName, AgentRegistry, Connection, PendingRoster, Plan, Reflexes};
+use std::time::{Duration, Instant};
+
+use crate::agent::{
+    AgentName, AgentRegistry, AwaitingReconnect, Connection, PendingRoster, Plan, Reflexes,
+};
 use crate::events::ReflexFired;
 use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
 use crate::world::spawn_agent;
+
+/// How long a mid-scenario agent has to reconnect (re-`Join` by name)
+/// before the scenario ends. Absorbs a transient network blip on a slow,
+/// flaky agent without nuking the run for everyone else.
+const RECONNECT_GRACE: Duration = Duration::from_secs(8);
 
 /// Cap on inbound messages processed per drain so a burst can't stall the
 /// tick unboundedly. The transport channel is itself bounded, so this is a
@@ -40,36 +49,50 @@ fn spawn_position(index: usize, total: usize) -> Vec3 {
     Vec3::new(offset * spacing, crate::world::AGENT_RADIUS * 2.0, 0.0)
 }
 
-/// Drains transport's channels every frame and applies their effect to the
+/// Drains transport's channels each tick and applies their effect to the
 /// ECS world: spawning agents on `Join`, updating plans/reflexes, replying
-/// to `GetState`, and ending the scenario on disconnect. Runs regardless
-/// of `ScenarioState` — `Join` only matters while waiting for the roster,
-/// but a disconnect can end the scenario at any point after an agent has
-/// joined.
+/// to `GetState`, and handling disconnects. Runs regardless of
+/// `ScenarioState` — `Join` and disconnects are meaningful in more than one
+/// state.
 #[allow(clippy::too_many_arguments)]
 pub fn drain_transport(
     mut transport: ResMut<Transport>,
     mut commands: Commands,
     mut registry: ResMut<AgentRegistry>,
     mut pending: ResMut<PendingRoster>,
+    mut awaiting: ResMut<AwaitingReconnect>,
     roster: Res<Roster>,
     state: Res<State<ScenarioState>>,
     mut next_state: ResMut<NextState<ScenarioState>>,
-    mut end_reason: ResMut<EndReason>,
+    end_reason: Res<EndReason>,
     tick: Res<Tick>,
     mut query: Query<(&Transform, &Velocity, &mut Plan, &mut Reflexes, &AgentName)>,
 ) {
     while let Ok(event) = transport.0.events.try_recv() {
         if let ConnectionEvent::Disconnected(connection) = event {
-            if let Some(entity) = registry.remove_connection(connection) {
-                if *state.get() != ScenarioState::Ended {
-                    let name = query
-                        .get(entity)
-                        .map(|(_, _, _, _, name)| name.0.clone())
-                        .unwrap_or_else(|_| "unknown agent".to_string());
-                    end_reason.0 = Some(format!("{name} disconnected"));
-                    next_state.set(ScenarioState::Ended);
+            let Some(entity) = registry.remove_connection(connection) else {
+                continue;
+            };
+            let name = query
+                .get(entity)
+                .map(|(_, _, _, _, name)| name.0.clone())
+                .unwrap_or_else(|_| "unknown agent".to_string());
+            match *state.get() {
+                // Mid-scenario: don't end immediately — give the agent a
+                // grace window to reconnect. Its entity keeps coasting on
+                // its last plan/reflexes; `expire_reconnects` ends the
+                // scenario if the deadline passes.
+                ScenarioState::Running => {
+                    awaiting.mark(name, Instant::now() + RECONNECT_GRACE);
                 }
+                // Pre-start: reopen the slot so the agent (or another) can
+                // fill it, and remove the orphaned entity.
+                ScenarioState::WaitingForRoster => {
+                    registry.remove_name(&name);
+                    pending.0.push(name);
+                    commands.entity(entity).despawn();
+                }
+                ScenarioState::Ended => {}
             }
         }
     }
@@ -92,12 +115,33 @@ pub fn drain_transport(
                     );
                 }
                 ScenarioState::Running => {
-                    transport.0.send(
-                        connection,
-                        ServerMessage::Error {
-                            message: "scenario already running".into(),
-                        },
-                    );
+                    // A join while running is only valid as a reconnect of
+                    // an agent inside its grace window.
+                    if awaiting.is_awaiting(&name) {
+                        if let Some(entity) = registry.by_name(&name) {
+                            awaiting.reconnected(&name);
+                            registry.insert(connection, name.clone(), entity);
+                            commands.entity(entity).insert(Connection(connection));
+                            let position = query
+                                .get(entity)
+                                .map(|(transform, ..)| transform.translation)
+                                .unwrap_or(Vec3::ZERO);
+                            transport.0.send(
+                                connection,
+                                ServerMessage::Joined {
+                                    agent_id: AgentId(name),
+                                    position: to_wire(position),
+                                },
+                            );
+                        }
+                    } else {
+                        transport.0.send(
+                            connection,
+                            ServerMessage::Error {
+                                message: "scenario already running".into(),
+                            },
+                        );
+                    }
                 }
                 ScenarioState::WaitingForRoster => {
                     if !pending.0.contains(&name) {
@@ -167,6 +211,19 @@ pub fn drain_transport(
                 );
             }
         }
+    }
+}
+
+/// Ends the scenario if any awaiting-reconnect agent's grace window has
+/// elapsed without it coming back.
+pub fn expire_reconnects(
+    awaiting: Res<AwaitingReconnect>,
+    mut next_state: ResMut<NextState<ScenarioState>>,
+    mut end_reason: ResMut<EndReason>,
+) {
+    if let Some(name) = awaiting.expired(Instant::now()) {
+        end_reason.0 = Some(format!("{name} did not reconnect within grace window"));
+        next_state.set(ScenarioState::Ended);
     }
 }
 

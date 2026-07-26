@@ -9,12 +9,12 @@ mod world;
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{NoUserData, RapierPhysicsPlugin};
 
-use agent::{AgentRegistry, PendingRoster};
+use agent::{AgentRegistry, AwaitingReconnect, PendingRoster};
 use events::ReflexFired;
 use scenario::{ArenaBounds, Roster};
 use scenario_state::{EndReason, ScenarioState, Tick};
 use transport_bridge::{
-    activate_physics, deactivate_physics, drain_transport, forward_reflex_fired,
+    activate_physics, deactivate_physics, drain_transport, expire_reconnects, forward_reflex_fired,
     notify_scenario_ended, Transport,
 };
 
@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .insert_resource(arena_bounds)
         .insert_resource(pending_roster)
         .insert_resource(AgentRegistry::default())
+        .insert_resource(AwaitingReconnect::default())
         .insert_resource(EndReason::default())
         .insert_resource(Tick::default())
         .insert_resource(Transport(transport_handle))
@@ -58,7 +59,12 @@ async fn main() -> anyhow::Result<()> {
         // submitted plan is seen on the step it applies to, rather than at
         // render-frame rate. drain runs in all states (Join/disconnect);
         // arbitration only while Running.
-        .add_systems(FixedUpdate, drain_transport.before(arbitration::arbitrate))
+        .add_systems(
+            FixedUpdate,
+            (drain_transport, expire_reconnects)
+                .chain()
+                .before(arbitration::arbitrate),
+        )
         .add_systems(
             FixedUpdate,
             (arbitration::arbitrate, forward_reflex_fired)
