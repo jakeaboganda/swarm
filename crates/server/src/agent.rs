@@ -8,6 +8,12 @@ use transport::ConnectionId;
 #[derive(Component, Debug, Clone)]
 pub struct AgentName(pub String);
 
+/// The live connection currently controlling this entity. Used to route
+/// per-entity server messages (e.g. `ReflexFired`) back to the right
+/// socket.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Connection(pub ConnectionId);
+
 /// The deliberative layer: a path of waypoints, advanced as each is
 /// reached. `version` increments on every `SubmitPlan`, so agents can tell
 /// whether a `reflex_fired` event refers to their current plan.

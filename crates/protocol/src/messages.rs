@@ -62,6 +62,10 @@ pub struct EntityState {
     pub agent_id: AgentId,
     pub position: Vec3,
     pub velocity: Vec3,
+    /// Version of the plan currently driving this entity (incremented on
+    /// every `SubmitPlan`). Lets an agent tell whether a snapshot reflects
+    /// the plan it most recently submitted or an older one.
+    pub plan_version: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,6 +143,7 @@ mod tests {
                 agent_id: AgentId("car-1".into()),
                 position: Vec3::ZERO,
                 velocity: Vec3::ZERO,
+                plan_version: 3,
             }],
         }));
         round_trip(&ServerMessage::ReflexFired {

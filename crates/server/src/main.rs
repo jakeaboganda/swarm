@@ -1,5 +1,6 @@
 mod agent;
 mod arbitration;
+mod events;
 mod scenario;
 mod scenario_state;
 mod transport_bridge;
@@ -9,10 +10,12 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::{NoUserData, RapierPhysicsPlugin};
 
 use agent::{AgentRegistry, PendingRoster};
+use events::ReflexFired;
 use scenario::{ArenaBounds, Roster};
 use scenario_state::{EndReason, ScenarioState, Tick};
 use transport_bridge::{
-    activate_physics, deactivate_physics, drain_transport, notify_scenario_ended, Transport,
+    activate_physics, deactivate_physics, drain_transport, forward_reflex_fired,
+    notify_scenario_ended, Transport,
 };
 
 #[tokio::main]
@@ -42,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule())
         .add_plugins(movement::MovementPlugin)
         .init_state::<ScenarioState>()
+        .add_message::<ReflexFired>()
         .insert_resource(Roster(scenario_config))
         .insert_resource(arena_bounds)
         .insert_resource(pending_roster)
@@ -53,7 +57,8 @@ async fn main() -> anyhow::Result<()> {
         .add_systems(Update, drain_transport)
         .add_systems(
             FixedUpdate,
-            arbitration::arbitrate
+            (arbitration::arbitrate, forward_reflex_fired)
+                .chain()
                 .before(movement::MovementSet::ApplyForce)
                 .run_if(in_state(ScenarioState::Running)),
         )

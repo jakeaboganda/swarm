@@ -4,7 +4,8 @@ use protocol::messages::{AgentId, ClientMessage, EntityState, ServerMessage, Sta
 use protocol::Vec3 as WireVec3;
 use transport::{ConnectionEvent, TransportHandle};
 
-use crate::agent::{AgentName, AgentRegistry, PendingRoster, Plan, Reflexes};
+use crate::agent::{AgentName, AgentRegistry, Connection, PendingRoster, Plan, Reflexes};
+use crate::events::ReflexFired;
 use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
 use crate::world::spawn_agent;
@@ -95,7 +96,7 @@ pub fn drain_transport(
                         .position(|slot| slot.name == name)
                         .expect("checked above");
                     let position = spawn_position(index, roster.0.roster.len());
-                    let entity = spawn_agent(&mut commands, &name, position);
+                    let entity = spawn_agent(&mut commands, &name, position, connection);
                     registry.insert(connection, name.clone(), entity);
                     pending.0.retain(|pending_name| pending_name != &name);
 
@@ -130,10 +131,11 @@ pub fn drain_transport(
             ClientMessage::GetState => {
                 let entities = query
                     .iter()
-                    .map(|(transform, velocity, _, _, name)| EntityState {
+                    .map(|(transform, velocity, plan, _, name)| EntityState {
                         agent_id: AgentId(name.0.clone()),
                         position: to_wire(transform.translation),
                         velocity: to_wire(velocity.linear),
+                        plan_version: plan.version,
                     })
                     .collect();
                 transport.0.send(
@@ -165,4 +167,26 @@ pub fn notify_scenario_ended(transport: Res<Transport>, end_reason: Res<EndReaso
     transport
         .0
         .broadcast(ServerMessage::ScenarioEnded { reason });
+}
+
+/// Forwards each `ReflexFired` message emitted by arbitration to the
+/// owning agent as `ServerMessage::ReflexFired`, so an agent learns its
+/// plan was overridden without polling.
+pub fn forward_reflex_fired(
+    transport: Res<Transport>,
+    mut reflex_fired: MessageReader<ReflexFired>,
+    query: Query<&Connection>,
+) {
+    for event in reflex_fired.read() {
+        if let Ok(connection) = query.get(event.entity) {
+            transport.0.send(
+                connection.0,
+                ServerMessage::ReflexFired {
+                    tick: event.tick,
+                    plan_version: event.plan_version,
+                    action: event.action,
+                },
+            );
+        }
+    }
 }

@@ -5,6 +5,7 @@ use protocol::messages::ReflexAction;
 use sensors::{evaluate, Obstacle, SensorContext};
 
 use crate::agent::{Plan, Reflexes};
+use crate::events::ReflexFired;
 use crate::scenario::ArenaBounds;
 use crate::scenario_state::Tick;
 use crate::world::AGENT_RADIUS;
@@ -71,6 +72,7 @@ fn wall_obstacles(position: Vec3, bounds: &ArenaBounds) -> [Obstacle; 4] {
 pub fn arbitrate(
     mut tick: ResMut<Tick>,
     bounds: Res<ArenaBounds>,
+    mut reflex_fired: MessageWriter<ReflexFired>,
     mut query: Query<(
         Entity,
         &Transform,
@@ -120,6 +122,12 @@ pub fn arbitrate(
                 value: Vec3::ZERO,
                 urgent: true,
             };
+            reflex_fired.write(ReflexFired {
+                entity,
+                tick: tick.0,
+                plan_version: plan.version,
+                action,
+            });
             if action == ReflexAction::StopAndHold {
                 plan.waypoints.clear();
             }

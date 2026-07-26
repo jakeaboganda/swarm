@@ -2,8 +2,9 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use movement::{DesiredVelocity, Holonomic};
 use protocol::scenario::ArenaConfig;
+use transport::ConnectionId;
 
-use crate::agent::{AgentName, Plan, Reflexes};
+use crate::agent::{AgentName, Connection, Plan, Reflexes};
 
 const WALL_HEIGHT: f32 = 3.0;
 const WALL_THICKNESS: f32 = 0.5;
@@ -87,10 +88,16 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
 /// with the `Holonomic` movement model. Rotation is fully locked — v1
 /// doesn't need a facing direction for physics (see `movement`'s cosmetic
 /// `face_velocity_direction` system for the visual-only yaw).
-pub fn spawn_agent(commands: &mut Commands, name: &str, position: Vec3) -> Entity {
+pub fn spawn_agent(
+    commands: &mut Commands,
+    name: &str,
+    position: Vec3,
+    connection: ConnectionId,
+) -> Entity {
     commands
         .spawn((
             AgentName(name.to_string()),
+            Connection(connection),
             Plan::default(),
             Reflexes::default(),
             DesiredVelocity::default(),
