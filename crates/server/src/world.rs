@@ -5,6 +5,7 @@ use protocol::scenario::ArenaConfig;
 use transport::ConnectionId;
 
 use crate::agent::{AgentName, Connection, Plan, Reflexes};
+use crate::viz::Trail;
 
 const WALL_HEIGHT: f32 = 3.0;
 const WALL_THICKNESS: f32 = 0.5;
@@ -138,6 +139,7 @@ pub fn spawn_agent(
             Mesh3d(render.mesh.clone()),
             MeshMaterial3d(render.material.clone()),
             Transform::from_translation(position),
+            Trail::default(),
             // Physics components, nested so the whole spawn stays within
             // Bevy's per-tuple bundle element limit.
             (

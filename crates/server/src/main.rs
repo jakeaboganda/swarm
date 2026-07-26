@@ -4,6 +4,7 @@ mod events;
 mod scenario;
 mod scenario_state;
 mod transport_bridge;
+mod viz;
 mod world;
 
 use bevy::prelude::*;
@@ -72,6 +73,13 @@ async fn main() -> anyhow::Result<()> {
                 .before(movement::MovementSet::ApplyForce)
                 .run_if(in_state(ScenarioState::Running)),
         )
+        // Record motion trails at the physics cadence; draw plans and
+        // trails every rendered frame.
+        .add_systems(
+            FixedUpdate,
+            viz::record_trails.run_if(in_state(ScenarioState::Running)),
+        )
+        .add_systems(Update, (viz::draw_plans, viz::draw_trails))
         .add_systems(OnEnter(ScenarioState::Running), activate_physics)
         .add_systems(
             OnEnter(ScenarioState::Ended),
