@@ -1,0 +1,175 @@
+use std::cmp::Reverse;
+
+use protocol::messages::{Operator, ReflexAction, ReflexRule};
+
+use crate::context::SensorContext;
+use crate::sensor::sensor_for;
+
+/// How much a reading has to move back past its threshold before a
+/// triggered rule clears, so an entity sitting near the boundary doesn't
+/// flicker the action on/off every tick.
+const HYSTERESIS_MARGIN: f32 = 0.5;
+
+/// A registered reflex rule plus its own trigger state, needed for
+/// hysteresis (whether a rule is active depends on whether it *was*
+/// active last tick, not just the current reading).
+pub struct ActiveRule {
+    rule: ReflexRule,
+    active: bool,
+}
+
+impl ActiveRule {
+    pub fn new(rule: ReflexRule) -> Self {
+        Self {
+            rule,
+            active: false,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+}
+
+fn condition_met(rule: &ReflexRule, reading: f32, currently_active: bool) -> bool {
+    let margin = if currently_active {
+        HYSTERESIS_MARGIN
+    } else {
+        0.0
+    };
+    match rule.operator {
+        Operator::LessThan => reading < rule.threshold + margin,
+        Operator::GreaterThan => reading > rule.threshold - margin,
+    }
+}
+
+/// Updates every rule's trigger state against the current world state and
+/// returns the action of the highest-priority active rule, if any. Ties
+/// are broken by registration order (earlier in `rules` wins) — priority
+/// is per-agent: this only ever compares one agent's rules against each
+/// other.
+pub fn evaluate(rules: &mut [ActiveRule], ctx: &SensorContext) -> Option<ReflexAction> {
+    for active_rule in rules.iter_mut() {
+        let sensor = sensor_for(&active_rule.rule.sensor);
+        let reading = sensor.read(ctx);
+        active_rule.active = condition_met(&active_rule.rule, reading, active_rule.active);
+    }
+
+    rules
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.active)
+        .max_by_key(|(index, r)| (r.rule.priority, Reverse(*index)))
+        .map(|(_, r)| r.rule.action)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Obstacle;
+    use glam::Vec3;
+
+    fn rule(operator: Operator, threshold: f32, action: ReflexAction, priority: i32) -> ReflexRule {
+        ReflexRule {
+            sensor: protocol::messages::SensorKind::Speed,
+            operator,
+            threshold,
+            action,
+            priority,
+        }
+    }
+
+    fn ctx_with_speed(speed: f32) -> SensorContext {
+        SensorContext {
+            self_position: Vec3::ZERO,
+            self_velocity: Vec3::new(speed, 0.0, 0.0),
+            obstacles: vec![],
+        }
+    }
+
+    #[test]
+    fn higher_priority_wins_when_both_active() {
+        let mut rules = vec![
+            ActiveRule::new(rule(Operator::GreaterThan, 1.0, ReflexAction::Brake, 1)),
+            ActiveRule::new(rule(
+                Operator::GreaterThan,
+                1.0,
+                ReflexAction::StopAndHold,
+                5,
+            )),
+        ];
+        let action = evaluate(&mut rules, &ctx_with_speed(10.0));
+        assert_eq!(action, Some(ReflexAction::StopAndHold));
+    }
+
+    #[test]
+    fn equal_priority_ties_broken_by_registration_order() {
+        let mut rules = vec![
+            ActiveRule::new(rule(Operator::GreaterThan, 1.0, ReflexAction::Brake, 5)),
+            ActiveRule::new(rule(
+                Operator::GreaterThan,
+                1.0,
+                ReflexAction::StopAndHold,
+                5,
+            )),
+        ];
+        let action = evaluate(&mut rules, &ctx_with_speed(10.0));
+        assert_eq!(action, Some(ReflexAction::Brake));
+    }
+
+    #[test]
+    fn no_action_when_nothing_active() {
+        let mut rules = vec![ActiveRule::new(rule(
+            Operator::GreaterThan,
+            100.0,
+            ReflexAction::Brake,
+            0,
+        ))];
+        let action = evaluate(&mut rules, &ctx_with_speed(1.0));
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn hysteresis_keeps_rule_active_past_the_trigger_threshold() {
+        let mut rules = vec![ActiveRule::new(rule(
+            Operator::LessThan,
+            2.0,
+            ReflexAction::Brake,
+            0,
+        ))];
+
+        // Reading well below threshold: triggers.
+        evaluate(&mut rules, &ctx_with_speed(1.0));
+        assert!(rules[0].is_active());
+
+        // Reading rises above the raw threshold but within the hysteresis
+        // margin: should stay active (no chatter at the boundary).
+        evaluate(&mut rules, &ctx_with_speed(2.2));
+        assert!(rules[0].is_active());
+
+        // Reading rises past threshold + margin: clears.
+        evaluate(&mut rules, &ctx_with_speed(3.0));
+        assert!(!rules[0].is_active());
+    }
+
+    #[test]
+    fn time_to_collision_and_walls_are_reachable_through_evaluate() {
+        let mut rules = vec![ActiveRule::new(ReflexRule {
+            sensor: protocol::messages::SensorKind::TimeToCollision,
+            operator: Operator::LessThan,
+            threshold: 5.0,
+            action: ReflexAction::Brake,
+            priority: 0,
+        })];
+        let ctx = SensorContext {
+            self_position: Vec3::ZERO,
+            self_velocity: Vec3::new(1.0, 0.0, 0.0),
+            obstacles: vec![Obstacle {
+                position: Vec3::new(3.0, 0.0, 0.0),
+                velocity: Vec3::ZERO,
+                radius: 0.0,
+            }],
+        };
+        assert_eq!(evaluate(&mut rules, &ctx), Some(ReflexAction::Brake));
+    }
+}
