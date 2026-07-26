@@ -115,4 +115,43 @@ mod tests {
             .expect("inbound channel closed");
         assert_eq!(inbound.message, join);
     }
+
+    #[tokio::test]
+    async fn binary_frame_gets_error_reply_without_disconnecting() {
+        let mut handle = spawn_test_server().await;
+        let url = format!("ws://{}", handle.local_addr);
+        let (mut client, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("client connect");
+
+        client
+            .send(Message::binary(vec![1, 2, 3]))
+            .await
+            .expect("send binary");
+
+        let response = tokio::time::timeout(Duration::from_secs(1), client.next())
+            .await
+            .expect("timed out waiting for error reply")
+            .expect("client stream closed")
+            .expect("websocket error");
+        let Message::Text(text) = response else {
+            panic!("expected text frame")
+        };
+        let parsed: ServerMessage = serde_json::from_str(&text).expect("valid ServerMessage json");
+        assert!(matches!(parsed, ServerMessage::Error { .. }));
+
+        // Connection stays open: a following valid message still arrives.
+        let join = ClientMessage::Join {
+            name: "car-1".into(),
+        };
+        client
+            .send(Message::text(serde_json::to_string(&join).unwrap()))
+            .await
+            .expect("send join");
+        let inbound = tokio::time::timeout(Duration::from_secs(1), handle.inbound.recv())
+            .await
+            .expect("timed out waiting for inbound message after binary one")
+            .expect("inbound channel closed");
+        assert_eq!(inbound.message, join);
+    }
 }

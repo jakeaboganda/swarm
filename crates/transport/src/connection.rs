@@ -7,10 +7,21 @@ use protocol::messages::{ClientMessage, ServerMessage};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
+use tokio_tungstenite::WebSocketStream;
 
 use crate::types::{ConnectionEvent, ConnectionId, Inbound};
 
 type OutboundRegistry = Arc<Mutex<HashMap<ConnectionId, mpsc::UnboundedSender<ServerMessage>>>>;
+
+/// Sends a `ServerMessage::Error` text frame to the client.
+async fn send_error(
+    ws: &mut WebSocketStream<TcpStream>,
+    message: String,
+) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+    let reply = ServerMessage::Error { message };
+    let text = serde_json::to_string(&reply).expect("ServerMessage always serializes");
+    ws.send(Message::text(text)).await
+}
 
 /// Owns one connection end-to-end: accepting the WebSocket handshake,
 /// heartbeat ping/pong with timeout detection, JSON (de)serialization, and
@@ -22,7 +33,7 @@ pub async fn handle_connection(
     id: ConnectionId,
     heartbeat_interval: Duration,
     heartbeat_timeout: Duration,
-    inbound_tx: mpsc::UnboundedSender<Inbound>,
+    inbound_tx: mpsc::Sender<Inbound>,
     event_tx: mpsc::UnboundedSender<ConnectionEvent>,
     outbound: OutboundRegistry,
 ) {
@@ -62,19 +73,34 @@ pub async fn handle_connection(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<ClientMessage>(&text) {
                             Ok(message) => {
-                                let _ = inbound_tx.send(Inbound { connection: id, message });
+                                // Bounded channel: awaiting here applies
+                                // backpressure to a flooding client rather
+                                // than growing memory. An error means the
+                                // server dropped its receiver — shut down.
+                                if inbound_tx.send(Inbound { connection: id, message }).await.is_err() {
+                                    break;
+                                }
                             }
                             Err(err) => {
                                 // Malformed message: reply with an error and
                                 // keep the connection open. Closing it here
                                 // would be indistinguishable from a real
                                 // disconnect, which ends the whole scenario.
-                                let reply = ServerMessage::Error { message: err.to_string() };
-                                let text = serde_json::to_string(&reply).expect("ServerMessage always serializes");
-                                if ws.send(Message::text(text)).await.is_err() {
+                                if send_error(&mut ws, err.to_string()).await.is_err() {
                                     break;
                                 }
                             }
+                        }
+                    }
+                    Some(Ok(Message::Binary(_))) => {
+                        // Same contract as malformed text: the protocol is
+                        // JSON text frames only, but a stray binary frame is
+                        // not a reason to end the scenario.
+                        if send_error(&mut ws, "binary frames are not supported; send JSON text".into())
+                            .await
+                            .is_err()
+                        {
+                            break;
                         }
                     }
                     Some(Ok(Message::Pong(_))) => {

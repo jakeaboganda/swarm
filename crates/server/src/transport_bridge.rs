@@ -10,11 +10,26 @@ use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
 use crate::world::spawn_agent;
 
+/// Cap on inbound messages processed per drain so a burst can't stall the
+/// tick unboundedly. The transport channel is itself bounded, so this is a
+/// second line of defense.
+const MAX_INBOUND_PER_DRAIN: usize = 512;
+
 #[derive(Resource)]
 pub struct Transport(pub TransportHandle);
 
+fn finite(x: f32) -> f32 {
+    if x.is_finite() {
+        x
+    } else {
+        0.0
+    }
+}
+
+/// Non-finite floats serialize to JSON `null`, which agents can't parse
+/// back into a `Vec3`; coerce them to zero at the wire boundary.
 fn to_wire(v: Vec3) -> WireVec3 {
-    WireVec3::new(v.x, v.y, v.z)
+    WireVec3::new(finite(v.x), finite(v.y), finite(v.z))
 }
 
 /// Spawn position for the Nth roster slot: spread evenly along X, just
@@ -59,7 +74,12 @@ pub fn drain_transport(
         }
     }
 
-    while let Ok(inbound) = transport.0.inbound.try_recv() {
+    let mut drained = 0;
+    while drained < MAX_INBOUND_PER_DRAIN {
+        let Ok(inbound) = transport.0.inbound.try_recv() else {
+            break;
+        };
+        drained += 1;
         let connection = inbound.connection;
         match inbound.message {
             ClientMessage::Join { name } => match *state.get() {
