@@ -88,6 +88,7 @@ pub fn arbitrate(
         let ctx = SensorContext {
             self_position: transform.translation,
             self_velocity: velocity.linear,
+            self_radius: AGENT_RADIUS,
             obstacles,
         };
 

@@ -16,5 +16,9 @@ pub struct Obstacle {
 pub struct SensorContext {
     pub self_position: Vec3,
     pub self_velocity: Vec3,
+    /// The sensing entity's own collision radius. `TimeToCollision` adds
+    /// this to each obstacle's radius so contact is predicted at the
+    /// surfaces, not the centers.
+    pub self_radius: f32,
     pub obstacles: Vec<Obstacle>,
 }

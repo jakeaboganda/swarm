@@ -83,6 +83,7 @@ mod tests {
         SensorContext {
             self_position: Vec3::ZERO,
             self_velocity: Vec3::new(speed, 0.0, 0.0),
+            self_radius: 0.0,
             obstacles: vec![],
         }
     }
@@ -164,6 +165,7 @@ mod tests {
         let ctx = SensorContext {
             self_position: Vec3::ZERO,
             self_velocity: Vec3::new(1.0, 0.0, 0.0),
+            self_radius: 0.0,
             obstacles: vec![Obstacle {
                 position: Vec3::new(3.0, 0.0, 0.0),
                 velocity: Vec3::ZERO,

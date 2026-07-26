@@ -17,7 +17,14 @@ impl Sensor for TimeToCollision {
     fn read(&self, ctx: &SensorContext) -> f32 {
         ctx.obstacles
             .iter()
-            .map(|obstacle| closing_time(ctx.self_position, ctx.self_velocity, obstacle))
+            .map(|obstacle| {
+                closing_time(
+                    ctx.self_position,
+                    ctx.self_velocity,
+                    ctx.self_radius,
+                    obstacle,
+                )
+            })
             .fold(f32::INFINITY, f32::min)
     }
 }
@@ -54,15 +61,21 @@ pub fn sensor_for(kind: &SensorKind) -> Box<dyn Sensor> {
 /// Nearest-by-closing-time (not nearest-by-distance — these diverge: a far,
 /// fast-closing obstacle can have a lower time-to-collision than a near,
 /// slow one). Treats both parties as spheres and solves for the smallest
-/// non-negative `t` at which the distance between them equals `radius`,
-/// via linear extrapolation of current relative velocity. Returns
-/// `f32::INFINITY` if they never come within `radius` on their current
-/// trajectories.
-fn closing_time(self_position: Vec3, self_velocity: Vec3, obstacle: &Obstacle) -> f32 {
+/// non-negative `t` at which their surfaces touch (center distance equals
+/// the sum of radii), via linear extrapolation of current relative
+/// velocity. Returns `f32::INFINITY` if they never come within contact on
+/// their current trajectories.
+fn closing_time(
+    self_position: Vec3,
+    self_velocity: Vec3,
+    self_radius: f32,
+    obstacle: &Obstacle,
+) -> f32 {
     let relative_position = obstacle.position - self_position;
     let relative_velocity = obstacle.velocity - self_velocity;
 
-    let c = relative_position.length_squared() - obstacle.radius * obstacle.radius;
+    let contact_distance = self_radius + obstacle.radius;
+    let c = relative_position.length_squared() - contact_distance * contact_distance;
     if c <= 0.0 {
         return 0.0;
     }
@@ -98,6 +111,7 @@ mod tests {
         SensorContext {
             self_position,
             self_velocity,
+            self_radius: 0.0,
             obstacles,
         }
     }
@@ -178,6 +192,25 @@ mod tests {
         // The near-but-matching-velocity obstacle never closes (infinite);
         // the far one does, in finite time.
         assert!(ttc.is_finite());
+    }
+
+    #[test]
+    fn self_radius_shortens_time_to_collision() {
+        // Point obstacle 8 units away, closing at 2 units/s. With a
+        // point self (radius 0) contact is at t=4; with self radius 2 the
+        // surfaces meet 2 units sooner, at t=3.
+        let obstacle = Obstacle {
+            position: Vec3::new(8.0, 0.0, 0.0),
+            velocity: Vec3::ZERO,
+            radius: 0.0,
+        };
+        let with_radius = TimeToCollision.read(&SensorContext {
+            self_position: Vec3::ZERO,
+            self_velocity: Vec3::new(2.0, 0.0, 0.0),
+            self_radius: 2.0,
+            obstacles: vec![obstacle],
+        });
+        assert!((with_radius - 3.0).abs() < 1e-4);
     }
 
     #[test]
