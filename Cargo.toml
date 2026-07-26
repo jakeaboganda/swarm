@@ -5,6 +5,7 @@ members = [
     "crates/movement",
     "crates/sensors",
     "crates/transport",
+    "crates/server",
 ]
 
 [workspace.package]
@@ -13,6 +14,9 @@ publish = false
 
 [workspace.dependencies]
 protocol = { path = "crates/protocol" }
+movement = { path = "crates/movement" }
+sensors = { path = "crates/sensors" }
+transport = { path = "crates/transport" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,0 +1,21 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+protocol = { workspace = true }
+movement = { workspace = true }
+sensors = { workspace = true }
+transport = { workspace = true }
+
+bevy = { workspace = true }
+bevy_rapier3d = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
