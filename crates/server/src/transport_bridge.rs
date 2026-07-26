@@ -12,7 +12,7 @@ use crate::agent::{
 use crate::events::ReflexFired;
 use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
-use crate::world::spawn_agent;
+use crate::world::{spawn_agent, AgentRenderAssets};
 
 /// How long a mid-scenario agent has to reconnect (re-`Join` by name)
 /// before the scenario ends. Absorbs a transient network blip on a slow,
@@ -62,6 +62,7 @@ pub fn drain_transport(
     mut pending: ResMut<PendingRoster>,
     mut awaiting: ResMut<AwaitingReconnect>,
     roster: Res<Roster>,
+    render: Res<AgentRenderAssets>,
     state: Res<State<ScenarioState>>,
     mut next_state: ResMut<NextState<ScenarioState>>,
     end_reason: Res<EndReason>,
@@ -160,7 +161,7 @@ pub fn drain_transport(
                         .position(|slot| slot.name == name)
                         .expect("checked above");
                     let position = spawn_position(index, roster.0.roster.len());
-                    let entity = spawn_agent(&mut commands, &name, position, connection);
+                    let entity = spawn_agent(&mut commands, &name, position, connection, &render);
                     registry.insert(connection, name.clone(), entity);
                     pending.0.retain(|pending_name| pending_name != &name);
 

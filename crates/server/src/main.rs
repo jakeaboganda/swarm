@@ -82,6 +82,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn setup_arena(mut commands: Commands, roster: Res<Roster>) {
-    world::spawn_arena(&mut commands, &roster.0.arena);
+fn setup_arena(
+    mut commands: Commands,
+    roster: Res<Roster>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    world::spawn_arena(&mut commands, &roster.0.arena, &mut meshes, &mut materials);
 }
