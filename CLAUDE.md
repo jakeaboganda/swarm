@@ -89,6 +89,12 @@ Cargo workspace, five crates:
   why. Panics are for programmer-error invariant violations, not for
   expected/recoverable conditions (malformed agent input, disconnects,
   scenario JSON errors all fall into the latter).
+- **Test-Driven Development**: we do TDD in this repository. Write a
+  failing test that pins down the behavior first, then the code that makes
+  it pass, then refactor. When logic is entangled with Bevy/networking and
+  can't be unit-tested directly, extract the decision into a pure function
+  and drive *that* with tests (as `arbitration::planar_seek` and
+  `AwaitingReconnect` are).
 - **Testing**: required for the pure/deterministic logic crates —
   `protocol` (serialization round-trips), `movement` (seek-controller
   math), `sensors` (predicate evaluation, hysteresis, priority/tiebreak
