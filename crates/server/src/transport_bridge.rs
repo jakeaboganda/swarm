@@ -170,16 +170,25 @@ pub fn drain_transport(
     }
 }
 
-pub fn activate_physics(mut query: Query<&mut RapierConfiguration, With<DefaultRapierContext>>) {
-    if let Ok(mut config) = query.single_mut() {
-        config.physics_pipeline_active = true;
+fn set_physics_active(
+    query: &mut Query<&mut RapierConfiguration, With<DefaultRapierContext>>,
+    active: bool,
+) {
+    match query.single_mut() {
+        Ok(mut config) => config.physics_pipeline_active = active,
+        // The default Rapier context is created in PreStartup, so a miss
+        // here means a plugin-ordering change broke an assumption — loud is
+        // better than silently leaving physics in its prior state.
+        Err(err) => warn!("could not set physics_pipeline_active={active}: {err}"),
     }
 }
 
+pub fn activate_physics(mut query: Query<&mut RapierConfiguration, With<DefaultRapierContext>>) {
+    set_physics_active(&mut query, true);
+}
+
 pub fn deactivate_physics(mut query: Query<&mut RapierConfiguration, With<DefaultRapierContext>>) {
-    if let Ok(mut config) = query.single_mut() {
-        config.physics_pipeline_active = false;
-    }
+    set_physics_active(&mut query, false);
 }
 
 pub fn notify_scenario_ended(transport: Res<Transport>, end_reason: Res<EndReason>) {

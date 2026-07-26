@@ -54,7 +54,11 @@ async fn main() -> anyhow::Result<()> {
         .insert_resource(Tick::default())
         .insert_resource(Transport(transport_handle))
         .add_systems(Startup, (setup_arena, deactivate_physics))
-        .add_systems(Update, drain_transport)
+        // Ingest agent messages in the same fixed cadence as physics so a
+        // submitted plan is seen on the step it applies to, rather than at
+        // render-frame rate. drain runs in all states (Join/disconnect);
+        // arbitration only while Running.
+        .add_systems(FixedUpdate, drain_transport.before(arbitration::arbitrate))
         .add_systems(
             FixedUpdate,
             (arbitration::arbitrate, forward_reflex_fired)

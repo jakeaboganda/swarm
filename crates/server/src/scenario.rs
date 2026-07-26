@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use std::collections::HashSet;
+
+use anyhow::{bail, Context, Result};
 use bevy::prelude::*;
 use protocol::scenario::ScenarioConfig;
 
@@ -14,5 +16,53 @@ pub struct ArenaBounds {
 pub fn load_scenario(path: &str) -> Result<ScenarioConfig> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("reading scenario file at {path}"))?;
-    serde_json::from_str(&contents).with_context(|| format!("parsing scenario file at {path}"))
+    let config: ScenarioConfig = serde_json::from_str(&contents)
+        .with_context(|| format!("parsing scenario file at {path}"))?;
+    validate(&config).with_context(|| format!("invalid scenario file at {path}"))?;
+    Ok(config)
+}
+
+/// Roster names are the agent identity and drive the "all joined" count, so
+/// a duplicate would let two connections collide on one slot. Reject it at
+/// load rather than fail confusingly at runtime.
+fn validate(config: &ScenarioConfig) -> Result<()> {
+    let mut seen = HashSet::new();
+    for slot in &config.roster {
+        if !seen.insert(slot.name.as_str()) {
+            bail!("duplicate roster name: {}", slot.name);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protocol::scenario::{AgentSlot, ArenaConfig, Embodiment};
+
+    fn config(names: &[&str]) -> ScenarioConfig {
+        ScenarioConfig {
+            arena: ArenaConfig {
+                width: 50.0,
+                depth: 50.0,
+            },
+            roster: names
+                .iter()
+                .map(|name| AgentSlot {
+                    name: (*name).to_string(),
+                    embodiment: Embodiment::Holonomic,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn unique_roster_is_accepted() {
+        assert!(validate(&config(&["car-1", "car-2"])).is_ok());
+    }
+
+    #[test]
+    fn duplicate_roster_name_is_rejected() {
+        assert!(validate(&config(&["car-1", "car-1"])).is_err());
+    }
 }
