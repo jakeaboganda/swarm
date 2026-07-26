@@ -105,7 +105,17 @@ pub fn spawn_agent(commands: &mut Commands, name: &str, position: Vec3) -> Entit
                 linear_damping: 0.75,
                 angular_damping: 0.0,
             },
-            Friction::new(0.5),
+            // Frictionless against the ground: the agent is a planar mover,
+            // and ground Coulomb friction would impose a stiction floor that
+            // a proportional controller can't overcome, leaving a dead-band
+            // where low commanded speeds produce no motion at all. `Min`
+            // combine means the agent contributes zero regardless of the
+            // other collider's friction. Deceleration comes from linear
+            // damping and the controller, not the surface.
+            Friction {
+                coefficient: 0.0,
+                combine_rule: CoefficientCombineRule::Min,
+            },
             Restitution::new(0.1),
         ))
         .id()

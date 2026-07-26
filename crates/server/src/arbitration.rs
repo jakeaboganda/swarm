@@ -9,7 +9,30 @@ use crate::scenario::ArenaBounds;
 use crate::scenario_state::Tick;
 use crate::world::AGENT_RADIUS;
 
+/// A waypoint is reached once the entity is within this horizontal
+/// distance of it.
 const ARRIVAL_TOLERANCE: f32 = 0.5;
+/// Inside this horizontal distance of a waypoint, commanded speed scales
+/// down linearly toward zero ("arrive" behavior) so the entity settles on
+/// the point instead of overshooting and orbiting it.
+const ARRIVE_RADIUS: f32 = 2.0;
+
+/// Horizontal (xz-plane) steering toward a waypoint. Motion is
+/// ground-constrained, so both the arrival test and the steering direction
+/// ignore the vertical axis — otherwise the capsule's resting height above
+/// the ground (center well above y=0) would keep every ground-plane
+/// waypoint permanently "unreached". Returns `None` once arrived (the
+/// caller should advance to the next waypoint), else the desired velocity
+/// with arrive-slowdown applied.
+fn planar_seek(current: Vec3, target: Vec3, speed: f32) -> Option<Vec3> {
+    let delta = Vec3::new(target.x - current.x, 0.0, target.z - current.z);
+    let distance = delta.length();
+    if distance < ARRIVAL_TOLERANCE {
+        return None;
+    }
+    let scaled_speed = speed * (distance / ARRIVE_RADIUS).min(1.0);
+    Some(delta / distance * scaled_speed)
+}
 
 /// Nearest point on each of the four walls to `position`, treated as
 /// static (zero-velocity) obstacles for `time_to_collision`. Clamping to
@@ -109,15 +132,17 @@ pub fn arbitrate(
                 waypoint.position.y,
                 waypoint.position.z,
             );
-            let to_target = target - transform.translation;
-            if to_target.length() < ARRIVAL_TOLERANCE {
-                plan.waypoints.pop_front();
-            } else {
-                *desired = DesiredVelocity {
-                    value: to_target.normalize() * waypoint.speed,
-                    urgent: false,
-                };
-                continue;
+            match planar_seek(transform.translation, target, waypoint.speed) {
+                Some(value) => {
+                    *desired = DesiredVelocity {
+                        value,
+                        urgent: false,
+                    };
+                    continue;
+                }
+                None => {
+                    plan.waypoints.pop_front();
+                }
             }
         }
 
@@ -125,5 +150,36 @@ pub fn arbitrate(
             value: Vec3::ZERO,
             urgent: false,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrived_when_horizontally_close_despite_vertical_offset() {
+        // Capsule rests with its center ~1 unit above a y=0 ground-plane
+        // waypoint; horizontally it is within tolerance, so it has arrived.
+        let current = Vec3::new(0.2, 1.0, 0.1);
+        let target = Vec3::new(0.0, 0.0, 0.0);
+        assert_eq!(planar_seek(current, target, 5.0), None);
+    }
+
+    #[test]
+    fn full_speed_far_from_target_in_the_horizontal_plane() {
+        let desired = planar_seek(Vec3::new(0.0, 1.0, 0.0), Vec3::new(10.0, 0.0, 0.0), 5.0)
+            .expect("not arrived");
+        assert!((desired.x - 5.0).abs() < 1e-4);
+        assert_eq!(desired.y, 0.0);
+        assert_eq!(desired.z, 0.0);
+    }
+
+    #[test]
+    fn speed_scales_down_inside_the_arrive_radius() {
+        // 1 unit out with ARRIVE_RADIUS 2.0 -> half the commanded speed.
+        let desired = planar_seek(Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 5.0)
+            .expect("not arrived");
+        assert!((desired.length() - 2.5).abs() < 1e-4);
     }
 }
