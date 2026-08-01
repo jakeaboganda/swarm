@@ -2,11 +2,13 @@
 //! viewers. A forward/observational channel, separate from the agent
 //! protocol.
 
+mod broadcast;
 mod frame;
 mod math;
 mod message;
 mod scene;
 
+pub use broadcast::{spawn, ViewerId, VizConfig, VizEvent, VizHandle};
 pub use frame::{DebugFrame, EntityDebug, EntityFrame, Frame};
 pub use math::{Quat, Transform, Vec3};
 pub use message::{decode, encode, Hello, ServerToViewer, ViewerToServer};

@@ -27,5 +27,11 @@ MessagePack (`rmp-serde`, named fields) via [`encode`]/[`decode`] — compact,
 and decodable from the browser/Python. The same serde types also serialize
 to JSON for debugging; tests assert both round-trip.
 
-Contents in this increment: the wire types and codec only. The broadcast
-server lands next.
+## Broadcast server
+
+`spawn(VizConfig)` starts a WebSocket broadcaster on a separate port (4001
+by default). `VizHandle` lets the sim `broadcast` scene messages to all
+viewers, `broadcast_debug` to debug subscribers only, and `send` to one
+viewer (the scene-init on connect). A `VizEvent` stream reports viewers
+connecting/leaving. Per-viewer outbound queues are bounded and drop frames
+when full — fine here, since each frame is a complete snapshot.
