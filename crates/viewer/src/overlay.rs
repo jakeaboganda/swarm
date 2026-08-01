@@ -23,12 +23,17 @@ fn on_plane(x: f32, z: f32) -> Vec3 {
     Vec3::new(x, VIZ_HEIGHT, z)
 }
 
-/// Appends the current position to each entity's trail once per frame.
+/// Appends the current position to each entity's trail, but only when it
+/// actually moved. `record_trails` runs at render FPS while positions
+/// update at the ~30 Hz frame rate, so deduping keeps the trail a
+/// consistent length in time rather than in frames.
 pub fn record_trails(mut query: Query<(&Transform, &mut Trail)>) {
     for (transform, mut trail) in &mut query {
-        trail
-            .0
-            .push_back(on_plane(transform.translation.x, transform.translation.z));
+        let point = on_plane(transform.translation.x, transform.translation.z);
+        if trail.0.back() == Some(&point) {
+            continue;
+        }
+        trail.0.push_back(point);
         if trail.0.len() > TRAIL_MAX {
             trail.0.pop_front();
         }

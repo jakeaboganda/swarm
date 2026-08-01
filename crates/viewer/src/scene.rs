@@ -86,9 +86,9 @@ fn spawn_entity(
 }
 
 /// Drains the viz stream and applies it to the rendered world: (re)builds
-/// the scene on `SceneInit`, adds/removes entities on lifecycle events, and
-/// updates transforms / debug data from frames. Defensive against the
-/// stream: frames for unknown ids are ignored, and spawns are idempotent.
+/// the scene on `SceneInit`, adds/removes entities on lifecycle events, then
+/// applies the latest frame / debug frame. Defensive against the stream:
+/// frames for unknown ids are ignored, and spawns are idempotent.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_stream(
     mut stream: ResMut<VizStream>,
@@ -100,7 +100,8 @@ pub fn apply_stream(
     mut transforms: Query<&mut Transform>,
     mut debug: Query<&mut DebugData>,
 ) {
-    while let Ok(message) = stream.0.try_recv() {
+    // Reliable, ordered messages first (scene-init resets before any frame).
+    while let Ok(message) = stream.reliable.try_recv() {
         match message {
             ServerToViewer::SceneInit(init) => {
                 // A scene-init is a full reset (also how a reconnect
@@ -144,30 +145,55 @@ pub fn apply_stream(
             ServerToViewer::Event(SceneEvent::ScenarioState { state: scenario }) => {
                 state.scenario = Some(scenario);
             }
-            ServerToViewer::Frame(frame) => {
-                for entity_frame in &frame.entities {
-                    if let Some(&entity) = map.0.get(&entity_frame.id) {
-                        if let Ok(mut transform) = transforms.get_mut(entity) {
-                            *transform = to_transform(&entity_frame.transform);
-                        }
-                    }
-                }
-            }
-            ServerToViewer::DebugFrame(debug_frame) => {
-                for entity_debug in &debug_frame.entities {
-                    if let Some(&entity) = map.0.get(&entity_debug.id) {
-                        if let Ok(mut data) = debug.get_mut(entity) {
-                            data.plan = entity_debug
-                                .plan
-                                .iter()
-                                .map(|p| Vec3::new(p.x, p.y, p.z))
-                                .collect();
-                            data.reflex_active = entity_debug.reflex_active;
-                        }
+            // Frames/debug frames are keep-latest (below), never reliable.
+            ServerToViewer::Frame(_) | ServerToViewer::DebugFrame(_) => {}
+        }
+    }
+
+    // Then the newest frame (keep-latest: intermediate frames are coalesced
+    // away, so the queue can never grow).
+    if stream.frame.has_changed().unwrap_or(false) {
+        if let Some(frame) = stream.frame.borrow_and_update().clone() {
+            for entity_frame in &frame.entities {
+                if let Some(&entity) = map.0.get(&entity_frame.id) {
+                    if let Ok(mut transform) = transforms.get_mut(entity) {
+                        *transform = to_transform(&entity_frame.transform);
                     }
                 }
             }
         }
+    }
+
+    if stream.debug.has_changed().unwrap_or(false) {
+        if let Some(debug_frame) = stream.debug.borrow_and_update().clone() {
+            for entity_debug in &debug_frame.entities {
+                if let Some(&entity) = map.0.get(&entity_debug.id) {
+                    if let Ok(mut data) = debug.get_mut(entity) {
+                        data.plan = entity_debug
+                            .plan
+                            .iter()
+                            .map(|p| Vec3::new(p.x, p.y, p.z))
+                            .collect();
+                        data.reflex_active = entity_debug.reflex_active;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Frames the top-down camera to the arena once its bounds arrive (and if
+/// they change between scenarios).
+pub fn frame_camera(state: Res<ViewerState>, mut camera: Query<&mut Transform, With<Camera3d>>) {
+    if !state.is_changed() {
+        return;
+    }
+    let Some(arena) = state.arena else {
+        return;
+    };
+    let height = arena.width.max(arena.depth) * 0.9;
+    if let Ok(mut transform) = camera.single_mut() {
+        *transform = Transform::from_xyz(0.0, height, height).looking_at(Vec3::ZERO, Vec3::Y);
     }
 }
 
