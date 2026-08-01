@@ -67,6 +67,7 @@ pub fn drain_transport(
     mut next_state: ResMut<NextState<ScenarioState>>,
     end_reason: Res<EndReason>,
     tick: Res<Tick>,
+    viz_res: Res<crate::viz_broadcast::Viz>,
     mut query: Query<(&Transform, &Velocity, &mut Plan, &mut Reflexes, &AgentName)>,
 ) {
     while let Ok(event) = transport.0.events.try_recv() {
@@ -89,6 +90,11 @@ pub fn drain_transport(
                 // Pre-start: reopen the slot so the agent (or another) can
                 // fill it, and remove the orphaned entity.
                 ScenarioState::WaitingForRoster => {
+                    viz_res.0.broadcast_reliable(&viz::ServerToViewer::Event(
+                        viz::SceneEvent::EntityDespawned {
+                            id: viz::EntityId(name.clone()),
+                        },
+                    ));
                     registry.remove_name(&name);
                     pending.0.push(name);
                     commands.entity(entity).despawn();

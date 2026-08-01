@@ -13,6 +13,7 @@ protocol = { workspace = true }
 movement = { workspace = true }
 sensors = { workspace = true }
 transport = { workspace = true }
+viz = { workspace = true }
 
 bevy = { workspace = true }
 bevy_rapier3d = { workspace = true }

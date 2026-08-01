@@ -1,10 +1,11 @@
 mod agent;
 mod arbitration;
 mod events;
+mod overlay;
 mod scenario;
 mod scenario_state;
 mod transport_bridge;
-mod viz;
+mod viz_broadcast;
 mod world;
 
 use bevy::prelude::*;
@@ -18,6 +19,9 @@ use transport_bridge::{
     activate_physics, deactivate_physics, drain_transport, expire_reconnects, forward_reflex_fired,
     notify_scenario_ended, Transport,
 };
+use viz_broadcast::{
+    broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz, VizFrameTimer,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,6 +32,9 @@ async fn main() -> anyhow::Result<()> {
 
     let transport_handle = transport::spawn(transport::Config::default()).await?;
     println!("listening for agents on {}", transport_handle.local_addr);
+
+    let viz_handle = viz::spawn(viz::VizConfig::default()).await?;
+    println!("streaming viz on {}", viz_handle.local_addr);
 
     let pending_roster = PendingRoster(
         scenario_config
@@ -55,6 +62,8 @@ async fn main() -> anyhow::Result<()> {
         .insert_resource(EndReason::default())
         .insert_resource(Tick::default())
         .insert_resource(Transport(transport_handle))
+        .insert_resource(Viz(viz_handle))
+        .insert_resource(VizFrameTimer::default())
         .add_systems(Startup, (setup_arena, deactivate_physics))
         // Ingest agent messages in the same fixed cadence as physics so a
         // submitted plan is seen on the step it applies to, rather than at
@@ -77,13 +86,22 @@ async fn main() -> anyhow::Result<()> {
         // trails every rendered frame.
         .add_systems(
             FixedUpdate,
-            viz::record_trails.run_if(in_state(ScenarioState::Running)),
+            overlay::record_trails.run_if(in_state(ScenarioState::Running)),
         )
-        .add_systems(Update, (viz::draw_plans, viz::draw_trails))
-        .add_systems(OnEnter(ScenarioState::Running), activate_physics)
+        .add_systems(Update, (overlay::draw_plans, overlay::draw_trails))
+        // Viz broadcast: catch new viewers up, announce agent spawns, and
+        // stream frames at the viz rate (decoupled from physics/render).
+        .add_systems(
+            Update,
+            (drain_viz_events, broadcast_spawns, broadcast_frames),
+        )
+        .add_systems(
+            OnEnter(ScenarioState::Running),
+            (activate_physics, broadcast_state),
+        )
         .add_systems(
             OnEnter(ScenarioState::Ended),
-            (deactivate_physics, notify_scenario_ended),
+            (deactivate_physics, notify_scenario_ended, broadcast_state),
         )
         .run();
 

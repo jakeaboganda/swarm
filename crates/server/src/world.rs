@@ -5,13 +5,30 @@ use protocol::scenario::{ArenaConfig, Embodiment};
 use transport::ConnectionId;
 
 use crate::agent::{AgentName, Connection, Plan, Reflexes};
-use crate::viz::Trail;
+use crate::overlay::Trail;
+use crate::viz_broadcast::{viz_embodiment, VizEntity};
 
 const WALL_HEIGHT: f32 = 3.0;
 const WALL_THICKNESS: f32 = 0.5;
 const GROUND_HALF_THICKNESS: f32 = 0.1;
 pub const AGENT_RADIUS: f32 = 0.5;
 const AGENT_HALF_HEIGHT: f32 = 0.5;
+
+const GROUND_COLOR: viz::Color = viz::Color {
+    r: 0.26,
+    g: 0.28,
+    b: 0.32,
+};
+const WALL_COLOR: viz::Color = viz::Color {
+    r: 0.45,
+    g: 0.47,
+    b: 0.52,
+};
+const AGENT_COLOR: viz::Color = viz::Color {
+    r: 0.95,
+    g: 0.45,
+    b: 0.1,
+};
 
 /// Shared render handles created once at startup and reused for every agent
 /// spawned later (agents are created on `Join`, where asset access isn't
@@ -48,6 +65,15 @@ pub fn spawn_arena(
         Transform::from_xyz(0.0, -GROUND_HALF_THICKNESS, 0.0),
         Friction::new(0.5),
         Restitution::new(0.1),
+        VizEntity {
+            id: viz::EntityId("ground".into()),
+            name: "ground".into(),
+            kind: viz::EntityKind::Static,
+            shape: viz::Shape::Cuboid {
+                half_extents: viz::Vec3::new(half_width, GROUND_HALF_THICKNESS, half_depth),
+            },
+            color: GROUND_COLOR,
+        },
     ));
 
     let wall_half_thickness = WALL_THICKNESS / 2.0;
@@ -79,7 +105,7 @@ pub fn spawn_arena(
             half_depth + WALL_THICKNESS,
         ),
     ];
-    for (x, z, half_x, half_z) in walls {
+    for (index, (x, z, half_x, half_z)) in walls.into_iter().enumerate() {
         commands.spawn((
             RigidBody::Fixed,
             Collider::cuboid(half_x, WALL_HEIGHT / 2.0, half_z),
@@ -88,6 +114,15 @@ pub fn spawn_arena(
             Transform::from_xyz(x, WALL_HEIGHT / 2.0, z),
             Friction::new(0.5),
             Restitution::new(0.1),
+            VizEntity {
+                id: viz::EntityId(format!("wall-{index}")),
+                name: format!("wall-{index}"),
+                kind: viz::EntityKind::Static,
+                shape: viz::Shape::Cuboid {
+                    half_extents: viz::Vec3::new(half_x, WALL_HEIGHT / 2.0, half_z),
+                },
+                color: WALL_COLOR,
+            },
         ));
     }
 
@@ -139,6 +174,18 @@ pub fn spawn_agent(
         MeshMaterial3d(render.material.clone()),
         Transform::from_translation(position),
         Trail::default(),
+        VizEntity {
+            id: viz::EntityId(name.to_string()),
+            name: name.to_string(),
+            kind: viz::EntityKind::Agent {
+                embodiment: viz_embodiment(embodiment),
+            },
+            shape: viz::Shape::Capsule {
+                radius: AGENT_RADIUS,
+                half_length: AGENT_HALF_HEIGHT,
+            },
+            color: AGENT_COLOR,
+        },
         // Physics components, nested so the whole spawn stays within
         // Bevy's per-tuple bundle element limit.
         (
