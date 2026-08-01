@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -10,10 +11,18 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::message::{encode, Hello, ServerToViewer, ViewerToServer};
 
-/// Per-viewer outbound queue depth. Bounded so a slow or dead viewer can't
-/// grow memory — frames are dropped when it's full, which is fine for viz:
-/// the next frame is a complete snapshot that resupplies the truth.
-const OUTBOUND_CAPACITY: usize = 8;
+/// Per-viewer *lossy* queue depth. Bounded so a slow or dead viewer can't
+/// grow memory — frames are dropped when it's full, which is fine for the
+/// scene/debug frame stream: the next frame is a complete snapshot that
+/// resupplies the truth. Must-deliver messages use the reliable channel
+/// instead.
+const LOSSY_CAPACITY: usize = 8;
+/// How long a newly accepted connection has to send its `Hello` before we
+/// drop it. Guards against slowloris clients that connect and go silent.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Backoff after a listener error so a persistent failure (e.g. EMFILE)
+/// doesn't spin a core.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Identifies one connected viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,14 +49,25 @@ pub enum VizEvent {
 }
 
 struct ViewerConn {
-    sender: mpsc::Sender<Vec<u8>>,
+    /// Must-deliver messages (scene-init, lifecycle events). Unbounded, so
+    /// they are never dropped; low-rate, so growth is bounded in practice
+    /// and a truly dead viewer is reclaimed when its socket errors.
+    reliable: mpsc::UnboundedSender<Vec<u8>>,
+    /// Droppable messages (frames, debug frames). Bounded; drops on full.
+    lossy: mpsc::Sender<Vec<u8>>,
     subscribe_debug: bool,
 }
 
 type Registry = Arc<Mutex<HashMap<ViewerId, ViewerConn>>>;
 
+/// Locks the registry, recovering from a poisoned mutex. A viewer task
+/// panicking must never take down the sim thread on its next broadcast.
+fn lock(registry: &Registry) -> MutexGuard<'_, HashMap<ViewerId, ViewerConn>> {
+    registry.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// What the sim uses to drive the broadcaster: watch viewers come and go,
-/// and push messages out to all / one / debug-subscribers.
+/// and push messages out over the reliable or lossy path.
 pub struct VizHandle {
     pub events: mpsc::UnboundedReceiver<VizEvent>,
     pub local_addr: SocketAddr,
@@ -55,30 +75,42 @@ pub struct VizHandle {
 }
 
 impl VizHandle {
-    /// Sends to every connected viewer. Use for scene-layer messages.
-    pub fn broadcast(&self, message: &ServerToViewer) {
+    /// Reliable broadcast to every viewer — for must-deliver messages
+    /// (lifecycle events: spawn/despawn, scenario-state changes).
+    pub fn broadcast_reliable(&self, message: &ServerToViewer) {
         let bytes = encode(message);
-        let registry = self.registry.lock().expect("viz registry poisoned");
+        let registry = lock(&self.registry);
         for conn in registry.values() {
-            let _ = conn.sender.try_send(bytes.clone());
+            let _ = conn.reliable.send(bytes.clone());
         }
     }
 
-    /// Sends only to viewers that opted into the debug layer.
+    /// Reliable send to one viewer — for the scene-init that catches a
+    /// newly connected viewer up. Never dropped under frame backpressure.
+    pub fn send_reliable(&self, id: ViewerId, message: &ServerToViewer) {
+        let bytes = encode(message);
+        let registry = lock(&self.registry);
+        if let Some(conn) = registry.get(&id) {
+            let _ = conn.reliable.send(bytes);
+        }
+    }
+
+    /// Lossy broadcast to every viewer — for the scene frame stream.
+    /// Dropped for any viewer whose queue is full.
+    pub fn broadcast_frame(&self, message: &ServerToViewer) {
+        let bytes = encode(message);
+        let registry = lock(&self.registry);
+        for conn in registry.values() {
+            let _ = conn.lossy.try_send(bytes.clone());
+        }
+    }
+
+    /// Lossy broadcast to viewers that opted into the debug layer.
     pub fn broadcast_debug(&self, message: &ServerToViewer) {
         let bytes = encode(message);
-        let registry = self.registry.lock().expect("viz registry poisoned");
+        let registry = lock(&self.registry);
         for conn in registry.values().filter(|c| c.subscribe_debug) {
-            let _ = conn.sender.try_send(bytes.clone());
-        }
-    }
-
-    /// Sends to a single viewer (e.g. the scene-init on connect).
-    pub fn send(&self, id: ViewerId, message: &ServerToViewer) {
-        let bytes = encode(message);
-        let registry = self.registry.lock().expect("viz registry poisoned");
-        if let Some(conn) = registry.get(&id) {
-            let _ = conn.sender.try_send(bytes);
+            let _ = conn.lossy.try_send(bytes.clone());
         }
     }
 }
@@ -96,8 +128,13 @@ pub async fn spawn(config: VizConfig) -> std::io::Result<VizHandle> {
     let accept_registry = registry.clone();
     tokio::spawn(async move {
         loop {
-            let Ok((stream, _peer)) = listener.accept().await else {
-                continue;
+            let stream = match listener.accept().await {
+                Ok((stream, _peer)) => stream,
+                // Back off rather than busy-spin on a persistent error.
+                Err(_) => {
+                    tokio::time::sleep(ACCEPT_BACKOFF).await;
+                    continue;
+                }
             };
             let id = ViewerId(next_id.fetch_add(1, Ordering::Relaxed));
             tokio::spawn(handle_viewer(
@@ -116,8 +153,28 @@ pub async fn spawn(config: VizConfig) -> std::io::Result<VizHandle> {
     })
 }
 
+/// Reads the `Hello` handshake within the timeout, returning the viewer's
+/// debug subscription, or `None` if it never (validly) said hello.
+async fn read_handshake(ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>) -> Option<bool> {
+    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, ws.next())
+        .await
+        .ok()?;
+    match first {
+        Some(Ok(Message::Binary(bytes))) => {
+            match crate::message::decode::<ViewerToServer>(&bytes) {
+                Ok(ViewerToServer::Hello(hello)) => Some(hello.subscribe_debug),
+                // Reachable/garbled hello: default to "wants everything".
+                Err(_) => Some(Hello::default().subscribe_debug),
+            }
+        }
+        Some(Ok(_)) => Some(Hello::default().subscribe_debug),
+        _ => None, // closed/errored before saying hello
+    }
+}
+
 /// Owns one viewer connection: reads the `Hello` handshake, registers the
-/// connection, forwards outbound frames, and cleans up on disconnect.
+/// connection, forwards reliable + lossy messages, and cleans up on
+/// disconnect.
 async fn handle_viewer(
     stream: TcpStream,
     id: ViewerId,
@@ -127,25 +184,17 @@ async fn handle_viewer(
     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
         return;
     };
-
-    // Handshake: the first message should be a Hello. Default to "wants
-    // everything" if it's missing or unparseable rather than rejecting.
-    let subscribe_debug = match ws.next().await {
-        Some(Ok(Message::Binary(bytes))) => {
-            match crate::message::decode::<ViewerToServer>(&bytes) {
-                Ok(ViewerToServer::Hello(hello)) => hello.subscribe_debug,
-                Err(_) => Hello::default().subscribe_debug,
-            }
-        }
-        Some(Ok(_)) => Hello::default().subscribe_debug,
-        _ => return, // closed/errored before saying hello
+    let Some(subscribe_debug) = read_handshake(&mut ws).await else {
+        return;
     };
 
-    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_CAPACITY);
-    registry.lock().expect("viz registry poisoned").insert(
+    let (reliable_tx, mut reliable_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (lossy_tx, mut lossy_rx) = mpsc::channel::<Vec<u8>>(LOSSY_CAPACITY);
+    lock(&registry).insert(
         id,
         ViewerConn {
-            sender: out_tx,
+            reliable: reliable_tx,
+            lossy: lossy_tx,
             subscribe_debug,
         },
     );
@@ -156,8 +205,17 @@ async fn handle_viewer(
 
     loop {
         tokio::select! {
-            outgoing = out_rx.recv() => {
-                let Some(bytes) = outgoing else { break };
+            // Prefer reliable messages: a scene-init/lifecycle event must go
+            // out before the frames that assume it.
+            biased;
+            reliable = reliable_rx.recv() => {
+                let Some(bytes) = reliable else { break };
+                if ws.send(Message::binary(bytes)).await.is_err() {
+                    break;
+                }
+            }
+            lossy = lossy_rx.recv() => {
+                let Some(bytes) = lossy else { break };
                 if ws.send(Message::binary(bytes)).await.is_err() {
                     break;
                 }
@@ -174,7 +232,7 @@ async fn handle_viewer(
         }
     }
 
-    registry.lock().expect("viz registry poisoned").remove(&id);
+    lock(&registry).remove(&id);
     let _ = event_tx.send(VizEvent::ViewerDisconnected { id });
 }
 
@@ -185,6 +243,7 @@ mod tests {
     use super::*;
     use crate::frame::Frame;
     use crate::message::decode;
+    use crate::scene::{ArenaBounds, ScenarioState, SceneInit};
 
     async fn spawn_test_server() -> VizHandle {
         spawn(VizConfig {
@@ -194,10 +253,9 @@ mod tests {
         .expect("bind test viz listener")
     }
 
-    async fn connect(
-        addr: SocketAddr,
-        hello: Hello,
-    ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>> {
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+    async fn connect(addr: SocketAddr, hello: Hello) -> Client {
         let url = format!("ws://{addr}");
         let (mut client, _) = tokio_tungstenite::connect_async(url)
             .await
@@ -209,24 +267,41 @@ mod tests {
         client
     }
 
+    async fn next_message(client: &mut Client) -> ServerToViewer {
+        let received = tokio::time::timeout(Duration::from_secs(1), client.next())
+            .await
+            .expect("timed out")
+            .expect("stream closed")
+            .expect("ws error");
+        let Message::Binary(bytes) = received else {
+            panic!("expected binary frame")
+        };
+        decode::<ServerToViewer>(&bytes).expect("decode")
+    }
+
+    fn scene_init() -> ServerToViewer {
+        ServerToViewer::SceneInit(SceneInit {
+            tick: 0,
+            state: ScenarioState::WaitingForRoster,
+            arena: ArenaBounds {
+                width: 50.0,
+                depth: 50.0,
+            },
+            entities: vec![],
+        })
+    }
+
     #[tokio::test]
     async fn viewer_connect_emits_event_and_receives_broadcast() {
         let mut handle = spawn_test_server().await;
-        let mut client = connect(
-            handle.local_addr,
-            Hello {
-                subscribe_debug: true,
-            },
-        )
-        .await;
+        let mut client = connect(handle.local_addr, Hello::default()).await;
 
         let event = tokio::time::timeout(Duration::from_secs(1), handle.events.recv())
             .await
             .expect("timed out")
             .expect("events closed");
         let VizEvent::ViewerConnected {
-            id,
-            subscribe_debug,
+            subscribe_debug, ..
         } = event
         else {
             panic!("expected ViewerConnected, got {event:?}");
@@ -237,17 +312,8 @@ mod tests {
             tick: 7,
             entities: vec![],
         });
-        handle.send(id, &frame);
-
-        let received = tokio::time::timeout(Duration::from_secs(1), client.next())
-            .await
-            .expect("timed out")
-            .expect("stream closed")
-            .expect("ws error");
-        let Message::Binary(bytes) = received else {
-            panic!("expected binary frame")
-        };
-        assert_eq!(decode::<ServerToViewer>(&bytes).expect("decode"), frame);
+        handle.broadcast_frame(&frame);
+        assert_eq!(next_message(&mut client).await, frame);
     }
 
     #[tokio::test]
@@ -260,16 +326,8 @@ mod tests {
             },
         )
         .await;
+        handle.events.recv().await;
 
-        // Wait for the connection to register.
-        tokio::time::timeout(Duration::from_secs(1), handle.events.recv())
-            .await
-            .expect("timed out")
-            .expect("events closed");
-
-        // A debug broadcast should not reach a non-subscriber, but a plain
-        // broadcast should. Send debug first, then scene; the watcher must
-        // receive only the scene message.
         let debug = ServerToViewer::DebugFrame(crate::frame::DebugFrame {
             tick: 1,
             entities: vec![],
@@ -279,18 +337,42 @@ mod tests {
             entities: vec![],
         });
         handle.broadcast_debug(&debug);
-        handle.broadcast(&scene);
+        handle.broadcast_frame(&scene);
 
-        let received = tokio::time::timeout(Duration::from_secs(1), watcher.next())
-            .await
-            .expect("timed out")
-            .expect("stream closed")
-            .expect("ws error");
-        let Message::Binary(bytes) = received else {
-            panic!("expected binary frame")
+        // The non-subscriber's first message must be the scene frame,
+        // proving the debug frame was filtered out.
+        assert_eq!(next_message(&mut watcher).await, scene);
+    }
+
+    #[tokio::test]
+    async fn reliable_send_survives_frame_backpressure() {
+        let mut handle = spawn_test_server().await;
+        let mut client = connect(handle.local_addr, Hello::default()).await;
+        let VizEvent::ViewerConnected { id, .. } = handle.events.recv().await.unwrap() else {
+            panic!("expected ViewerConnected");
         };
-        // First (and only pending) message must be the scene frame, proving
-        // the debug frame was filtered out.
-        assert_eq!(decode::<ServerToViewer>(&bytes).expect("decode"), scene);
+
+        // Flood far more frames than the lossy queue can hold, without the
+        // client reading, then send a reliable scene-init. The scene-init
+        // must still arrive despite the frame flood being dropped.
+        for tick in 0..100 {
+            handle.broadcast_frame(&ServerToViewer::Frame(Frame {
+                tick,
+                entities: vec![],
+            }));
+        }
+        handle.send_reliable(id, &scene_init());
+
+        // Drain until we see the scene-init (biased select delivers it ahead
+        // of queued frames).
+        for _ in 0..LOSSY_CAPACITY + 2 {
+            if matches!(
+                next_message(&mut client).await,
+                ServerToViewer::SceneInit(_)
+            ) {
+                return;
+            }
+        }
+        panic!("reliable scene-init was not delivered");
     }
 }
