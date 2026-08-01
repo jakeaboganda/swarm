@@ -89,11 +89,18 @@ async fn main() -> anyhow::Result<()> {
             overlay::record_trails.run_if(in_state(ScenarioState::Running)),
         )
         .add_systems(Update, (overlay::draw_plans, overlay::draw_trails))
-        // Viz broadcast: catch new viewers up, announce agent spawns, and
-        // stream frames at the viz rate (decoupled from physics/render).
+        // Viz broadcast. `broadcast_spawns` runs before `drain_viz_events`
+        // so a viewer connecting the same frame an agent joins learns of
+        // that agent only via its scene-init, never also via a duplicate
+        // EntitySpawned (a not-yet-ready viewer is skipped by the spawn
+        // broadcast). Frames stream only while Running — no dynamic state
+        // to send otherwise.
+        .add_systems(Update, (broadcast_spawns, drain_viz_events).chain())
         .add_systems(
             Update,
-            (drain_viz_events, broadcast_spawns, broadcast_frames),
+            broadcast_frames
+                .after(drain_viz_events)
+                .run_if(in_state(ScenarioState::Running)),
         )
         .add_systems(
             OnEnter(ScenarioState::Running),

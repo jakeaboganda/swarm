@@ -83,7 +83,10 @@ pub fn drain_transport(
                 // Mid-scenario: don't end immediately — give the agent a
                 // grace window to reconnect. Its entity keeps coasting on
                 // its last plan/reflexes; `expire_reconnects` ends the
-                // scenario if the deadline passes.
+                // scenario if the deadline passes. The entity is never
+                // despawned in this path, so viewers keep showing it —
+                // frozen with the rest of the world once the scenario ends,
+                // which matches the freeze-and-inspect end state.
                 ScenarioState::Running => {
                     awaiting.mark(name, Instant::now() + RECONNECT_GRACE);
                 }

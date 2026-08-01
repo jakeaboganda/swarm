@@ -56,6 +56,10 @@ struct ViewerConn {
     /// Droppable messages (frames, debug frames). Bounded; drops on full.
     lossy: mpsc::Sender<Vec<u8>>,
     subscribe_debug: bool,
+    /// Set once the viewer's scene-init has been sent. Until then it
+    /// receives nothing else, so it never sees a frame or lifecycle event
+    /// referencing an entity it wasn't told about.
+    ready: bool,
 }
 
 type Registry = Arc<Mutex<HashMap<ViewerId, ViewerConn>>>;
@@ -75,41 +79,44 @@ pub struct VizHandle {
 }
 
 impl VizHandle {
-    /// Reliable broadcast to every viewer — for must-deliver messages
+    /// Sends a viewer its scene-init and marks it ready, after which it
+    /// receives the live stream. Call once per `ViewerConnected`. The
+    /// scene-init reflects the world at send time, so it is the single
+    /// source of truth a viewer starts from.
+    pub fn send_scene_init(&self, id: ViewerId, message: &ServerToViewer) {
+        let bytes = encode(message);
+        let mut registry = lock(&self.registry);
+        if let Some(conn) = registry.get_mut(&id) {
+            let _ = conn.reliable.send(bytes);
+            conn.ready = true;
+        }
+    }
+
+    /// Reliable broadcast to every ready viewer — for must-deliver messages
     /// (lifecycle events: spawn/despawn, scenario-state changes).
     pub fn broadcast_reliable(&self, message: &ServerToViewer) {
         let bytes = encode(message);
         let registry = lock(&self.registry);
-        for conn in registry.values() {
+        for conn in registry.values().filter(|c| c.ready) {
             let _ = conn.reliable.send(bytes.clone());
         }
     }
 
-    /// Reliable send to one viewer — for the scene-init that catches a
-    /// newly connected viewer up. Never dropped under frame backpressure.
-    pub fn send_reliable(&self, id: ViewerId, message: &ServerToViewer) {
-        let bytes = encode(message);
-        let registry = lock(&self.registry);
-        if let Some(conn) = registry.get(&id) {
-            let _ = conn.reliable.send(bytes);
-        }
-    }
-
-    /// Lossy broadcast to every viewer — for the scene frame stream.
+    /// Lossy broadcast to every ready viewer — for the scene frame stream.
     /// Dropped for any viewer whose queue is full.
     pub fn broadcast_frame(&self, message: &ServerToViewer) {
         let bytes = encode(message);
         let registry = lock(&self.registry);
-        for conn in registry.values() {
+        for conn in registry.values().filter(|c| c.ready) {
             let _ = conn.lossy.try_send(bytes.clone());
         }
     }
 
-    /// Lossy broadcast to viewers that opted into the debug layer.
+    /// Lossy broadcast to ready viewers that opted into the debug layer.
     pub fn broadcast_debug(&self, message: &ServerToViewer) {
         let bytes = encode(message);
         let registry = lock(&self.registry);
-        for conn in registry.values().filter(|c| c.subscribe_debug) {
+        for conn in registry.values().filter(|c| c.ready && c.subscribe_debug) {
             let _ = conn.lossy.try_send(bytes.clone());
         }
     }
@@ -202,6 +209,7 @@ async fn handle_viewer(
             reliable: reliable_tx,
             lossy: lossy_tx,
             subscribe_debug,
+            ready: false,
         },
     );
     let _ = event_tx.send(VizEvent::ViewerConnected {
@@ -247,9 +255,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::frame::Frame;
+    use crate::frame::{DebugFrame, Frame};
     use crate::message::decode;
-    use crate::scene::{ArenaBounds, ScenarioState, SceneInit};
+    use crate::scene::{ArenaBounds, ScenarioState, SceneEvent, SceneInit};
 
     async fn spawn_test_server() -> VizHandle {
         spawn(VizConfig {
@@ -298,22 +306,26 @@ mod tests {
         })
     }
 
-    #[tokio::test]
-    async fn viewer_connect_emits_event_and_receives_broadcast() {
-        let mut handle = spawn_test_server().await;
-        let mut client = connect(handle.local_addr, Hello::default()).await;
-
-        let event = tokio::time::timeout(Duration::from_secs(1), handle.events.recv())
-            .await
-            .expect("timed out")
-            .expect("events closed");
-        let VizEvent::ViewerConnected {
-            subscribe_debug, ..
-        } = event
-        else {
-            panic!("expected ViewerConnected, got {event:?}");
+    /// Connects a viewer, waits for its `ViewerConnected`, sends its
+    /// scene-init (marking it ready), and consumes that scene-init — so the
+    /// returned client is ready to receive the live stream.
+    async fn connect_ready(handle: &mut VizHandle, hello: Hello) -> (Client, ViewerId) {
+        let mut client = connect(handle.local_addr, hello).await;
+        let VizEvent::ViewerConnected { id, .. } = handle.events.recv().await.unwrap() else {
+            panic!("expected ViewerConnected");
         };
-        assert!(subscribe_debug);
+        handle.send_scene_init(id, &scene_init());
+        assert!(matches!(
+            next_message(&mut client).await,
+            ServerToViewer::SceneInit(_)
+        ));
+        (client, id)
+    }
+
+    #[tokio::test]
+    async fn ready_viewer_receives_frame() {
+        let mut handle = spawn_test_server().await;
+        let (mut client, _id) = connect_ready(&mut handle, Hello::default()).await;
 
         let frame = ServerToViewer::Frame(Frame {
             tick: 7,
@@ -321,6 +333,31 @@ mod tests {
         });
         handle.broadcast_frame(&frame);
         assert_eq!(next_message(&mut client).await, frame);
+    }
+
+    #[tokio::test]
+    async fn frames_are_withheld_until_scene_init() {
+        let mut handle = spawn_test_server().await;
+        let mut client = connect(handle.local_addr, Hello::default()).await;
+        let VizEvent::ViewerConnected { id, .. } = handle.events.recv().await.unwrap() else {
+            panic!("expected ViewerConnected");
+        };
+
+        // A frame broadcast before the scene-init must not reach the
+        // not-yet-ready viewer.
+        handle.broadcast_frame(&ServerToViewer::Frame(Frame {
+            tick: 1,
+            entities: vec![],
+        }));
+        let early = tokio::time::timeout(Duration::from_millis(200), client.next()).await;
+        assert!(early.is_err(), "frame leaked before scene-init");
+
+        // Once the scene-init is sent, it is the first thing the viewer sees.
+        handle.send_scene_init(id, &scene_init());
+        assert!(matches!(
+            next_message(&mut client).await,
+            ServerToViewer::SceneInit(_)
+        ));
     }
 
     #[tokio::test]
@@ -343,17 +380,16 @@ mod tests {
     #[tokio::test]
     async fn debug_broadcast_skips_non_subscribers() {
         let mut handle = spawn_test_server().await;
-        let mut watcher = connect(
-            handle.local_addr,
+        let (mut watcher, _id) = connect_ready(
+            &mut handle,
             Hello {
                 protocol_version: PROTOCOL_VERSION,
                 subscribe_debug: false,
             },
         )
         .await;
-        handle.events.recv().await;
 
-        let debug = ServerToViewer::DebugFrame(crate::frame::DebugFrame {
+        let debug = ServerToViewer::DebugFrame(DebugFrame {
             tick: 1,
             entities: vec![],
         });
@@ -370,34 +406,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reliable_send_survives_frame_backpressure() {
+    async fn reliable_events_survive_frame_backpressure() {
         let mut handle = spawn_test_server().await;
-        let mut client = connect(handle.local_addr, Hello::default()).await;
-        let VizEvent::ViewerConnected { id, .. } = handle.events.recv().await.unwrap() else {
-            panic!("expected ViewerConnected");
-        };
+        let (mut client, _id) = connect_ready(&mut handle, Hello::default()).await;
 
         // Flood far more frames than the lossy queue can hold, without the
-        // client reading, then send a reliable scene-init. The scene-init
-        // must still arrive despite the frame flood being dropped.
+        // client reading, then broadcast a reliable lifecycle event. The
+        // event must still arrive despite the frame flood being dropped.
         for tick in 0..100 {
             handle.broadcast_frame(&ServerToViewer::Frame(Frame {
                 tick,
                 entities: vec![],
             }));
         }
-        handle.send_reliable(id, &scene_init());
+        handle.broadcast_reliable(&ServerToViewer::Event(SceneEvent::ScenarioState {
+            state: ScenarioState::Running,
+        }));
 
-        // Drain until we see the scene-init (biased select delivers it ahead
-        // of queued frames).
+        // The biased select delivers the reliable event ahead of queued frames.
         for _ in 0..LOSSY_CAPACITY + 2 {
-            if matches!(
-                next_message(&mut client).await,
-                ServerToViewer::SceneInit(_)
-            ) {
+            if matches!(next_message(&mut client).await, ServerToViewer::Event(_)) {
                 return;
             }
         }
-        panic!("reliable scene-init was not delivered");
+        panic!("reliable event was not delivered");
     }
 }

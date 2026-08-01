@@ -107,7 +107,7 @@ pub fn drain_viz_events(
             },
             entities,
         });
-        viz.0.send_reliable(id, &scene);
+        viz.0.send_scene_init(id, &scene);
     }
 }
 
