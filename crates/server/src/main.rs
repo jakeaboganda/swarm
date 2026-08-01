@@ -1,14 +1,17 @@
 mod agent;
 mod arbitration;
 mod events;
-mod overlay;
 mod scenario;
 mod scenario_state;
 mod transport_bridge;
 mod viz_broadcast;
 mod world;
 
+use std::time::Duration;
+
+use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
 use bevy_rapier3d::prelude::{NoUserData, RapierPhysicsPlugin};
 
 use agent::{AgentRegistry, AwaitingReconnect, PendingRoster};
@@ -49,7 +52,16 @@ async fn main() -> anyhow::Result<()> {
     };
 
     App::new()
-        .add_plugins(DefaultPlugins)
+        // Headless: no window or rendering — rendering lives in the viewer.
+        // A bounded run-loop drives the app instead of a window event loop.
+        .add_plugins(
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+                1.0 / 120.0,
+            ))),
+        )
+        .add_plugins(bevy::log::LogPlugin::default())
+        .add_plugins(TransformPlugin)
+        .add_plugins(StatesPlugin)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule())
         .add_plugins(movement::MovementPlugin)
         .init_state::<ScenarioState>()
@@ -82,13 +94,6 @@ async fn main() -> anyhow::Result<()> {
                 .before(movement::MovementSet::ApplyForce)
                 .run_if(in_state(ScenarioState::Running)),
         )
-        // Record motion trails at the physics cadence; draw plans and
-        // trails every rendered frame.
-        .add_systems(
-            FixedUpdate,
-            overlay::record_trails.run_if(in_state(ScenarioState::Running)),
-        )
-        .add_systems(Update, (overlay::draw_plans, overlay::draw_trails))
         // Viz broadcast. `broadcast_spawns` runs before `drain_viz_events`
         // so a viewer connecting the same frame an agent joins learns of
         // that agent only via its scene-init, never also via a duplicate
@@ -115,11 +120,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn setup_arena(
-    mut commands: Commands,
-    roster: Res<Roster>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    world::spawn_arena(&mut commands, &roster.0.arena, &mut meshes, &mut materials);
+fn setup_arena(mut commands: Commands, roster: Res<Roster>) {
+    world::spawn_arena(&mut commands, &roster.0.arena);
 }
