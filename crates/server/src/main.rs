@@ -26,18 +26,26 @@ use viz_broadcast::{
     broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz, VizFrameTimer,
 };
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let scenario_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "scenario.json".to_string());
     let scenario_config = scenario::load_scenario(&scenario_path)?;
 
-    let transport_handle = transport::spawn(transport::Config::default()).await?;
-    println!("listening for agents on {}", transport_handle.local_addr);
-
-    let viz_handle = viz::spawn(viz::VizConfig::default()).await?;
-    println!("streaming viz on {}", viz_handle.local_addr);
+    // Own the tokio runtime explicitly. The transport and viz servers run on
+    // its background workers; Bevy's blocking headless run-loop then owns the
+    // main thread, so it never starves the async servers (as it would if it
+    // parked a worker under `#[tokio::main]`). The runtime must outlive the
+    // app, so it's held here for the whole run.
+    let runtime = tokio::runtime::Runtime::new()?;
+    let (transport_handle, viz_handle) = runtime.block_on(async {
+        let transport_handle = transport::spawn(transport::Config::default()).await?;
+        println!("listening for agents on {}", transport_handle.local_addr);
+        let viz_handle = viz::spawn(viz::VizConfig::default()).await?;
+        println!("streaming viz on {}", viz_handle.local_addr);
+        anyhow::Ok((transport_handle, viz_handle))
+    })?;
+    let _runtime_guard = runtime.enter();
 
     let pending_roster = PendingRoster(
         scenario_config
@@ -51,7 +59,8 @@ async fn main() -> anyhow::Result<()> {
         half_depth: scenario_config.arena.depth / 2.0,
     };
 
-    App::new()
+    let mut app = App::new();
+    app
         // Headless: no window or rendering — rendering lives in the viewer.
         // A bounded run-loop drives the app instead of a window event loop.
         .add_plugins(
@@ -114,8 +123,9 @@ async fn main() -> anyhow::Result<()> {
         .add_systems(
             OnEnter(ScenarioState::Ended),
             (deactivate_physics, notify_scenario_ended, broadcast_state),
-        )
-        .run();
+        );
+
+    app.run();
 
     Ok(())
 }
