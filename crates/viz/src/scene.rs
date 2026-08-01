@@ -56,7 +56,11 @@ impl EntityKind {
 /// event), never per frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityDescriptor {
+    /// Stable key used everywhere (events, frames).
     pub id: EntityId,
+    /// Human-facing display label, which a viewer may draw. Distinct from
+    /// `id`; often equal for agents but free to differ (and differs for
+    /// generated static geometry).
     pub name: String,
     pub kind: EntityKind,
     pub shape: Shape,
@@ -76,6 +80,9 @@ pub enum ScenarioState {
 /// immediately consistent before it starts following the live stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneInit {
+    /// Schema version the sim speaks; a viewer can double-check it matches
+    /// what it declared in `Hello`.
+    pub protocol_version: u32,
     pub tick: u64,
     pub state: ScenarioState,
     pub arena: ArenaBounds,

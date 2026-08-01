@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 use crate::frame::{DebugFrame, Frame};
 use crate::scene::{SceneEvent, SceneInit};
 
+/// Version of the viz wire schema. A viewer declares it in `Hello`; the sim
+/// declares it in `SceneInit`. Bump it for any breaking change — notably a
+/// new message/enum variant (e.g. the future delta/keyframe frame), which
+/// an older internally-tagged decoder would otherwise fail on. Additive
+/// *fields* are backward compatible and don't require a bump.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 /// Everything the sim streams to a viewer. The scene layer (`SceneInit`,
 /// `Event`, `Frame`) is canonical/physical; `DebugFrame` is the optional
 /// annotation layer.
@@ -28,6 +35,9 @@ pub enum ViewerToServer {
 /// A viewer's connect-time declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hello {
+    /// The schema version the viewer speaks. The sim drops the connection
+    /// on mismatch rather than stream bytes the viewer can't decode.
+    pub protocol_version: u32,
     /// Whether this viewer wants the debug/annotation layer in addition to
     /// the scene layer. Lets a scene-only consumer opt out of the extra
     /// traffic.
@@ -37,6 +47,7 @@ pub struct Hello {
 impl Default for Hello {
     fn default() -> Self {
         Self {
+            protocol_version: PROTOCOL_VERSION,
             subscribe_debug: true,
         }
     }
@@ -84,6 +95,7 @@ mod tests {
     fn samples() -> Vec<ServerToViewer> {
         vec![
             ServerToViewer::SceneInit(SceneInit {
+                protocol_version: PROTOCOL_VERSION,
                 tick: 0,
                 state: ScenarioState::WaitingForRoster,
                 arena: ArenaBounds {
@@ -157,6 +169,7 @@ mod tests {
     #[test]
     fn viewer_handshake_round_trips() {
         let hello = ViewerToServer::Hello(Hello {
+            protocol_version: PROTOCOL_VERSION,
             subscribe_debug: false,
         });
         let bytes = encode(&hello);

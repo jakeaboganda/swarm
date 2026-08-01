@@ -21,6 +21,16 @@ recorder, a USD/glTF exporter) can ignore the rest:
 `ServerToViewer` / `ViewerToServer` are the top-level messages. Viewers are
 passive: the only thing they send is a connect-time `Hello`.
 
+## Conventions
+
+- **Coordinates:** right-handed, **Y-up, meters** (matching Bevy and glTF).
+  A USD adapter (Z-up) must convert.
+- **Versioning:** `PROTOCOL_VERSION` is declared by the viewer in `Hello`
+  and by the sim in `SceneInit`; the broadcaster drops a viewer on
+  mismatch. Additive *fields* are backward compatible; a new message/enum
+  variant (e.g. the future delta frame) is a breaking change — bump the
+  version.
+
 ## Encoding
 
 MessagePack (`rmp-serde`, named fields) via [`encode`]/[`decode`] — compact,
@@ -30,8 +40,20 @@ to JSON for debugging; tests assert both round-trip.
 ## Broadcast server
 
 `spawn(VizConfig)` starts a WebSocket broadcaster on a separate port (4001
-by default). `VizHandle` lets the sim `broadcast` scene messages to all
-viewers, `broadcast_debug` to debug subscribers only, and `send` to one
-viewer (the scene-init on connect). A `VizEvent` stream reports viewers
-connecting/leaving. Per-viewer outbound queues are bounded and drop frames
-when full — fine here, since each frame is a complete snapshot.
+by default). Delivery is split into two paths per viewer:
+
+- **reliable** (`broadcast_reliable`, `send_reliable`) for must-deliver
+  messages — the scene-init and lifecycle events;
+- **lossy** (`broadcast_frame`, `broadcast_debug`) for the frame streams,
+  bounded and dropped when a viewer's queue is full (the next snapshot
+  resupplies the truth).
+
+A `VizEvent` stream reports viewers connecting/leaving so the sim can send
+a fresh scene-init to each newcomer.
+
+## Not yet transmitted (deferred)
+
+Per-entity velocity (for viewer-side interpolation across dropped frames)
+and delta/keyframe frames (the perf path) — both slot in behind the same
+message types later; v1 viewers render the latest full snapshot and may
+snap under packet loss.

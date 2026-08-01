@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::message::{encode, Hello, ServerToViewer, ViewerToServer};
+use crate::message::{encode, Hello, ServerToViewer, ViewerToServer, PROTOCOL_VERSION};
 
 /// Per-viewer *lossy* queue depth. Bounded so a slow or dead viewer can't
 /// grow memory — frames are dropped when it's full, which is fine for the
@@ -153,21 +153,21 @@ pub async fn spawn(config: VizConfig) -> std::io::Result<VizHandle> {
     })
 }
 
-/// Reads the `Hello` handshake within the timeout, returning the viewer's
-/// debug subscription, or `None` if it never (validly) said hello.
-async fn read_handshake(ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>) -> Option<bool> {
+/// Reads the `Hello` handshake within the timeout, returning it, or `None`
+/// if the viewer never (validly) said hello.
+async fn read_handshake(ws: &mut tokio_tungstenite::WebSocketStream<TcpStream>) -> Option<Hello> {
     let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, ws.next())
         .await
         .ok()?;
     match first {
         Some(Ok(Message::Binary(bytes))) => {
             match crate::message::decode::<ViewerToServer>(&bytes) {
-                Ok(ViewerToServer::Hello(hello)) => Some(hello.subscribe_debug),
-                // Reachable/garbled hello: default to "wants everything".
-                Err(_) => Some(Hello::default().subscribe_debug),
+                Ok(ViewerToServer::Hello(hello)) => Some(hello),
+                // Reachable/garbled hello: fall back to defaults.
+                Err(_) => Some(Hello::default()),
             }
         }
-        Some(Ok(_)) => Some(Hello::default().subscribe_debug),
+        Some(Ok(_)) => Some(Hello::default()),
         _ => None, // closed/errored before saying hello
     }
 }
@@ -184,9 +184,15 @@ async fn handle_viewer(
     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
         return;
     };
-    let Some(subscribe_debug) = read_handshake(&mut ws).await else {
+    let Some(hello) = read_handshake(&mut ws).await else {
         return;
     };
+    // Refuse a viewer speaking a schema we can't serve — better than
+    // streaming bytes it will misdecode.
+    if hello.protocol_version != PROTOCOL_VERSION {
+        return;
+    }
+    let subscribe_debug = hello.subscribe_debug;
 
     let (reliable_tx, mut reliable_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let (lossy_tx, mut lossy_rx) = mpsc::channel::<Vec<u8>>(LOSSY_CAPACITY);
@@ -281,6 +287,7 @@ mod tests {
 
     fn scene_init() -> ServerToViewer {
         ServerToViewer::SceneInit(SceneInit {
+            protocol_version: PROTOCOL_VERSION,
             tick: 0,
             state: ScenarioState::WaitingForRoster,
             arena: ArenaBounds {
@@ -317,11 +324,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_mismatch_is_rejected() {
+        let mut handle = spawn_test_server().await;
+        let _client = connect(
+            handle.local_addr,
+            Hello {
+                protocol_version: PROTOCOL_VERSION + 1,
+                subscribe_debug: true,
+            },
+        )
+        .await;
+
+        // A mismatched viewer must never register, so no event arrives.
+        let event = tokio::time::timeout(Duration::from_millis(300), handle.events.recv()).await;
+        assert!(event.is_err(), "mismatched viewer should not connect");
+    }
+
+    #[tokio::test]
     async fn debug_broadcast_skips_non_subscribers() {
         let mut handle = spawn_test_server().await;
         let mut watcher = connect(
             handle.local_addr,
             Hello {
+                protocol_version: PROTOCOL_VERSION,
                 subscribe_debug: false,
             },
         )

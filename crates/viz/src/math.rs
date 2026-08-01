@@ -1,3 +1,9 @@
+//! Wire math types and the coordinate convention.
+//!
+//! **Coordinates: right-handed, Y-up, meters** (matching Bevy and glTF). A
+//! USD adapter (Z-up) must convert. Positions are in meters; `Quat` follows
+//! the usual `[x, y, z, w]` layout with `w` the scalar part.
+
 use serde::{Deserialize, Serialize};
 
 /// Wire-format 3D vector, independent of any engine's vector type.
