@@ -42,9 +42,11 @@ toy — an evolving project, not a fixed-spec deliverable.
   notified, and the process keeps running until manually killed.
 - **Physics is ground-constrained**: gravity on, all rotation locked (no
   tipping/rolling), entities steered via horizontal forces only. Movement
-  model is a **pluggable, per-entity** component/trait (`Holonomic` is the
-  only implementation in v1; `CarLike`/`FullVehicle` are real future
-  possibilities behind the same interface, not scope to avoid).
+  model is a **pluggable, per-entity** component/trait selected by each
+  agent's `embodiment` (`Holonomic` and `CarLike` ship; `FullVehicle` is a
+  future possibility behind the same interface). Models implement
+  `drive(&mut self, desired, current_velocity, dt)` so they can carry state
+  that evolves over time (a car's heading).
 - **Sensors are a pluggable, per-predicate abstraction** (`sensors`
   crate): v1 ships ground-truth implementations only
   (`time_to_collision`, `distance_to`, `speed`), but the interface is

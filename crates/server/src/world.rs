@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use movement::{DesiredVelocity, Holonomic};
-use protocol::scenario::ArenaConfig;
+use movement::{CarLike, DesiredVelocity, Holonomic};
+use protocol::scenario::{ArenaConfig, Embodiment};
 use transport::ConnectionId;
 
 use crate::agent::{AgentName, Connection, Plan, Reflexes};
@@ -117,55 +117,59 @@ pub fn spawn_arena(
 }
 
 /// Spawns one agent's entity: a dynamic, ground-constrained capsule body
-/// with the `Holonomic` movement model and a render mesh. Rotation is fully
-/// locked — v1 doesn't need a facing direction for physics (see
-/// `movement`'s cosmetic `face_velocity_direction` system for the
-/// visual-only yaw).
+/// with a render mesh and the movement model matching its declared
+/// `embodiment`. Rotation is fully locked — models steer kinematically (see
+/// `movement`'s cosmetic `face_velocity_direction` system for the visual
+/// yaw).
 pub fn spawn_agent(
     commands: &mut Commands,
     name: &str,
     position: Vec3,
     connection: ConnectionId,
+    embodiment: Embodiment,
     render: &AgentRenderAssets,
 ) -> Entity {
-    commands
-        .spawn((
-            AgentName(name.to_string()),
-            Connection(connection),
-            Plan::default(),
-            Reflexes::default(),
-            DesiredVelocity::default(),
-            Holonomic::default(),
-            Mesh3d(render.mesh.clone()),
-            MeshMaterial3d(render.material.clone()),
-            Transform::from_translation(position),
-            Trail::default(),
-            // Physics components, nested so the whole spawn stays within
-            // Bevy's per-tuple bundle element limit.
-            (
-                RigidBody::Dynamic,
-                Collider::capsule_y(AGENT_HALF_HEIGHT, AGENT_RADIUS),
-                Velocity::zero(),
-                ExternalForce::default(),
-                LockedAxes::ROTATION_LOCKED,
-                Damping {
-                    linear_damping: 0.75,
-                    angular_damping: 0.0,
-                },
-                // Frictionless against the ground: the agent is a planar
-                // mover, and ground Coulomb friction would impose a stiction
-                // floor that a proportional controller can't overcome,
-                // leaving a dead-band where low commanded speeds produce no
-                // motion at all. `Min` combine means the agent contributes
-                // zero regardless of the other collider's friction.
-                // Deceleration comes from linear damping and the controller,
-                // not the surface.
-                Friction {
-                    coefficient: 0.0,
-                    combine_rule: CoefficientCombineRule::Min,
-                },
-                Restitution::new(0.1),
-            ),
-        ))
-        .id()
+    let mut entity = commands.spawn((
+        AgentName(name.to_string()),
+        Connection(connection),
+        Plan::default(),
+        Reflexes::default(),
+        DesiredVelocity::default(),
+        Mesh3d(render.mesh.clone()),
+        MeshMaterial3d(render.material.clone()),
+        Transform::from_translation(position),
+        Trail::default(),
+        // Physics components, nested so the whole spawn stays within
+        // Bevy's per-tuple bundle element limit.
+        (
+            RigidBody::Dynamic,
+            Collider::capsule_y(AGENT_HALF_HEIGHT, AGENT_RADIUS),
+            Velocity::zero(),
+            ExternalForce::default(),
+            LockedAxes::ROTATION_LOCKED,
+            Damping {
+                linear_damping: 0.75,
+                angular_damping: 0.0,
+            },
+            // Frictionless against the ground: the agent is a planar mover,
+            // and ground Coulomb friction would impose a stiction floor that
+            // a proportional controller can't overcome, leaving a dead-band
+            // where low commanded speeds produce no motion at all. `Min`
+            // combine means the agent contributes zero regardless of the
+            // other collider's friction. Deceleration comes from linear
+            // damping and the controller, not the surface.
+            Friction {
+                coefficient: 0.0,
+                combine_rule: CoefficientCombineRule::Min,
+            },
+            Restitution::new(0.1),
+        ),
+    ));
+    // The movement model is a distinct component type per embodiment, so it
+    // is inserted here rather than in the shared bundle above.
+    match embodiment {
+        Embodiment::Holonomic => entity.insert(Holonomic::default()),
+        Embodiment::CarLike => entity.insert(CarLike::default()),
+    };
+    entity.id()
 }

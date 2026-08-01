@@ -2,6 +2,9 @@ use bevy::prelude::*;
 
 use crate::model::{DesiredVelocity, MovementModel};
 
+// Note: `seek_force` (below) holds the shared proportional-controller math,
+// unit-tested directly. `Holonomic::drive` is a thin wrapper over it.
+
 /// Free horizontal movement: no minimum turn radius, no forward-only
 /// constraint. Steers via force toward the desired velocity — the only
 /// embodiment implemented in v1.
@@ -26,7 +29,7 @@ impl Default for Holonomic {
 }
 
 impl MovementModel for Holonomic {
-    fn compute_force(&self, desired: DesiredVelocity, current_velocity: Vec3) -> Vec3 {
+    fn drive(&mut self, desired: DesiredVelocity, current_velocity: Vec3, _dt: f32) -> Vec3 {
         let max_force = if desired.urgent {
             self.brake_max_force
         } else {

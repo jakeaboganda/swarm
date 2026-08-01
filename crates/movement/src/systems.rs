@@ -8,12 +8,14 @@ use crate::model::{DesiredVelocity, MovementModel};
 /// `MovementPlugin`) rather than dispatched via `Box<dyn MovementModel>` —
 /// keeps entities in contiguous per-archetype storage.
 pub fn apply_movement_force<M: MovementModel>(
-    mut query: Query<(&M, &DesiredVelocity, &Velocity, &mut ExternalForce)>,
+    time: Res<Time>,
+    mut query: Query<(&mut M, &DesiredVelocity, &Velocity, &mut ExternalForce)>,
 ) {
-    for (model, desired, velocity, mut force) in &mut query {
+    let dt = time.delta_secs();
+    for (mut model, desired, velocity, mut force) in &mut query {
         // Overwrite, not accumulate: ExternalForce persists across ticks in
         // bevy_rapier3d, so leaving this as `+=` would compound forever.
-        force.force = model.compute_force(*desired, velocity.linear);
+        force.force = model.drive(*desired, velocity.linear, dt);
     }
 }
 

@@ -160,8 +160,16 @@ pub fn drain_transport(
                         .iter()
                         .position(|slot| slot.name == name)
                         .expect("checked above");
+                    let embodiment = roster.0.roster[index].embodiment;
                     let position = spawn_position(index, roster.0.roster.len());
-                    let entity = spawn_agent(&mut commands, &name, position, connection, &render);
+                    let entity = spawn_agent(
+                        &mut commands,
+                        &name,
+                        position,
+                        connection,
+                        embodiment,
+                        &render,
+                    );
                     registry.insert(connection, name.clone(), entity);
                     pending.0.retain(|pending_name| pending_name != &name);
 

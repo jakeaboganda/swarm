@@ -1,0 +1,10 @@
+{
+  "arena": {
+    "width": 50.0,
+    "depth": 50.0
+  },
+  "roster": [
+    { "name": "car-1", "embodiment": "car_like" },
+    { "name": "car-2", "embodiment": "car_like" }
+  ]
+}

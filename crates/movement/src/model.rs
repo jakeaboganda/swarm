@@ -1,3 +1,4 @@
+use bevy::ecs::component::Mutable;
 use bevy::prelude::*;
 
 /// The shared control contract: what velocity an entity should currently be
@@ -17,7 +18,11 @@ pub struct DesiredVelocity {
 
 /// A pluggable per-entity embodiment. Each implementation decides how to
 /// turn "desired velocity" into a physical force — this is the seam where
-/// `Holonomic`, and later `CarLike`/`FullVehicle`, differ.
-pub trait MovementModel: Component {
-    fn compute_force(&self, desired: DesiredVelocity, current_velocity: Vec3) -> Vec3;
+/// `Holonomic` and `CarLike` differ.
+///
+/// `&mut self` and `dt` let a model carry state that evolves over time (a
+/// car's heading turning at a bounded rate); stateless models like
+/// `Holonomic` simply ignore them.
+pub trait MovementModel: Component<Mutability = Mutable> {
+    fn drive(&mut self, desired: DesiredVelocity, current_velocity: Vec3, dt: f32) -> Vec3;
 }

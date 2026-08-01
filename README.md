@@ -105,8 +105,10 @@ Test-Driven Development.
 
 ## Status
 
-v1 ships a single `Holonomic` movement model, ground-truth sensors, and a
-walled arena. The movement and sensor layers are built as extension points:
-richer embodiments (car-like, full vehicle physics) and simulated sensors
-(noise, limited range, latency) are intended future work behind the same
-interfaces.
+Ships two movement models — `Holonomic` (moves freely in any direction)
+and `CarLike` (forward-only thrust, bounded turn rate, lateral grip) —
+selected per agent via the roster's `embodiment` field
+(`scenario_carlike.json` runs an all-car-like scenario). Plus ground-truth
+sensors and a walled arena. The movement and sensor layers are extension
+points: `FullVehicle` physics and simulated sensors (noise, limited range,
+latency) are intended future work behind the same interfaces.

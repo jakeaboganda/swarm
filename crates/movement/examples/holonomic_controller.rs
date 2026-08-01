@@ -8,7 +8,7 @@ use bevy::math::Vec3;
 use movement::{DesiredVelocity, Holonomic, MovementModel};
 
 fn main() {
-    let model = Holonomic::default();
+    let mut model = Holonomic::default();
     let desired = DesiredVelocity {
         value: Vec3::new(5.0, 0.0, 0.0),
         urgent: false,
@@ -24,7 +24,7 @@ fn main() {
         if step % 20 == 0 {
             println!("{step:>4}   {:.3}", velocity.length());
         }
-        let force = model.compute_force(desired, velocity);
+        let force = model.drive(desired, velocity, dt);
         velocity += force / mass * dt;
         velocity *= 1.0 - damping * dt;
     }

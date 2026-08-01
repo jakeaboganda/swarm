@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-/// Movement model an agent's entity is embodied with. Only `Holonomic`
-/// ships in v1; `CarLike`/`FullVehicle` are real future additions, not
-/// speculative — this enum grows when those land.
+/// Movement model an agent's entity is embodied with. `FullVehicle` (full
+/// wheeled physics) is a future addition — this enum grows when it lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Embodiment {
+    /// Free horizontal movement in any direction (puck/drone-like).
     Holonomic,
+    /// Non-holonomic: forward-only thrust, bounded turn rate, lateral grip.
+    CarLike,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
