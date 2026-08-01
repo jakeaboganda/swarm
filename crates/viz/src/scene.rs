@@ -1,0 +1,100 @@
+use serde::{Deserialize, Serialize};
+
+use crate::math::{Transform, Vec3};
+
+/// Stable identity of a scene entity, consistent across scene-init,
+/// lifecycle events, and frames. For agents this is their roster name;
+/// static geometry gets a generated id (e.g. `wall-0`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EntityId(pub String);
+
+/// RGB color hint, each channel in `0.0..=1.0`. A viewer may honor or
+/// ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+}
+
+/// Geometry of an entity. Half-extents / radii so a viewer can build its
+/// own mesh at whatever resolution it likes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "shape", rename_all = "snake_case")]
+pub enum Shape {
+    Capsule { radius: f32, half_length: f32 },
+    Cuboid { half_extents: Vec3 },
+}
+
+/// The movement model an agent is embodied with. Mirrors the sim's notion
+/// but is defined here so `viz` stays independent of the agent protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Embodiment {
+    Holonomic,
+    CarLike,
+}
+
+/// What kind of thing an entity is. `Static` geometry never appears in
+/// frames (it doesn't move); `Agent` entities do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EntityKind {
+    Static,
+    Agent { embodiment: Embodiment },
+}
+
+impl EntityKind {
+    /// Whether this entity's transform is streamed in frames.
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, EntityKind::Agent { .. })
+    }
+}
+
+/// Everything static about an entity: its identity, shape, appearance, and
+/// initial placement. Sent once (in scene-init or an `EntitySpawned`
+/// event), never per frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntityDescriptor {
+    pub id: EntityId,
+    pub name: String,
+    pub kind: EntityKind,
+    pub shape: Shape,
+    pub color: Color,
+    pub transform: Transform,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScenarioState {
+    WaitingForRoster,
+    Running,
+    Ended,
+}
+
+/// The full picture sent to a viewer on connect, so a late arrival is
+/// immediately consistent before it starts following the live stream.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneInit {
+    pub tick: u64,
+    pub state: ScenarioState,
+    pub arena: ArenaBounds,
+    pub entities: Vec<EntityDescriptor>,
+}
+
+/// Arena extents, handy for a viewer to frame its camera even before any
+/// entity exists.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ArenaBounds {
+    pub width: f32,
+    pub depth: f32,
+}
+
+/// A change to the scene between frames.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum SceneEvent {
+    EntitySpawned(EntityDescriptor),
+    EntityDespawned { id: EntityId },
+    ScenarioState { state: ScenarioState },
+}

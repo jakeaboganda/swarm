@@ -1,0 +1,16 @@
+//! The visualization pathway: semantic scene types the sim streams to
+//! viewers. A forward/observational channel, separate from the agent
+//! protocol.
+
+mod frame;
+mod math;
+mod message;
+mod scene;
+
+pub use frame::{DebugFrame, EntityDebug, EntityFrame, Frame};
+pub use math::{Quat, Transform, Vec3};
+pub use message::{decode, encode, Hello, ServerToViewer, ViewerToServer};
+pub use scene::{
+    ArenaBounds, Color, Embodiment, EntityDescriptor, EntityId, EntityKind, ScenarioState,
+    SceneEvent, SceneInit, Shape,
+};
