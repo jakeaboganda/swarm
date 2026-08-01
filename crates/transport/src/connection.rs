@@ -48,7 +48,12 @@ pub async fn handle_connection(
         .insert(id, out_tx);
     let _ = event_tx.send(ConnectionEvent::Connected(id));
 
-    let mut heartbeat = tokio::time::interval(heartbeat_interval);
+    // Delay the first tick by a full interval — `interval` would otherwise
+    // fire immediately and ping the client the instant it connects.
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + heartbeat_interval,
+        heartbeat_interval,
+    );
     let mut last_pong = Instant::now();
 
     loop {

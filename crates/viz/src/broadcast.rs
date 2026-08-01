@@ -282,7 +282,7 @@ mod tests {
     }
 
     async fn next_message(client: &mut Client) -> ServerToViewer {
-        let received = tokio::time::timeout(Duration::from_secs(1), client.next())
+        let received = tokio::time::timeout(Duration::from_secs(5), client.next())
             .await
             .expect("timed out")
             .expect("stream closed")

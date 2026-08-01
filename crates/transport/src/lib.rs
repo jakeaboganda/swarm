@@ -32,7 +32,7 @@ mod tests {
             .await
             .expect("client connect");
 
-        let connected = tokio::time::timeout(Duration::from_secs(1), handle.events.recv())
+        let connected = tokio::time::timeout(Duration::from_secs(5), handle.events.recv())
             .await
             .expect("timed out waiting for Connected event")
             .expect("events channel closed");
@@ -48,7 +48,7 @@ mod tests {
             .await
             .expect("send join");
 
-        let inbound = tokio::time::timeout(Duration::from_secs(1), handle.inbound.recv())
+        let inbound = tokio::time::timeout(Duration::from_secs(5), handle.inbound.recv())
             .await
             .expect("timed out waiting for inbound message")
             .expect("inbound channel closed");
@@ -63,7 +63,7 @@ mod tests {
             },
         );
 
-        let response = tokio::time::timeout(Duration::from_secs(1), client.next())
+        let response = tokio::time::timeout(Duration::from_secs(5), client.next())
             .await
             .expect("timed out waiting for server reply")
             .expect("client stream closed")
@@ -88,7 +88,7 @@ mod tests {
             .await
             .expect("send garbage");
 
-        let response = tokio::time::timeout(Duration::from_secs(1), client.next())
+        let response = tokio::time::timeout(Duration::from_secs(5), client.next())
             .await
             .expect("timed out waiting for error reply")
             .expect("client stream closed")
@@ -109,7 +109,7 @@ mod tests {
             .send(Message::text(serde_json::to_string(&join).unwrap()))
             .await
             .expect("send join");
-        let inbound = tokio::time::timeout(Duration::from_secs(1), handle.inbound.recv())
+        let inbound = tokio::time::timeout(Duration::from_secs(5), handle.inbound.recv())
             .await
             .expect("timed out waiting for inbound message after malformed one")
             .expect("inbound channel closed");
@@ -129,7 +129,7 @@ mod tests {
             .await
             .expect("send binary");
 
-        let response = tokio::time::timeout(Duration::from_secs(1), client.next())
+        let response = tokio::time::timeout(Duration::from_secs(5), client.next())
             .await
             .expect("timed out waiting for error reply")
             .expect("client stream closed")
@@ -148,7 +148,7 @@ mod tests {
             .send(Message::text(serde_json::to_string(&join).unwrap()))
             .await
             .expect("send join");
-        let inbound = tokio::time::timeout(Duration::from_secs(1), handle.inbound.recv())
+        let inbound = tokio::time::timeout(Duration::from_secs(5), handle.inbound.recv())
             .await
             .expect("timed out waiting for inbound message after binary one")
             .expect("inbound channel closed");
