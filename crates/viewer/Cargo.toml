@@ -1,0 +1,18 @@
+[package]
+name = "viewer"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "viewer"
+path = "src/main.rs"
+
+[dependencies]
+viz = { workspace = true }
+
+bevy = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+anyhow = { workspace = true }
