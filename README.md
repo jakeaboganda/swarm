@@ -2,9 +2,10 @@
 
 A playground for agentic swarms: a small 3D physics world that external
 agent processes connect to and drive vehicles around. Built in Rust with
-[Bevy](https://bevyengine.org) (ECS + rendering) and
-[Rapier](https://rapier.rs) (physics), it opens a live 3D window so you can
-watch agents move, plan, and react.
+[Bevy](https://bevyengine.org) (ECS) and [Rapier](https://rapier.rs)
+(physics). The **simulation runs headless** and streams the world to
+separate **viewer** processes — so you can watch it in a 3D window, run it on
+a server with no display, or attach several viewers at once.
 
 It's a dev toy — an evolving sandbox for experimenting with how independent
 agents (scripted or LLM-driven) behave in a shared physical space, not a
@@ -26,19 +27,30 @@ front. The simulation waits for every declared agent to connect, runs, and
 ends if any of them drops (after a short reconnect grace window).
 
 Agents are external processes speaking **WebSocket + JSON**, so you can
-write one in any language.
+write one in any language. Viewers are a separate pathway: the sim streams
+semantic scene state (MessagePack) that any viewer renders however it likes.
 
 ## Quick start
 
 Needs a recent Rust toolchain (pinned in `rust-toolchain.toml`) and, on
-Linux, the usual windowing/audio dev libraries Bevy requires.
+Linux, the usual windowing/audio dev libraries Bevy requires (for the
+viewer). The one-command launcher starts the whole stack:
 
 ```sh
-# Terminal 1 — starts the simulation and opens the 3D window.
+scripts/run.sh                 # headless sim + viewer + demo agents
+```
+
+Or run the pieces yourself:
+
+```sh
+# The headless simulation (no window). Binds :4000 for agents, :4001 for viz.
 cargo run --bin server -- scenario.json
 
-# Terminal 2 — drives two vehicles once the window is up (needs
-# `pip install websockets`).
+# The viewer — opens the 3D window and renders the stream. Start it any
+# time; it reconnects on its own.
+cargo run --bin viewer
+
+# Drive two vehicles (needs `pip install websockets`).
 python3 clients/python/patrol_demo.py
 ```
 
@@ -77,19 +89,22 @@ Rust [`rust_agent`](crates/server/examples/rust_agent.rs) example.
 
 ## Layout
 
-A Cargo workspace of five crates, each owning one concern:
+A Cargo workspace of seven crates, each owning one concern:
 
 ```
-protocol  ── wire types (JSON messages) + scenario schema; depends on nothing
-movement  ── how a vehicle moves: the MovementModel trait + Holonomic
+protocol  ── agent wire types (JSON messages) + scenario schema
+movement  ── how a vehicle moves: the MovementModel trait + Holonomic/CarLike
 sensors   ── the reflex layer: sensors + rule evaluation
-transport ── the async WebSocket server, bridged into the sync game loop
-server    ── the Bevy binary that wires it all together and runs physics
+transport ── the async agent WebSocket server, bridged into the sync loop
+viz       ── the visualization pathway: scene wire types + broadcast server
+server    ── the headless simulation binary that wires it all together
+viewer    ── the reference 3D visualizer that renders the viz stream
 ```
 
-Each crate has its own README and a runnable example under
-`crates/<name>/examples/` (e.g. `cargo run -p sensors --example
-reflex_brake`).
+Two independent pathways meet at the `server`: agents talk over `transport`
+(control), viewers subscribe over `viz` (observation). The library crates
+have READMEs and runnable examples under `crates/<name>/examples/` (e.g.
+`cargo run -p sensors --example reflex_brake`).
 
 ## Development
 

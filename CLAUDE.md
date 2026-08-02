@@ -15,8 +15,14 @@ toy — an evolving project, not a fixed-spec deliverable.
 
 ## Architecture summary
 
-- **Language: Rust. Engine: Bevy + `bevy_rapier3d`.** One native codebase
-  for ECS, 3D rendering, and physics — no browser frontend.
+- **Language: Rust. Engine: Bevy + `bevy_rapier3d`.** The **simulation is
+  headless** (ECS + physics, no window/rendering); rendering lives in
+  separate **viewer** processes that subscribe to a visualization stream.
+- **Two independent pathways meet at the server:** agents connect over
+  **WebSocket + JSON** (`transport`) to *control* entities; viewers connect
+  over a separate **WebSocket + MessagePack** stream (`viz`) to *observe*.
+  Viewers are passive and lifecycle-independent — connecting or dropping one
+  never affects the sim.
 - **Agents are external processes**, connecting over **WebSocket + JSON**.
 - **Simulation is continuous real-time** (~60Hz Bevy/Rapier tick),
   independent of agent think-time. Each agent has a current action that
@@ -57,26 +63,34 @@ toy — an evolving project, not a fixed-spec deliverable.
 
 ## Crate layout
 
-Cargo workspace, five crates:
+Cargo workspace, seven crates:
 
-- **`protocol`** — shared `serde` types: WebSocket messages (`join`, plan
-  submission, reflex-rule registration, `get_state`/snapshot,
-  `reflex_fired`/`scenario_ended`/`error` events), and the scenario JSON
-  schema (world/walls + agent roster). Everything else depends on this;
-  it depends on nothing else in the workspace.
-- **`movement`** — the pluggable embodiment trait + `Holonomic`
-  implementation. No networking/scenario knowledge.
+- **`protocol`** — shared `serde` types for the *agent* pathway: WebSocket
+  messages (`join`, plan submission, reflex-rule registration,
+  `get_state`/snapshot, `reflex_fired`/`scenario_ended`/`error` events), and
+  the scenario JSON schema (world/walls + agent roster). Depends on nothing
+  else in the workspace.
+- **`movement`** — the pluggable embodiment trait + `Holonomic`/`CarLike`
+  implementations. No networking/scenario knowledge.
 - **`sensors`** — the named-sensor abstraction and reflex-rule evaluation
   (predicate readings → threshold checks → actions). Depends on
   `protocol` for rule/message shapes.
-- **`transport`** — owns the tokio runtime, per-connection WebSocket
-  handling (including heartbeat and reconnect-grace logic), and the
-  bounded channels bridging async I/O into Bevy's synchronous ECS tick.
-  Depends only on `protocol`.
-- **`server`** — the Bevy binary: loads the scenario, runs Rapier physics,
-  dispatches movement per entity, invokes sensor evaluation, resolves
-  reflex-vs-plan arbitration each tick, manages scenario lifecycle.
-  Consumes `transport`'s channels; does not touch tokio/async directly.
+- **`transport`** — the async *agent* WebSocket server: per-connection
+  handling (heartbeat, malformed-message contract) and the bounded channels
+  bridging async I/O into Bevy's synchronous ECS tick. Depends only on
+  `protocol`.
+- **`viz`** — the *visualization* pathway: the semantic scene wire types
+  (MessagePack, versioned) and the WebSocket broadcast server that fans them
+  out to viewers. Independent of `protocol` (a separate pathway).
+- **`server`** — the headless simulation binary: loads the scenario, runs
+  Rapier physics, dispatches movement per entity, invokes sensor evaluation,
+  resolves reflex-vs-plan arbitration each tick, manages scenario lifecycle,
+  and drives the viz broadcast. Owns the tokio runtime; Bevy runs on the
+  main thread.
+- **`viewer`** — the reference 3D visualizer binary: a Bevy app that
+  subscribes to the `viz` stream and renders the scene + debug overlays. One
+  of potentially many viewers (a browser viewer, a recorder, ...); holds no
+  simulation state.
 
 ## Conventions
 
@@ -84,9 +98,9 @@ Cargo workspace, five crates:
   `-D warnings`. Anything clippy flags must be fixed or explicitly
   `#[allow]`'d with a comment explaining why.
 - **Error handling**: `Result`-based throughout. Library crates
-  (`protocol`, `movement`, `sensors`, `transport`) define their own error
-  enums via `thiserror`; the `server` binary may use `anyhow` for
-  top-level error bubbling. Avoid `unwrap`/`expect` outside tests, except
+  (`protocol`, `movement`, `sensors`, `transport`, `viz`) define their own
+  error enums via `thiserror` where they surface errors; the `server` and
+  `viewer` binaries may use `anyhow` for top-level error bubbling. Avoid `unwrap`/`expect` outside tests, except
   for genuinely infallible cases — and those get a short comment saying
   why. Panics are for programmer-error invariant violations, not for
   expected/recoverable conditions (malformed agent input, disconnects,
@@ -98,15 +112,16 @@ Cargo workspace, five crates:
   and drive *that* with tests (as `arbitration::planar_seek` and
   `AwaitingReconnect` are).
 - **Testing**: required for the pure/deterministic logic crates —
-  `protocol` (serialization round-trips), `movement` (seek-controller
+  `protocol`/`viz` (serialization round-trips), `movement` (seek-controller
   math), `sensors` (predicate evaluation, hysteresis, priority/tiebreak
-  resolution). Not required for `server`/`transport` (networking glue, ECS
-  wiring, scenario timing) — that code is better verified by running the
-  app than by unit tests.
+  resolution). Networking crates (`transport`, `viz` broadcaster) also carry
+  integration tests over a real socket. Not required for `server`/`viewer`
+  (ECS wiring, scenario timing, rendering) — that code is better verified by
+  running the app than by unit tests.
 - **Dependencies**: free to add anything already implied by this file
   (`bevy`, `bevy_rapier3d`, `tokio`, `tokio-tungstenite`, `serde`/
-  `serde_json`, `thiserror`, `anyhow`) without asking. Anything outside
-  that set — a new crate not implied by an existing decision — gets
+  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`) without asking. Anything
+  outside that set — a new crate not implied by an existing decision — gets
   flagged before adding, even if minor.
 - **Commit messages**: must follow [Conventional Commits](https://www.conventionalcommits.org/)
   (`type(scope): summary`, e.g. `feat(sensors): add hysteresis to
