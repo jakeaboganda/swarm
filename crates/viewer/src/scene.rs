@@ -17,6 +17,39 @@ pub struct ViewerState {
     pub arena: Option<viz::ArenaBounds>,
 }
 
+/// Smoothly moves an entity from where it was toward the newest frame over
+/// the measured time between frames, so 30 Hz frame updates render as
+/// continuous motion instead of discrete jumps.
+#[derive(Component)]
+pub struct Interp {
+    previous: Transform,
+    target: Transform,
+    elapsed: f32,
+    interval: f32,
+}
+
+impl Interp {
+    fn new(transform: Transform) -> Self {
+        Self {
+            previous: transform,
+            target: transform,
+            elapsed: 0.0,
+            interval: 1.0 / 30.0,
+        }
+    }
+
+    /// Aim at a new frame, starting from `current` (where the entity is
+    /// right now) so there's no jump if the previous interpolation hadn't
+    /// finished. `elapsed` since the last frame is the real inter-frame
+    /// interval, so playback tracks the actual (jittery) frame rate.
+    fn retarget(&mut self, current: Transform, target: Transform) {
+        self.previous = current;
+        self.target = target;
+        self.interval = self.elapsed.clamp(1.0 / 240.0, 1.0 / 10.0);
+        self.elapsed = 0.0;
+    }
+}
+
 fn to_transform(transform: &viz::Transform) -> Transform {
     Transform {
         translation: Vec3::new(
@@ -74,13 +107,14 @@ fn spawn_entity(
     materials: &mut Assets<StandardMaterial>,
     descriptor: &EntityDescriptor,
 ) {
+    let transform = to_transform(&descriptor.transform);
     let mut entity = commands.spawn((
         Mesh3d(mesh_for(&descriptor.shape, meshes)),
         MeshMaterial3d(material_for(descriptor, materials)),
-        to_transform(&descriptor.transform),
+        transform,
     ));
     if descriptor.kind.is_dynamic() {
-        entity.insert((DebugData::default(), Trail::default()));
+        entity.insert((DebugData::default(), Trail::default(), Interp::new(transform)));
     }
     map.0.insert(descriptor.id.clone(), entity.id());
 }
@@ -97,7 +131,7 @@ pub fn apply_stream(
     mut state: ResMut<ViewerState>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut transforms: Query<&mut Transform>,
+    mut frame_targets: Query<(&Transform, &mut Interp)>,
     mut debug: Query<&mut DebugData>,
 ) {
     // Reliable, ordered messages first (scene-init resets before any frame).
@@ -151,13 +185,14 @@ pub fn apply_stream(
     }
 
     // Then the newest frame (keep-latest: intermediate frames are coalesced
-    // away, so the queue can never grow).
+    // away, so the queue can never grow). Each frame retargets the
+    // interpolation rather than snapping the transform.
     if stream.frame.has_changed().unwrap_or(false) {
         if let Some(frame) = stream.frame.borrow_and_update().clone() {
             for entity_frame in &frame.entities {
                 if let Some(&entity) = map.0.get(&entity_frame.id) {
-                    if let Ok(mut transform) = transforms.get_mut(entity) {
-                        *transform = to_transform(&entity_frame.transform);
+                    if let Ok((transform, mut interp)) = frame_targets.get_mut(entity) {
+                        interp.retarget(*transform, to_transform(&entity_frame.transform));
                     }
                 }
             }
@@ -179,6 +214,21 @@ pub fn apply_stream(
                 }
             }
         }
+    }
+}
+
+/// Advances each entity's interpolation toward the latest frame, producing
+/// smooth motion between the 30 Hz frames.
+pub fn interpolate(time: Res<Time>, mut query: Query<(&mut Transform, &mut Interp)>) {
+    let dt = time.delta_secs();
+    for (mut transform, mut interp) in &mut query {
+        interp.elapsed += dt;
+        let alpha = (interp.elapsed / interp.interval).clamp(0.0, 1.0);
+        transform.translation = interp
+            .previous
+            .translation
+            .lerp(interp.target.translation, alpha);
+        transform.rotation = interp.previous.rotation.slerp(interp.target.rotation, alpha);
     }
 }
 

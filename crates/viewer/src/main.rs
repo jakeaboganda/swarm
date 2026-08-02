@@ -33,8 +33,12 @@ async fn main() {
         .insert_resource(EntityMap::default())
         .insert_resource(ViewerState::default())
         .add_systems(Startup, scene::setup_camera)
-        .add_systems(Update, (scene::apply_stream, scene::frame_camera).chain())
-        // Overlays read the state applied above, so order them after it.
+        // Apply the stream, then interpolate transforms toward the newest
+        // frame; overlays read the interpolated transforms, so run after.
+        .add_systems(
+            Update,
+            (scene::apply_stream, scene::interpolate, scene::frame_camera).chain(),
+        )
         .add_systems(
             Update,
             (
@@ -42,7 +46,7 @@ async fn main() {
                 overlay::draw_plans,
                 overlay::draw_trails,
             )
-                .after(scene::apply_stream),
+                .after(scene::interpolate),
         )
         .run();
 }
