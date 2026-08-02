@@ -3,6 +3,7 @@ mod overlay;
 mod scene;
 
 use bevy::prelude::*;
+use bevy::winit::{UpdateMode, WinitSettings};
 
 use scene::{EntityMap, ViewerState};
 
@@ -18,6 +19,16 @@ async fn main() {
 
     App::new()
         .add_plugins(DefaultPlugins)
+        // Update continuously even when the window isn't focused. The
+        // viewer renders an external live stream, and Bevy's default
+        // (`WinitSettings::game`) drops an unfocused window into a reactive
+        // mode that only updates on input events — so without this, frames
+        // (drained in `apply_stream`, an Update system) would only advance
+        // when the mouse moves over the window.
+        .insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        })
         .insert_resource(stream)
         .insert_resource(EntityMap::default())
         .insert_resource(ViewerState::default())
