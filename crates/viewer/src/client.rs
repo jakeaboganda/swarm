@@ -92,6 +92,17 @@ async fn serve(
 ) -> std::ops::ControlFlow<()> {
     let mut ping = tokio::time::interval(PING_INTERVAL);
     let mut last_activity = Instant::now();
+    // Diagnostic (set VIZ_DIAG=1): measure the interval between arriving
+    // frames — i.e. how evenly the server emits, before any display sampling.
+    let diag = std::env::var("VIZ_DIAG").is_ok();
+    let (mut last_frame, mut win, mut n, mut sum, mut mn, mut mx) = (
+        None::<Instant>,
+        Instant::now(),
+        0u32,
+        0f32,
+        f32::INFINITY,
+        0f32,
+    );
     loop {
         tokio::select! {
             _ = ping.tick() => {
@@ -108,6 +119,21 @@ async fn serve(
                         last_activity = Instant::now();
                         if let Message::Binary(bytes) = message {
                             if let Ok(decoded) = decode::<ServerToViewer>(&bytes) {
+                                if diag && matches!(decoded, ServerToViewer::Frame(_)) {
+                                    let now = Instant::now();
+                                    if let Some(l) = last_frame {
+                                        let dt = (now - l).as_secs_f32() * 1000.0;
+                                        n += 1; sum += dt; mn = mn.min(dt); mx = mx.max(dt);
+                                    }
+                                    last_frame = Some(now);
+                                    if now.duration_since(win).as_secs_f32() >= 1.0 && n > 0 {
+                                        eprintln!(
+                                            "[viz arrival] n={n} mean={:.1}ms min={:.1} max={:.1} jitter={:.1}",
+                                            sum / n as f32, mn, mx, mx - mn
+                                        );
+                                        win = now; n = 0; sum = 0.0; mn = f32::INFINITY; mx = 0.0;
+                                    }
+                                }
                                 if !route(senders, decoded) {
                                     return std::ops::ControlFlow::Break(());
                                 }

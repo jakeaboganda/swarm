@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use bevy::prelude::*;
 use movement::DesiredVelocity;
 
@@ -7,26 +5,14 @@ use crate::agent::Plan;
 use crate::scenario::ArenaBounds;
 use crate::scenario_state::{ScenarioState, Tick};
 
-/// Frames per second on the viz stream, decoupled from the physics tick and
-/// the render frame rate.
-const VIZ_FRAME_HZ: f32 = 30.0;
+/// Emit a viz frame every N physics ticks — ~32 Hz at the fixed tick.
+/// Gating on the tick (rather than a wall-clock timer) makes frames uniform
+/// in sim-time, so the viewer can interpolate on the frame `tick` cleanly.
+const TICKS_PER_FRAME: u64 = 2;
 
 /// The viz broadcaster handle, driven from Bevy systems.
 #[derive(Resource)]
 pub struct Viz(pub viz::VizHandle);
-
-/// Gates the frame stream to `VIZ_FRAME_HZ`.
-#[derive(Resource)]
-pub struct VizFrameTimer(pub Timer);
-
-impl Default for VizFrameTimer {
-    fn default() -> Self {
-        Self(Timer::new(
-            Duration::from_secs_f32(1.0 / VIZ_FRAME_HZ),
-            TimerMode::Repeating,
-        ))
-    }
-}
 
 /// The static viz facts about an entity — everything in an
 /// `EntityDescriptor` except its live transform. Attached to walls, ground,
@@ -90,8 +76,10 @@ pub fn drain_viz_events(
     bounds: Res<ArenaBounds>,
     state: Res<State<ScenarioState>>,
     tick: Res<Tick>,
+    fixed_time: Res<Time<Fixed>>,
     query: Query<(&VizEntity, &Transform)>,
 ) {
+    let tick_rate = 1.0 / fixed_time.timestep().as_secs_f32();
     while let Ok(event) = viz.0.events.try_recv() {
         let viz::VizEvent::ViewerConnected { id, .. } = event else {
             continue;
@@ -100,6 +88,7 @@ pub fn drain_viz_events(
         let scene = viz::ServerToViewer::SceneInit(viz::SceneInit {
             protocol_version: viz::PROTOCOL_VERSION,
             tick: tick.0,
+            tick_rate,
             state: viz_state(*state.get()),
             arena: viz::ArenaBounds {
                 width: bounds.half_width * 2.0,
@@ -130,11 +119,11 @@ pub fn broadcast_state(viz: Res<Viz>, state: Res<State<ScenarioState>>) {
     viz.0.broadcast_reliable(&viz::ServerToViewer::Event(event));
 }
 
-/// Samples dynamic entities at `VIZ_FRAME_HZ` and broadcasts a scene frame
-/// (positions/orientations) plus a debug frame (plans + reflex flags).
+/// Every `TICKS_PER_FRAME` physics ticks, broadcasts a scene frame
+/// (positions/orientations) plus a debug frame (plans + reflex flags),
+/// stamped with the current tick so the viewer can interpolate on sim-time.
 pub fn broadcast_frames(
-    time: Res<Time>,
-    mut timer: ResMut<VizFrameTimer>,
+    mut last_emit: Local<u64>,
     viz: Res<Viz>,
     tick: Res<Tick>,
     query: Query<(
@@ -144,9 +133,10 @@ pub fn broadcast_frames(
         Option<&DesiredVelocity>,
     )>,
 ) {
-    if !timer.0.tick(time.delta()).just_finished() {
+    if tick.0 < *last_emit + TICKS_PER_FRAME {
         return;
     }
+    *last_emit = tick.0;
 
     let mut frame = Vec::new();
     let mut debug = Vec::new();

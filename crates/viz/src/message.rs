@@ -9,7 +9,7 @@ use crate::scene::{SceneEvent, SceneInit};
 /// new message/enum variant (e.g. the future delta/keyframe frame), which
 /// an older internally-tagged decoder would otherwise fail on. Additive
 /// *fields* are backward compatible and don't require a bump.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Everything the sim streams to a viewer. The scene layer (`SceneInit`,
 /// `Event`, `Frame`) is canonical/physical; `DebugFrame` is the optional
@@ -97,6 +97,7 @@ mod tests {
             ServerToViewer::SceneInit(SceneInit {
                 protocol_version: PROTOCOL_VERSION,
                 tick: 0,
+                tick_rate: 64.0,
                 state: ScenarioState::WaitingForRoster,
                 arena: ArenaBounds {
                     width: 50.0,

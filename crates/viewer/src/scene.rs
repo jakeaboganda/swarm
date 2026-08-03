@@ -1,10 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 use viz::{EntityDescriptor, EntityId, SceneEvent, ServerToViewer, Shape};
 
 use crate::client::VizStream;
 use crate::overlay::{DebugData, Trail};
+
+/// How many ticks behind the newest frame the render clock plays, so there
+/// is always a next snapshot to interpolate toward and a late frame doesn't
+/// cause a pause. ~62 ms at a 64 Hz tick.
+const BUFFER_TICKS: f64 = 4.0;
+/// Hard-snap the render clock back to its target depth if it drifts this far
+/// (a long stall or a sim restart), rather than crawling back.
+const REANCHOR_TICKS: f64 = 12.0;
+/// Cap on per-entity snapshot history.
+const HISTORY_MAX: usize = 32;
 
 /// Maps a viz `EntityId` to the Bevy entity rendering it.
 #[derive(Resource, Default)]
@@ -17,36 +27,93 @@ pub struct ViewerState {
     pub arena: Option<viz::ArenaBounds>,
 }
 
-/// Smoothly moves an entity from where it was toward the newest frame over
-/// the measured time between frames, so 30 Hz frame updates render as
-/// continuous motion instead of discrete jumps.
-#[derive(Component)]
-pub struct Interp {
-    previous: Transform,
-    target: Transform,
-    elapsed: f32,
-    interval: f32,
+/// Diagnostic accumulator (see `log_timing`). Records how often, and how
+/// evenly, `apply_stream` actually sees a new frame.
+#[derive(Resource)]
+pub struct Diag {
+    pub enabled: bool,
+    last_seen: Option<f32>,
+    win_min: f32,
+    win_max: f32,
+    win_count: u32,
 }
 
-impl Interp {
-    fn new(transform: Transform) -> Self {
+impl Diag {
+    pub fn new(enabled: bool) -> Self {
         Self {
-            previous: transform,
-            target: transform,
-            elapsed: 0.0,
-            interval: 1.0 / 30.0,
+            enabled,
+            last_seen: None,
+            win_min: f32::INFINITY,
+            win_max: 0.0,
+            win_count: 0,
         }
     }
 
-    /// Aim at a new frame, starting from `current` (where the entity is
-    /// right now) so there's no jump if the previous interpolation hadn't
-    /// finished. `elapsed` since the last frame is the real inter-frame
-    /// interval, so playback tracks the actual (jittery) frame rate.
-    fn retarget(&mut self, current: Transform, target: Transform) {
-        self.previous = current;
-        self.target = target;
-        self.interval = self.elapsed.clamp(1.0 / 240.0, 1.0 / 10.0);
-        self.elapsed = 0.0;
+    fn record_seen(&mut self, now_secs: f32) {
+        if let Some(last) = self.last_seen {
+            let gap = (now_secs - last) * 1000.0;
+            self.win_min = self.win_min.min(gap);
+            self.win_max = self.win_max.max(gap);
+            self.win_count += 1;
+        }
+        self.last_seen = Some(now_secs);
+    }
+}
+
+/// One timestamped pose from a frame.
+#[derive(Clone, Copy)]
+struct Sample {
+    tick: f64,
+    translation: Vec3,
+    rotation: Quat,
+}
+
+/// A dynamic entity's recent poses, ordered by tick, that the render clock
+/// interpolates through.
+#[derive(Component, Default)]
+pub struct History {
+    samples: VecDeque<Sample>,
+}
+
+impl History {
+    fn push(&mut self, sample: Sample) {
+        self.samples.push_back(sample);
+        while self.samples.len() > HISTORY_MAX {
+            self.samples.pop_front();
+        }
+    }
+
+    /// The two samples bracketing `tick`, if any.
+    fn bracket(&self, tick: f64) -> Option<(Sample, Sample)> {
+        for i in 1..self.samples.len() {
+            let (a, b) = (self.samples[i - 1], self.samples[i]);
+            if a.tick <= tick && tick <= b.tick {
+                return Some((a, b));
+            }
+        }
+        None
+    }
+}
+
+/// A monotonic playback clock in sim-time (ticks). It advances at the sim's
+/// tick rate and trails the newest received frame by `BUFFER_TICKS`, so
+/// interpolation is smooth regardless of message-arrival jitter.
+#[derive(Resource)]
+pub struct RenderClock {
+    tick: f64,
+    tick_rate: f64,
+    newest: f64,
+    primed: bool,
+}
+
+impl Default for RenderClock {
+    fn default() -> Self {
+        Self {
+            tick: 0.0,
+            tick_rate: 64.0,
+            newest: 0.0,
+            primed: false,
+        }
     }
 }
 
@@ -114,7 +181,7 @@ fn spawn_entity(
         transform,
     ));
     if descriptor.kind.is_dynamic() {
-        entity.insert((DebugData::default(), Trail::default(), Interp::new(transform)));
+        entity.insert((DebugData::default(), Trail::default(), History::default()));
     }
     map.0.insert(descriptor.id.clone(), entity.id());
 }
@@ -131,18 +198,24 @@ pub fn apply_stream(
     mut state: ResMut<ViewerState>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut frame_targets: Query<(&Transform, &mut Interp)>,
+    mut histories: Query<&mut History>,
     mut debug: Query<&mut DebugData>,
+    mut clock: ResMut<RenderClock>,
+    time: Res<Time>,
+    mut diag: ResMut<Diag>,
 ) {
     // Reliable, ordered messages first (scene-init resets before any frame).
     while let Ok(message) = stream.reliable.try_recv() {
         match message {
             ServerToViewer::SceneInit(init) => {
                 // A scene-init is a full reset (also how a reconnect
-                // re-syncs after a sim restart).
+                // re-syncs after a sim restart). Reset the render clock too:
+                // it re-primes off the first frame with the sim's tick rate.
                 for (_, entity) in map.0.drain() {
                     commands.entity(entity).despawn();
                 }
+                clock.tick_rate = init.tick_rate as f64;
+                clock.primed = false;
                 info!(
                     "scene-init: {} entities, state {:?}",
                     init.entities.len(),
@@ -185,16 +258,30 @@ pub fn apply_stream(
     }
 
     // Then the newest frame (keep-latest: intermediate frames are coalesced
-    // away, so the queue can never grow). Each frame retargets the
-    // interpolation rather than snapping the transform.
+    // away, so the queue can never grow). Each frame appends a timestamped
+    // snapshot to the per-entity history; playback (advance_playback) reads
+    // these on the sim-time render clock, so message-arrival jitter never
+    // reaches the rendered motion.
     if stream.frame.has_changed().unwrap_or(false) {
+        diag.record_seen(time.elapsed_secs());
         if let Some(frame) = stream.frame.borrow_and_update().clone() {
+            clock.newest = clock.newest.max(frame.tick as f64);
             for entity_frame in &frame.entities {
                 if let Some(&entity) = map.0.get(&entity_frame.id) {
-                    if let Ok((transform, mut interp)) = frame_targets.get_mut(entity) {
-                        interp.retarget(*transform, to_transform(&entity_frame.transform));
+                    if let Ok(mut history) = histories.get_mut(entity) {
+                        let t = to_transform(&entity_frame.transform);
+                        history.push(Sample {
+                            tick: frame.tick as f64,
+                            translation: t.translation,
+                            rotation: t.rotation,
+                        });
                     }
                 }
+            }
+            // Prime the clock off the first frame, one buffer behind newest.
+            if !clock.primed {
+                clock.tick = clock.newest - BUFFER_TICKS;
+                clock.primed = true;
             }
         }
     }
@@ -217,18 +304,74 @@ pub fn apply_stream(
     }
 }
 
-/// Advances each entity's interpolation toward the latest frame, producing
-/// smooth motion between the 30 Hz frames.
-pub fn interpolate(time: Res<Time>, mut query: Query<(&mut Transform, &mut Interp)>) {
-    let dt = time.delta_secs();
-    for (mut transform, mut interp) in &mut query {
-        interp.elapsed += dt;
-        let alpha = (interp.elapsed / interp.interval).clamp(0.0, 1.0);
-        transform.translation = interp
-            .previous
-            .translation
-            .lerp(interp.target.translation, alpha);
-        transform.rotation = interp.previous.rotation.slerp(interp.target.rotation, alpha);
+/// Diagnostic (set VIZ_DIAG=1): once a second, logs the viewer's render rate
+/// and the interval between frames *as seen by apply_stream* (after display
+/// sampling), so the beat between the 30 Hz stream and the display is visible.
+pub fn log_timing(
+    time: Res<Time>,
+    clock: Res<RenderClock>,
+    mut diag: ResMut<Diag>,
+    mut acc: Local<(f32, u32)>,
+) {
+    if !diag.enabled {
+        return;
+    }
+    acc.0 += time.delta_secs();
+    acc.1 += 1;
+    if acc.0 >= 1.0 {
+        let (min, max, count) = (diag.win_min, diag.win_max, diag.win_count);
+        info!(
+            "render {:.0} fps | seen-frame gap min {:.1}ms max {:.1}ms ({}/s) | buffer {:.1} ticks (rate {:.0})",
+            acc.1 as f32 / acc.0,
+            if min.is_finite() { min } else { 0.0 },
+            max,
+            count,
+            clock.newest - clock.tick,
+            clock.tick_rate,
+        );
+        *acc = (0.0, 0);
+        diag.win_count = 0;
+        diag.win_min = f32::INFINITY;
+        diag.win_max = 0.0;
+    }
+}
+
+/// Advances the sim-time render clock and poses each entity by interpolating
+/// its snapshot history at the clock's tick. The clock plays `BUFFER_TICKS`
+/// behind the newest frame, so it always has a bracketing pair to lerp
+/// between and message-arrival jitter never reaches the rendered motion.
+pub fn advance_playback(
+    time: Res<Time>,
+    mut clock: ResMut<RenderClock>,
+    mut query: Query<(&mut Transform, &History)>,
+) {
+    if !clock.primed {
+        return;
+    }
+    clock.tick += time.delta_secs_f64() * clock.tick_rate;
+    // Re-anchor on large drift (a stall drained the buffer, or a restart
+    // jumped `newest`): snap to the target depth rather than crawl there.
+    let target = clock.newest - BUFFER_TICKS;
+    if (clock.tick - target).abs() > REANCHOR_TICKS {
+        clock.tick = target;
+    }
+    // Never extrapolate past the newest data we hold.
+    if clock.tick > clock.newest {
+        clock.tick = clock.newest;
+    }
+    let render_tick = clock.tick;
+    for (mut transform, history) in &mut query {
+        if let Some((a, b)) = history.bracket(render_tick) {
+            let span = (b.tick - a.tick).max(1e-6);
+            let alpha = ((render_tick - a.tick) / span).clamp(0.0, 1.0) as f32;
+            transform.translation = a.translation.lerp(b.translation, alpha);
+            transform.rotation = a.rotation.slerp(b.rotation, alpha);
+        } else if let Some(last) = history.samples.back() {
+            // Clock outside the sample range (start-up, or underrun after a
+            // stall): hold at the newest known pose.
+            transform.translation = last.translation;
+            transform.rotation = last.rotation;
+        }
     }
 }
 

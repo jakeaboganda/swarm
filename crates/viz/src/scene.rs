@@ -84,6 +84,10 @@ pub struct SceneInit {
     /// what it declared in `Hello`.
     pub protocol_version: u32,
     pub tick: u64,
+    /// Ticks per second — how a frame's `tick` maps to real time, so a
+    /// viewer can interpolate on a sim-time clock rather than jittery
+    /// message-arrival times.
+    pub tick_rate: f32,
     pub state: ScenarioState,
     pub arena: ArenaBounds,
     pub entities: Vec<EntityDescriptor>,

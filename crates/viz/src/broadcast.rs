@@ -297,6 +297,7 @@ mod tests {
         ServerToViewer::SceneInit(SceneInit {
             protocol_version: PROTOCOL_VERSION,
             tick: 0,
+            tick_rate: 64.0,
             state: ScenarioState::WaitingForRoster,
             arena: ArenaBounds {
                 width: 50.0,

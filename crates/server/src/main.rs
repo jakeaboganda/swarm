@@ -22,9 +22,7 @@ use transport_bridge::{
     activate_physics, deactivate_physics, drain_transport, expire_reconnects, forward_reflex_fired,
     notify_scenario_ended, Transport,
 };
-use viz_broadcast::{
-    broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz, VizFrameTimer,
-};
+use viz_broadcast::{broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz};
 
 fn main() -> anyhow::Result<()> {
     let scenario_path = std::env::args()
@@ -84,7 +82,6 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(Tick::default())
         .insert_resource(Transport(transport_handle))
         .insert_resource(Viz(viz_handle))
-        .insert_resource(VizFrameTimer::default())
         .add_systems(Startup, (setup_arena, deactivate_physics))
         // Ingest agent messages in the same fixed cadence as physics so a
         // submitted plan is seen on the step it applies to, rather than at

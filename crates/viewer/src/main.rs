@@ -5,7 +5,7 @@ mod scene;
 use bevy::prelude::*;
 use bevy::winit::{UpdateMode, WinitSettings};
 
-use scene::{EntityMap, ViewerState};
+use scene::{Diag, EntityMap, RenderClock, ViewerState};
 
 #[tokio::main]
 async fn main() {
@@ -32,13 +32,21 @@ async fn main() {
         .insert_resource(stream)
         .insert_resource(EntityMap::default())
         .insert_resource(ViewerState::default())
+        .insert_resource(RenderClock::default())
+        .insert_resource(Diag::new(std::env::var("VIZ_DIAG").is_ok()))
         .add_systems(Startup, scene::setup_camera)
-        // Apply the stream, then interpolate transforms toward the newest
-        // frame; overlays read the interpolated transforms, so run after.
+        // Apply the stream, then advance the sim-time render clock to pose
+        // entities; overlays read the posed transforms, so run after.
         .add_systems(
             Update,
-            (scene::apply_stream, scene::interpolate, scene::frame_camera).chain(),
+            (
+                scene::apply_stream,
+                scene::advance_playback,
+                scene::frame_camera,
+            )
+                .chain(),
         )
+        .add_systems(Update, scene::log_timing.after(scene::apply_stream))
         .add_systems(
             Update,
             (
@@ -46,7 +54,7 @@ async fn main() {
                 overlay::draw_plans,
                 overlay::draw_trails,
             )
-                .after(scene::interpolate),
+                .after(scene::advance_playback),
         )
         .run();
 }
