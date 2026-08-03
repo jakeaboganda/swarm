@@ -32,6 +32,14 @@ wait_for_port() {
     done
 }
 
+# Free the ports up front so a straggler from a previous run (a server that
+# ignored Ctrl-C, say) can't block this one. See scripts/kill.sh.
+if ss -ltn 2>/dev/null | grep -qE ':4000 |:4001 '; then
+    echo "freeing ports held by a previous run..."
+    fuser -k 4000/tcp 4001/tcp 2>/dev/null
+    sleep 0.5
+fi
+
 echo "building server + viewer..."
 cargo build --bin server --bin viewer
 
