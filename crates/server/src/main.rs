@@ -24,6 +24,11 @@ use transport_bridge::{
 };
 use viz_broadcast::{broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz};
 
+/// Physics/sim tick rate. Pinned here (not left to Bevy's default) because
+/// it's the `tick_rate` advertised to viewers, which key their playback
+/// clock to it — a silent default change would desync every viewer.
+const TICK_HZ: f64 = 64.0;
+
 fn main() -> anyhow::Result<()> {
     let scenario_path = std::env::args()
         .nth(1)
@@ -57,15 +62,33 @@ fn main() -> anyhow::Result<()> {
         half_depth: scenario_config.arena.depth / 2.0,
     };
 
+    // Time model (env `SIM_TIME`):
+    //   realtime (default) — the fixed step is paced to wall-clock, so one
+    //     sim-second is one real second. Required for live viewing.
+    //   afap — "as fast as possible": the run-loop spins without sleeping and
+    //     virtual time advances one fixed step per iteration, decoupled from
+    //     wall-clock, so the sim runs at CPU speed (headless batch runs). A
+    //     realtime viewer can't keep pace with this.
+    let afap = std::env::var("SIM_TIME")
+        .map(|v| v.eq_ignore_ascii_case("afap"))
+        .unwrap_or(false);
+    let fixed_dt = Duration::from_secs_f64(1.0 / TICK_HZ);
+    // realtime: drive Update at ~120 Hz (Fixed paces itself under it).
+    // afap: no sleep — go as fast as the CPU allows.
+    let loop_wait = if afap {
+        Duration::ZERO
+    } else {
+        Duration::from_secs_f64(1.0 / 120.0)
+    };
+    println!("time mode: {}", if afap { "afap" } else { "realtime" });
+
     let mut app = App::new();
     app
         // Headless: no window or rendering — rendering lives in the viewer.
         // A bounded run-loop drives the app instead of a window event loop.
-        .add_plugins(
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-                1.0 / 120.0,
-            ))),
-        )
+        .add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(loop_wait)))
+        // Pin the fixed step to TICK_HZ rather than inheriting Bevy's default.
+        .insert_resource(Time::<Fixed>::from_hz(TICK_HZ))
         .add_plugins(bevy::log::LogPlugin::default())
         .add_plugins(TransformPlugin)
         .add_plugins(StatesPlugin)
@@ -121,6 +144,13 @@ fn main() -> anyhow::Result<()> {
             OnEnter(ScenarioState::Ended),
             (deactivate_physics, notify_scenario_ended, broadcast_state),
         );
+
+    if afap {
+        // Advance virtual time by exactly one fixed step per Update, so the
+        // Fixed accumulator releases one physics step per loop iteration
+        // regardless of wall-clock — the loop then runs at CPU speed.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(fixed_dt));
+    }
 
     app.run();
 

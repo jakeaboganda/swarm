@@ -311,25 +311,32 @@ pub fn log_timing(
     time: Res<Time>,
     clock: Res<RenderClock>,
     mut diag: ResMut<Diag>,
-    mut acc: Local<(f32, u32)>,
+    // (elapsed, frame count, min frame dt ms, max frame dt ms)
+    mut acc: Local<(f32, u32, f32, f32)>,
 ) {
     if !diag.enabled {
         return;
     }
-    acc.0 += time.delta_secs();
+    let dt = time.delta_secs();
+    acc.0 += dt;
     acc.1 += 1;
+    let dt_ms = dt * 1000.0;
+    acc.2 = if acc.1 == 1 { dt_ms } else { acc.2.min(dt_ms) };
+    acc.3 = acc.3.max(dt_ms);
     if acc.0 >= 1.0 {
         let (min, max, count) = (diag.win_min, diag.win_max, diag.win_count);
         info!(
-            "render {:.0} fps | seen-frame gap min {:.1}ms max {:.1}ms ({}/s) | buffer {:.1} ticks (rate {:.0})",
+            "render {:.0} fps (frame dt {:.1}-{:.1}ms) | seen-frame gap min {:.1}ms max {:.1}ms ({}/s) | buffer {:.1} ticks (rate {:.0})",
             acc.1 as f32 / acc.0,
+            acc.2,
+            acc.3,
             if min.is_finite() { min } else { 0.0 },
             max,
             count,
             clock.newest - clock.tick,
             clock.tick_rate,
         );
-        *acc = (0.0, 0);
+        *acc = (0.0, 0, 0.0, 0.0);
         diag.win_count = 0;
         diag.win_min = f32::INFINITY;
         diag.win_max = 0.0;
