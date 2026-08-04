@@ -3,6 +3,7 @@ mod overlay;
 mod scene;
 
 use bevy::prelude::*;
+use bevy::window::{PresentMode, Window, WindowPlugin};
 use bevy::winit::{UpdateMode, WinitSettings};
 
 use scene::{Diag, EntityMap, RenderClock, ViewerState};
@@ -18,7 +19,18 @@ async fn main() {
     tokio::spawn(client::run_client(url, senders));
 
     App::new()
-        .add_plugins(DefaultPlugins)
+        // Force FIFO (hard vsync): present blocks until the display refresh,
+        // so frames are delivered at a uniform cadence. Without this the
+        // uncapped render loop presents unevenly (measured 4-28ms between
+        // frames), and since playback advances the render clock by each
+        // frame's real dt, that unevenness shows up as motion judder.
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                present_mode: PresentMode::Fifo,
+                ..default()
+            }),
+            ..default()
+        }))
         // Update continuously even when the window isn't focused. The
         // viewer renders an external live stream, and Bevy's default
         // (`WinitSettings::game`) drops an unfocused window into a reactive
