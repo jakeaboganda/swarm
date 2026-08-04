@@ -58,7 +58,7 @@ async fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, scene::log_timing.after(scene::apply_stream))
+        .add_systems(Update, scene::log_timing.after(scene::advance_playback))
         .add_systems(
             Update,
             (

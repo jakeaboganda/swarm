@@ -15,6 +15,17 @@ const BUFFER_TICKS: f64 = 4.0;
 const REANCHOR_TICKS: f64 = 12.0;
 /// Cap on per-entity snapshot history.
 const HISTORY_MAX: usize = 32;
+/// Low-pass weight for the render frame interval. Present timing is jittery
+/// even under vsync (measured ~2-20 ms at a 6 ms refresh); advancing the
+/// clock by the raw interval turns that jitter into motion judder, so we
+/// advance by a smoothed interval instead.
+const DT_SMOOTHING: f64 = 0.1;
+/// Playback-speed correction per tick of buffer error (proportional gain),
+/// clamped to `MAX_RATE_ADJUST`. Holds the buffer at `BUFFER_TICKS` with a
+/// speed change too small to see, instead of leaving latency wherever a snap
+/// happened to land.
+const CATCHUP_GAIN: f64 = 0.02;
+const MAX_RATE_ADJUST: f64 = 0.1;
 
 /// Maps a viz `EntityId` to the Bevy entity rendering it.
 #[derive(Resource, Default)]
@@ -350,17 +361,33 @@ pub fn log_timing(
 pub fn advance_playback(
     time: Res<Time>,
     mut clock: ResMut<RenderClock>,
+    mut smoothed_dt: Local<f64>,
     mut query: Query<(&mut Transform, &History)>,
 ) {
     if !clock.primed {
         return;
     }
-    clock.tick += time.delta_secs_f64() * clock.tick_rate;
-    // Re-anchor on large drift (a stall drained the buffer, or a restart
-    // jumped `newest`): snap to the target depth rather than crawl there.
+    // Advance by a low-passed frame interval, not the raw one, so present
+    // jitter doesn't reach the motion.
+    let dt = time.delta_secs_f64();
+    *smoothed_dt = if *smoothed_dt <= 0.0 {
+        dt
+    } else {
+        *smoothed_dt + (dt - *smoothed_dt) * DT_SMOOTHING
+    };
+
     let target = clock.newest - BUFFER_TICKS;
-    if (clock.tick - target).abs() > REANCHOR_TICKS {
+    let error = target - clock.tick;
+    if error.abs() > REANCHOR_TICKS {
+        // Gross desync (startup warmup, a long stall, a sim restart): snap
+        // to target rather than crawl there.
         clock.tick = target;
+    } else {
+        // Hold the buffer at BUFFER_TICKS by nudging playback speed a few
+        // percent toward the set-point — closed-loop, so latency stays fixed
+        // instead of parking wherever a snap left it.
+        let adjust = (error * CATCHUP_GAIN).clamp(-MAX_RATE_ADJUST, MAX_RATE_ADJUST);
+        clock.tick += *smoothed_dt * clock.tick_rate * (1.0 + adjust);
     }
     // Never extrapolate past the newest data we hold.
     if clock.tick > clock.newest {
