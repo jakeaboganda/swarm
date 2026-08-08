@@ -1,0 +1,104 @@
+{
+  "arena": {
+    "width": 93.0,
+    "depth": 93.0
+  },
+  "roster": [
+    {
+      "name": "agent-00",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-01",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-02",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-03",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-04",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-05",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-06",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-07",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-08",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-09",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-10",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-11",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-12",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-13",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-14",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-15",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-16",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-17",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-18",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-19",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-20",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-21",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-22",
+      "embodiment": "holonomic"
+    },
+    {
+      "name": "agent-23",
+      "embodiment": "holonomic"
+    }
+  ]
+}
