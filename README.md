@@ -58,6 +58,30 @@ You'll see two vehicles circle the arena, each trailing its recent path and
 showing the waypoints ahead of it. `scenario.json` defines the arena size
 and the roster.
 
+### A swarm avoiding itself
+
+For something busier, run dozens of agents that all cross the arena at once
+and steer around one another:
+
+```sh
+scripts/run.sh scenario_swarm.json clients/python/swarm_avoidance.py
+```
+
+![Two dozen agents crossing a shared arena, steering around each other](docs/assets/swarm_demo.gif)
+
+Each agent orbits between a point on a big circle and its antipode, so they
+all converge on the center together. The avoidance is the agents' own work,
+not the sim's: reflexes can only brake (a safety net), so the actual
+steering comes from each agent re-planning every tick against its neighbors
+— boids-style separation plus a swirl bias to break head-on deadlocks. This
+is the intended split — agents are the brains; the sim follows plans and
+enforces reflexes. `--generate N` rewrites the scenario for a different
+agent count:
+
+```sh
+python3 clients/python/swarm_avoidance.py --generate 36
+```
+
 ## Writing an agent
 
 An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:
@@ -84,8 +108,10 @@ An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:
 The server pushes back `joined`, `state` snapshots, `reflex_fired` events
 (when a reflex overrides your plan), `scenario_ended`, and `error`. The
 exact shapes live in [`crates/protocol`](crates/protocol/). Working clients:
-[`clients/python/agent_smoke.py`](clients/python/agent_smoke.py) and the
-Rust [`rust_agent`](crates/server/examples/rust_agent.rs) example.
+[`agent_smoke.py`](clients/python/agent_smoke.py) (minimal),
+[`swarm_avoidance.py`](clients/python/swarm_avoidance.py) (re-plans every
+tick against neighbors), and the Rust
+[`rust_agent`](crates/server/examples/rust_agent.rs) example.
 
 ## Layout
 
