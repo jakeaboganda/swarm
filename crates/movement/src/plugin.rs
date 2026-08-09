@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::PhysicsSet;
 
 use crate::carlike::CarLike;
+use crate::fullvehicle::FullVehicle;
 use crate::holonomic::Holonomic;
 use crate::systems::{apply_movement_force, face_velocity_direction};
 
@@ -26,6 +27,7 @@ impl Plugin for MovementPlugin {
             (
                 apply_movement_force::<Holonomic>,
                 apply_movement_force::<CarLike>,
+                apply_movement_force::<FullVehicle>,
             )
                 .in_set(MovementSet::ApplyForce)
                 .before(PhysicsSet::StepSimulation),
