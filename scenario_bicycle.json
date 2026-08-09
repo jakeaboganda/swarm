@@ -1,0 +1,14 @@
+{
+  "arena": {
+    "width": 60.0,
+    "depth": 60.0
+  },
+  "roster": [
+    { "name": "car-0", "embodiment": "full_vehicle" },
+    { "name": "car-1", "embodiment": "full_vehicle" },
+    { "name": "car-2", "embodiment": "full_vehicle" },
+    { "name": "car-3", "embodiment": "full_vehicle" },
+    { "name": "car-4", "embodiment": "full_vehicle" },
+    { "name": "car-5", "embodiment": "full_vehicle" }
+  ]
+}

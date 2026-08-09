@@ -46,13 +46,17 @@ toy — an evolving project, not a fixed-spec deliverable.
   connected agent becomes unavailable, the *entire* scenario ends —
   physics freezes in place (for inspection), remaining agents are
   notified, and the process keeps running until manually killed.
-- **Physics is ground-constrained**: gravity on, all rotation locked (no
-  tipping/rolling), entities steered via horizontal forces only. Movement
-  model is a **pluggable, per-entity** component/trait selected by each
-  agent's `embodiment` (`Holonomic` and `CarLike` ship; `FullVehicle` is a
-  future possibility behind the same interface). Models implement
-  `drive(&mut self, desired, current_velocity, dt)` so they can carry state
-  that evolves over time (a car's heading).
+- **Physics is ground-constrained**: gravity on, **roll and pitch locked**
+  (no tipping/rolling). `Holonomic` and `CarLike` also lock yaw and steer via
+  horizontal forces only; the invariant is relaxed to allow **yaw as a
+  physical DOF for an embodiment that opts in** — the single-track
+  `FullVehicle`, whose heading is real physics (tire-slip lateral forces + a
+  yaw torque) rather than a cosmetic facing (see `DECISIONS.md`,
+  "Higher-fidelity vehicle dynamics"). Movement model is a **pluggable,
+  per-entity** component/trait selected by each agent's `embodiment`
+  (`Holonomic`, `CarLike`, and `FullVehicle` ship). Models implement
+  `drive(&mut self, desired, body, dt) -> Actuation` (a force plus a yaw
+  torque), carrying state that evolves over time (a car's steering angle).
 - **Sensors are a pluggable, per-predicate abstraction** (`sensors`
   crate): v1 ships ground-truth implementations only
   (`time_to_collision`, `distance_to`, `speed`), but the interface is
@@ -70,8 +74,9 @@ Cargo workspace, seven crates:
   `get_state`/snapshot, `reflex_fired`/`scenario_ended`/`error` events), and
   the scenario JSON schema (world/walls + agent roster). Depends on nothing
   else in the workspace.
-- **`movement`** — the pluggable embodiment trait + `Holonomic`/`CarLike`
-  implementations. No networking/scenario knowledge.
+- **`movement`** — the pluggable embodiment trait +
+  `Holonomic`/`CarLike`/`FullVehicle` implementations. No
+  networking/scenario knowledge.
 - **`sensors`** — the named-sensor abstraction and reflex-rule evaluation
   (predicate readings → threshold checks → actions). Depends on
   `protocol` for rule/message shapes.
