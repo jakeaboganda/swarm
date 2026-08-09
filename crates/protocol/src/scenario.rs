@@ -9,6 +9,9 @@ pub enum Embodiment {
     Holonomic,
     /// Non-holonomic: forward-only thrust, bounded turn rate, lateral grip.
     CarLike,
+    /// Single-track ("bicycle") dynamics: physical yaw plus tire-slip lateral
+    /// forces, so understeer/oversteer emerge. Higher fidelity than `CarLike`.
+    FullVehicle,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,7 +51,11 @@ mod tests {
                 },
                 AgentSlot {
                     name: "car-2".into(),
-                    embodiment: Embodiment::Holonomic,
+                    embodiment: Embodiment::CarLike,
+                },
+                AgentSlot {
+                    name: "car-3".into(),
+                    embodiment: Embodiment::FullVehicle,
                 },
             ],
         };

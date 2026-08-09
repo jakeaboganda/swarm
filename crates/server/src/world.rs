@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use movement::{CarLike, DesiredVelocity, Holonomic};
+use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw};
 use protocol::scenario::{ArenaConfig, Embodiment};
 use transport::ConnectionId;
 
@@ -165,6 +165,28 @@ pub fn spawn_agent(
     match embodiment {
         Embodiment::Holonomic => entity.insert(Holonomic::default()),
         Embodiment::CarLike => entity.insert(CarLike::default()),
+        Embodiment::FullVehicle => entity.insert((
+            FullVehicle::default(),
+            // Free yaw only (still no tipping/rolling) so heading is real
+            // physics; PhysicalYaw tells the viewer-facing systems not to
+            // overwrite it. These override the shared bundle's
+            // `ROTATION_LOCKED` and zero angular damping.
+            LockedAxes::ROTATION_LOCKED_X | LockedAxes::ROTATION_LOCKED_Z,
+            PhysicalYaw,
+            // The capsule's own yaw (long-axis) inertia is tiny, so tire
+            // torques would spin it instantly. Give it a sane yaw inertia and
+            // some yaw damping. Tuned by feel — see DECISIONS.
+            ColliderMassProperties::MassProperties(MassProperties {
+                local_center_of_mass: Vec3::ZERO,
+                mass: 1.5,
+                principal_inertia_local_frame: Quat::IDENTITY,
+                principal_inertia: Vec3::new(1.0, 2.0, 1.0),
+            }),
+            Damping {
+                linear_damping: 0.75,
+                angular_damping: 3.0,
+            },
+        )),
     };
     entity.id()
 }
