@@ -51,10 +51,12 @@ echo "starting viewer..."
 ./target/debug/viewer &
 pids+=($!)
 
-# Drive the cars once the agent port is up.
+# Drive the cars once the agent port is up. Pass the scenario through so a
+# roster-aware client (e.g. swarm_avoidance.py) drives the same roster the
+# server loaded; clients that don't take an argument just ignore it.
 wait_for_port 4000 || exit 1
 echo "starting agents ($AGENTS)..."
-python3 "$AGENTS" &
+python3 "$AGENTS" "$SCENARIO" &
 pids+=($!)
 
 echo "running — press Ctrl-C to stop."

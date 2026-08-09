@@ -130,6 +130,10 @@ async def read_loop(ws, world, stats, stop, name):
                     world[e["agent_id"]] = {"pos": (p["x"], p["z"]), "vel": (v["x"], v["z"])}
             elif kind == "reflex_fired":
                 stats["brakes"] += 1
+            elif kind == "error":
+                # e.g. joining a name that isn't in the loaded scenario's
+                # roster — surface it instead of hanging silently.
+                print(f"[{name}] server error: {msg.get('message')}")
             elif kind == "scenario_ended":
                 print(f"[{name}] scenario ended: {msg.get('reason')}")
                 stop.set()
