@@ -18,15 +18,28 @@ async fn main() {
     let (stream, senders) = client::channels();
     tokio::spawn(client::run_client(url, senders));
 
+    // Present mode. FIFO (hard vsync) is the default: present blocks until the
+    // display refresh, so frames arrive at a uniform cadence at low power.
+    //
+    // VIZ_GPU_KEEPALIVE=1 switches to uncapped (no-vsync) rendering. This is
+    // the portable equivalent of running `vkcube` alongside the viewer: an
+    // aggressive dynamic-power-management GPU (e.g. an NVIDIA hybrid laptop
+    // with Runtime-D3) suspends the dGPU during the idle gaps FIFO leaves
+    // between frames, and the ~250 ms resume latency shows up as a periodic
+    // whole-process stall. Rendering uncapped never lets the GPU idle, so it
+    // stays clocked up — no vendor APIs or root needed. Motion stays smooth
+    // regardless of the (now variable) frame rate because playback runs on the
+    // sim-time render clock, not per-frame dt. Costs power/heat, hence opt-in.
+    let present_mode = if std::env::var("VIZ_GPU_KEEPALIVE").is_ok() {
+        PresentMode::AutoNoVsync
+    } else {
+        PresentMode::Fifo
+    };
+
     App::new()
-        // Force FIFO (hard vsync): present blocks until the display refresh,
-        // so frames are delivered at a uniform cadence. Without this the
-        // uncapped render loop presents unevenly (measured 4-28ms between
-        // frames), and since playback advances the render clock by each
-        // frame's real dt, that unevenness shows up as motion judder.
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                present_mode: PresentMode::Fifo,
+                present_mode,
                 ..default()
             }),
             ..default()
