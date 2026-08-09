@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::model::{DesiredVelocity, MovementModel};
+use crate::model::{Actuation, BodyState, DesiredVelocity, MovementModel};
 
 /// Non-holonomic (car-like) movement: the body accelerates only along the
 /// direction it faces, turns that heading at a bounded rate (so it makes
@@ -37,12 +37,15 @@ impl Default for CarLike {
 }
 
 impl MovementModel for CarLike {
-    fn drive(&mut self, desired: DesiredVelocity, current_velocity: Vec3, dt: f32) -> Vec3 {
+    fn drive(&mut self, desired: DesiredVelocity, body: BodyState, dt: f32) -> Actuation {
+        let current_velocity = body.velocity;
         let desired_speed = desired.value.length();
 
         // Steer the heading toward the desired direction, bounded by the
         // turn rate. When braking (desired velocity zero) there's no
         // direction to steer toward, so hold heading and just decelerate.
+        // CarLike keeps its own internal heading (fake yaw), so it ignores
+        // `body.heading` / `body.yaw_rate`.
         if desired_speed > 1e-3 {
             self.heading = turn_toward(self.heading, desired.value, self.max_turn_rate * dt);
         }
@@ -62,7 +65,12 @@ impl MovementModel for CarLike {
         let lateral_velocity = current_velocity - heading * forward_speed;
         let grip_force = -lateral_velocity * self.grip;
 
-        forward_force + grip_force
+        // CarLike's yaw is cosmetic (heading is model-internal), so it applies
+        // no physical yaw torque.
+        Actuation {
+            force: forward_force + grip_force,
+            yaw_torque: 0.0,
+        }
     }
 }
 
@@ -134,16 +142,23 @@ mod tests {
             ..Default::default()
         };
         // Desired points along +x at speed 5; car is stationary.
-        let force = car.drive(
+        let act = car.drive(
             DesiredVelocity {
                 value: Vec3::new(5.0, 0.0, 0.0),
                 urgent: false,
             },
-            Vec3::ZERO,
+            BodyState {
+                velocity: Vec3::ZERO,
+                yaw_rate: 0.0,
+                heading: Vec3::X,
+            },
             1.0 / 60.0,
         );
-        assert!(force.x > 0.0);
-        assert!(force.z.abs() < 1e-4, "no sideways force when heading is +x");
+        assert!(act.force.x > 0.0);
+        assert!(
+            act.force.z.abs() < 1e-4,
+            "no sideways force when heading is +x"
+        );
     }
 
     #[test]
@@ -155,14 +170,21 @@ mod tests {
             ..Default::default()
         };
         // Moving purely sideways (+z) while facing +x.
-        let force = car.drive(
+        let act = car.drive(
             DesiredVelocity {
                 value: Vec3::ZERO,
                 urgent: false,
             },
-            Vec3::new(0.0, 0.0, 3.0),
+            BodyState {
+                velocity: Vec3::new(0.0, 0.0, 3.0),
+                yaw_rate: 0.0,
+                heading: Vec3::X,
+            },
             1.0 / 60.0,
         );
-        assert!(force.z < 0.0, "grip should push against the sideways slide");
+        assert!(
+            act.force.z < 0.0,
+            "grip should push against the sideways slide"
+        );
     }
 }

@@ -5,7 +5,7 @@
 //! Run: `cargo run -p movement --example holonomic_controller`
 
 use bevy::math::Vec3;
-use movement::{DesiredVelocity, Holonomic, MovementModel};
+use movement::{BodyState, DesiredVelocity, Holonomic, MovementModel};
 
 fn main() {
     let mut model = Holonomic::default();
@@ -24,8 +24,13 @@ fn main() {
         if step % 20 == 0 {
             println!("{step:>4}   {:.3}", velocity.length());
         }
-        let force = model.drive(desired, velocity, dt);
-        velocity += force / mass * dt;
+        let body = BodyState {
+            velocity,
+            yaw_rate: 0.0,
+            heading: Vec3::X,
+        };
+        let actuation = model.drive(desired, body, dt);
+        velocity += actuation.force / mass * dt;
         velocity *= 1.0 - damping * dt;
     }
     println!("\ncommanded speed = {:.3}", desired.value.length());

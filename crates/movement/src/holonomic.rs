@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::model::{DesiredVelocity, MovementModel};
+use crate::model::{Actuation, BodyState, DesiredVelocity, MovementModel};
 
 // Note: `seek_force` (below) holds the shared proportional-controller math,
 // unit-tested directly. `Holonomic::drive` is a thin wrapper over it.
@@ -29,13 +29,16 @@ impl Default for Holonomic {
 }
 
 impl MovementModel for Holonomic {
-    fn drive(&mut self, desired: DesiredVelocity, current_velocity: Vec3, _dt: f32) -> Vec3 {
+    fn drive(&mut self, desired: DesiredVelocity, body: BodyState, _dt: f32) -> Actuation {
         let max_force = if desired.urgent {
             self.brake_max_force
         } else {
             self.max_force
         };
-        seek_force(desired.value, current_velocity, self.gain, max_force)
+        Actuation {
+            force: seek_force(desired.value, body.velocity, self.gain, max_force),
+            yaw_torque: 0.0,
+        }
     }
 }
 
