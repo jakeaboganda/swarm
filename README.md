@@ -58,6 +58,13 @@ You'll see two vehicles circle the arena, each trailing its recent path and
 showing the waypoints ahead of it. `scenario.json` defines the arena size
 and the roster.
 
+> **Stuttery viewer on a hybrid-GPU laptop?** Some GPUs (e.g. NVIDIA
+> Runtime-D3 laptops) suspend the dGPU between the viewer's frames and the
+> resume latency shows up as periodic hitches. Run the viewer with
+> `VIZ_GPU_KEEPALIVE=1` to render uncapped and keep the GPU awake (the
+> portable stand-in for running `vkcube` alongside; costs some power).
+> `scripts/run.sh` turns it on by default.
+
 ### A swarm avoiding itself
 
 For something busier, run dozens of agents that all cross the arena at once

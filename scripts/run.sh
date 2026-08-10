@@ -48,6 +48,11 @@ echo "starting headless simulation ($SCENARIO)..."
 pids+=($!)
 
 echo "starting viewer..."
+# Keep the GPU awake so a hybrid dGPU (e.g. NVIDIA Runtime-D3 laptops) doesn't
+# suspend between frames and stutter — the portable stand-in for running
+# vkcube alongside. On here since run.sh means "I want to watch it"; for a
+# low-power view run the viewer directly (cargo run --bin viewer).
+export VIZ_GPU_KEEPALIVE="${VIZ_GPU_KEEPALIVE:-1}"
 ./target/debug/viewer &
 pids+=($!)
 
