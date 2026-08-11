@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::Velocity;
@@ -16,7 +16,9 @@ use crate::world::AGENT_RADIUS;
 /// measured in these frames (see `Perceiver`), so this also sets the latency
 /// unit.
 const TICKS_PER_FRAME: u64 = 2;
-/// Cap on the per-agent latency ring buffer.
+/// Cap on the per-agent latency ring buffer. This bounds faithful latency at
+/// `(MAX_BUFFER - 1) * TICKS_PER_FRAME` ticks; a larger `latency_ticks`
+/// saturates to the oldest held frame rather than erroring.
 const MAX_BUFFER: usize = 64;
 
 /// The perception broadcaster handle, driven from Bevy systems.
@@ -28,9 +30,14 @@ pub struct Perception(pub perception::PerceptionHandle);
 #[derive(Resource, Default)]
 pub struct PerceptionSeed(pub u64);
 
-/// Agents currently connected on the perception pathway (by name).
+/// Agents currently connected on the perception pathway, by name, with a
+/// live-connection count. The count makes a same-name reconnect safe: if the
+/// new connection's `AgentConnected` is observed before the old one's
+/// `AgentDisconnected` (the perception server keeps the newer conn by token),
+/// counting keeps the agent present instead of the disconnect evicting the
+/// live connection. An entry exists only while its count is > 0.
 #[derive(Resource, Default)]
-pub struct PerceptionAgents(HashSet<String>);
+pub struct PerceptionAgents(HashMap<String, u32>);
 
 /// Per-agent ring buffer of recent perception frames, so `latency_frames` can
 /// serve an older one.
@@ -52,11 +59,16 @@ pub fn drain_perception_events(
     while let Ok(event) = perception.0.events.try_recv() {
         match event {
             perception::PerceptionEvent::AgentConnected { name } => {
-                agents.0.insert(name);
+                *agents.0.entry(name).or_insert(0) += 1;
             }
             perception::PerceptionEvent::AgentDisconnected { name } => {
-                agents.0.remove(&name);
-                buffers.0.remove(&name);
+                if let Some(count) = agents.0.get_mut(&name) {
+                    *count -= 1;
+                    if *count == 0 {
+                        agents.0.remove(&name);
+                        buffers.0.remove(&name);
+                    }
+                }
             }
         }
     }
@@ -92,7 +104,7 @@ pub fn route_perception(
         .collect();
 
     for (name, transform, velocity, perceiver) in &query {
-        if !agents.0.contains(&name.0) {
+        if !agents.0.contains_key(&name.0) {
             continue;
         }
         let spec = &perceiver.0;
@@ -109,7 +121,7 @@ pub fn route_perception(
             })
             .collect();
 
-        let heading = flatten_forward(transform);
+        let heading = sensor_heading(transform, velocity.linear);
         let mut rng = perceiver_rng(seed.0, &name.0, tick.0);
         let detections = perceive(spec, transform.translation, heading, &others, &mut rng);
 
@@ -147,7 +159,11 @@ pub fn route_perception(
         while buffer.len() > MAX_BUFFER {
             buffer.pop_front();
         }
-        let delayed = buffer.len().saturating_sub(1 + spec.latency_ticks as usize);
+        // `latency_ticks` is a physics-tick delay, but the buffer holds one
+        // entry per emitted frame (every TICKS_PER_FRAME ticks), so convert —
+        // quantized down to a whole frame.
+        let latency_frames = spec.latency_ticks as usize / TICKS_PER_FRAME as usize;
+        let delayed = buffer.len().saturating_sub(1 + latency_frames);
         let send = buffer[delayed].clone();
         perception
             .0
@@ -155,11 +171,22 @@ pub fn route_perception(
     }
 }
 
-/// Unit heading in the ground plane from an entity's transform, or +X if it
-/// has no horizontal facing (so FOV still has a reference).
-fn flatten_forward(transform: &Transform) -> Vec3 {
+/// The agent's sensor facing in the ground plane, or a zero vector when it is
+/// (near-)stationary. `perceive` reads a zero-horizontal heading as "no FOV
+/// cone", so a still agent senses all around — the intended design. While
+/// moving, `movement::face_velocity_direction` has aligned the transform to
+/// travel (and a `FullVehicle`'s yaw is real physics), so `forward` is the
+/// true facing. Passing the un-updated spawn transform (facing `-Z`) here
+/// instead would clamp a still agent to a `-Z` cone.
+fn sensor_heading(transform: &Transform, velocity: Vec3) -> Vec3 {
+    // Matches movement::face_velocity_direction's MIN_SPEED so "facing travel"
+    // and "sensing a cone" switch on together.
+    const MIN_SPEED: f32 = 0.05;
+    if Vec3::new(velocity.x, 0.0, velocity.z).length() < MIN_SPEED {
+        return Vec3::ZERO;
+    }
     let forward = transform.forward();
-    Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::X)
+    Vec3::new(forward.x, 0.0, forward.z)
 }
 
 /// Deterministic per-(agent, tick) RNG so simulated perception is

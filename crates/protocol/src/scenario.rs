@@ -20,7 +20,8 @@ pub struct AgentSlot {
     pub embodiment: Embodiment,
     /// This agent's simulated-sensor impairment. Omitted in JSON leaves it
     /// near-perfect (`SensorSpec::default`) — perception as it was before
-    /// simulated sensors existed.
+    /// simulated sensors existed. When present, the block is all-or-nothing:
+    /// every field must be given (there are no per-field defaults).
     #[serde(default)]
     pub sensors: SensorSpec,
 }
@@ -41,7 +42,10 @@ pub struct SensorSpec {
     pub position_noise: f32,
     /// Gaussian sigma applied to each detected velocity component.
     pub velocity_noise: f32,
-    /// Perception is delivered this many ticks late.
+    /// Perception is delivered this many physics ticks late. The server
+    /// quantizes the delay down to its perception-frame interval, so the
+    /// effective latency is the largest multiple of that interval not
+    /// exceeding this value.
     pub latency_ticks: u32,
 }
 
