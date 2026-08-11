@@ -301,8 +301,10 @@ mod tests {
 
     #[test]
     fn steering_is_rate_limited() {
-        let mut v = FullVehicle::default();
-        v.steer = 0.0;
+        let v = FullVehicle {
+            steer: 0.0,
+            ..Default::default()
+        };
         let dt = 1.0 / 60.0;
         // Hard left desired, but one tick can't exceed steer_rate·dt.
         let controls = driver(
