@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use viz::{EntityDescriptor, EntityId, SceneEvent, ServerToViewer, Shape};
 
 use crate::client::VizStream;
-use crate::overlay::{DebugData, Trail};
+use crate::overlay::{DebugData, PerceivedBlip, SensorEnvelope, Trail};
 
 /// How many ticks behind the newest frame the render clock plays, so there
 /// is always a next snapshot to interpolate toward and a late frame doesn't
@@ -30,6 +30,13 @@ const MAX_RATE_ADJUST: f64 = 0.1;
 /// Maps a viz `EntityId` to the Bevy entity rendering it.
 #[derive(Resource, Default)]
 pub struct EntityMap(HashMap<EntityId, Entity>);
+
+impl EntityMap {
+    /// The Bevy entity rendering `id`, if any.
+    pub fn get(&self, id: &EntityId) -> Option<Entity> {
+        self.0.get(id).copied()
+    }
+}
 
 /// Latest scenario/arena info from the stream.
 #[derive(Resource, Default)]
@@ -194,6 +201,12 @@ fn spawn_entity(
     if descriptor.kind.is_dynamic() {
         entity.insert((DebugData::default(), Trail::default(), History::default()));
     }
+    if let Some(sensors) = descriptor.sensors {
+        entity.insert(SensorEnvelope {
+            range: sensors.range,
+            fov_half_angle: sensors.fov_half_angle,
+        });
+    }
     map.0.insert(descriptor.id.clone(), entity.id());
 }
 
@@ -308,6 +321,15 @@ pub fn apply_stream(
                             .map(|p| Vec3::new(p.x, p.y, p.z))
                             .collect();
                         data.reflex_active = entity_debug.reflex_active;
+                        data.detections = entity_debug
+                            .detections
+                            .iter()
+                            .map(|b| PerceivedBlip {
+                                id: b.id.clone(),
+                                position: Vec3::new(b.position.x, b.position.y, b.position.z),
+                                kind: b.kind,
+                            })
+                            .collect();
                     }
                 }
             }

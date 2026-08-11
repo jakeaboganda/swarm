@@ -9,7 +9,7 @@ use crate::scene::{SceneEvent, SceneInit};
 /// new message/enum variant (e.g. the future delta/keyframe frame), which
 /// an older internally-tagged decoder would otherwise fail on. Additive
 /// *fields* are backward compatible and don't require a bump.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Everything the sim streams to a viewer. The scene layer (`SceneInit`,
 /// `Event`, `Frame`) is canonical/physical; `DebugFrame` is the optional
@@ -68,7 +68,7 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, rmp_serde::decode:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{EntityDebug, EntityFrame};
+    use crate::frame::{Blip, DetectionKind, EntityDebug, EntityFrame};
     use crate::math::{Quat, Transform, Vec3};
     use crate::scene::*;
 
@@ -89,6 +89,10 @@ mod tests {
                 b: 0.1,
             },
             transform: Transform::IDENTITY,
+            sensors: Some(SensorView {
+                range: 20.0,
+                fov_half_angle: 1.2,
+            }),
         }
     }
 
@@ -118,6 +122,7 @@ mod tests {
                             b: 0.52,
                         },
                         transform: Transform::IDENTITY,
+                        sensors: None,
                     },
                 ],
             }),
@@ -144,6 +149,11 @@ mod tests {
                     id: EntityId("car-1".into()),
                     plan: vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 10.0)],
                     reflex_active: true,
+                    detections: vec![Blip {
+                        id: EntityId("car-2".into()),
+                        position: Vec3::new(3.0, 0.0, -1.0),
+                        kind: DetectionKind::Agent,
+                    }],
                 }],
             }),
         ]

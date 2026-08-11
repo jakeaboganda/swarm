@@ -67,6 +67,20 @@ pub struct EntityDescriptor {
     pub shape: Shape,
     pub color: Color,
     pub transform: Transform,
+    /// The agent's sensing region, for the debug envelope overlay. `None` for
+    /// static geometry and agents without simulated sensors.
+    /// `#[serde(default)]` keeps pre-v3 encodings decodable.
+    #[serde(default)]
+    pub sensors: Option<SensorView>,
+}
+
+/// Just the two numbers a viewer needs to draw an agent's sensing region:
+/// max range and FOV half-angle (radians; `>= PI` means full 360°). Kept
+/// viz-local so viz doesn't depend on the sensor crates' full `SensorSpec`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SensorView {
+    pub range: f32,
+    pub fov_half_angle: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

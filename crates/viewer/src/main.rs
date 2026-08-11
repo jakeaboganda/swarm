@@ -59,6 +59,7 @@ async fn main() {
         .insert_resource(ViewerState::default())
         .insert_resource(RenderClock::default())
         .insert_resource(Diag::new(std::env::var("VIZ_DIAG").is_ok()))
+        .insert_resource(overlay::OverlayToggles::default())
         .add_systems(Startup, scene::setup_camera)
         // Apply the stream, then advance the sim-time render clock to pose
         // entities; overlays read the posed transforms, so run after.
@@ -72,12 +73,15 @@ async fn main() {
                 .chain(),
         )
         .add_systems(Update, scene::log_timing.after(scene::advance_playback))
+        .add_systems(Update, overlay::toggle_overlays)
         .add_systems(
             Update,
             (
                 overlay::record_trails,
                 overlay::draw_plans,
                 overlay::draw_trails,
+                overlay::draw_detections,
+                overlay::draw_sensor_envelope,
             )
                 .after(scene::advance_playback),
         )

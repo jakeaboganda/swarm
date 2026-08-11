@@ -19,7 +19,7 @@ use agent::{AgentRegistry, AwaitingReconnect, PendingRoster};
 use events::ReflexFired;
 use perception_router::{
     drain_perception_events, route_perception, Perception, PerceptionAgents, PerceptionBuffers,
-    PerceptionSeed,
+    PerceptionOverlay, PerceptionSeed,
 };
 use scenario::{ArenaBounds, Roster};
 use scenario_state::{EndReason, ScenarioState, Tick};
@@ -118,6 +118,7 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(PerceptionSeed(perception_seed))
         .insert_resource(PerceptionAgents::default())
         .insert_resource(PerceptionBuffers::default())
+        .insert_resource(PerceptionOverlay::default())
         .add_systems(Startup, (setup_arena, deactivate_physics))
         // Ingest agent messages in the same fixed cadence as physics so a
         // submitted plan is seen on the step it applies to, rather than at
@@ -145,8 +146,11 @@ fn main() -> anyhow::Result<()> {
         .add_systems(Update, (broadcast_spawns, drain_viz_events).chain())
         .add_systems(
             Update,
+            // After route_perception so the debug overlay carries this tick's
+            // perceived set, not last tick's.
             broadcast_frames
                 .after(drain_viz_events)
+                .after(route_perception)
                 .run_if(in_state(ScenarioState::Running)),
         )
         // Sensor pathway: register agents connecting on the perception port in

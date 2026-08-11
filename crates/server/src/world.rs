@@ -53,6 +53,7 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
                 half_extents: viz::Vec3::new(half_width, GROUND_HALF_THICKNESS, half_depth),
             },
             color: GROUND_COLOR,
+            sensors: None,
         },
     ));
 
@@ -99,6 +100,7 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
                     half_extents: viz::Vec3::new(half_x, WALL_HEIGHT / 2.0, half_z),
                 },
                 color: WALL_COLOR,
+                sensors: None,
             },
         ));
     }
@@ -136,6 +138,10 @@ pub fn spawn_agent(
                 half_length: AGENT_HALF_HEIGHT,
             },
             color: AGENT_COLOR,
+            sensors: Some(viz::SensorView {
+                range: sensors.range,
+                fov_half_angle: sensors.fov_half_angle,
+            }),
         },
         // Physics components, nested so the whole spawn stays within Bevy's
         // per-tuple bundle element limit.

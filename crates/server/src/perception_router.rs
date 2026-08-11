@@ -44,13 +44,44 @@ pub struct PerceptionAgents(HashMap<String, u32>);
 #[derive(Resource, Default)]
 pub struct PerceptionBuffers(HashMap<String, VecDeque<perception::PerceptionFrame>>);
 
+/// Each agent's latest delivered perceived set (by name), for the viz debug
+/// overlay. Holds the same delayed, noised detections sent on the sensor
+/// pathway, so the overlay can never diverge from what the agent received.
+/// Populated for every agent while Running — independent of whether anyone is
+/// listening on :4002 — so a viewer can show perception with no perception
+/// client connected.
+#[derive(Resource, Default)]
+pub struct PerceptionOverlay(HashMap<String, Vec<perception::Detection>>);
+
+impl PerceptionOverlay {
+    /// The agent's detections as viz overlay blips (empty if none).
+    pub fn blips_for(&self, name: &str) -> Vec<viz::Blip> {
+        self.0
+            .get(name)
+            .map(|dets| dets.iter().map(detection_to_blip).collect())
+            .unwrap_or_default()
+    }
+}
+
+fn detection_to_blip(d: &perception::Detection) -> viz::Blip {
+    viz::Blip {
+        id: viz::EntityId(d.id.clone()),
+        position: viz::Vec3::new(d.position.x, d.position.y, d.position.z),
+        kind: match d.kind {
+            perception::DetectionKind::Agent => viz::DetectionKind::Agent,
+            perception::DetectionKind::Static => viz::DetectionKind::Static,
+        },
+    }
+}
+
 /// An agent's perception config, attached at spawn. Wraps the protocol
 /// `SensorSpec` so it can be an ECS component.
 #[derive(Component, Default)]
 pub struct Perceiver(pub protocol::scenario::SensorSpec);
 
-/// Tracks perception connects/disconnects so the router only produces frames
-/// for agents that are listening.
+/// Tracks perception connects/disconnects so the router delivers frames over
+/// the wire only to agents that are listening (the overlay is computed for
+/// all).
 pub fn drain_perception_events(
     mut perception: ResMut<Perception>,
     mut agents: ResMut<PerceptionAgents>,
@@ -74,9 +105,10 @@ pub fn drain_perception_events(
     }
 }
 
-/// Every `TICKS_PER_FRAME` ticks, builds each connected agent's simulated
-/// perception (detections + impaired scalars) from ground truth and pushes it
-/// — delayed by the agent's latency.
+/// Every `TICKS_PER_FRAME` ticks, builds every agent's simulated perception
+/// (detections + impaired scalars) from ground truth, stashes it for the viz
+/// overlay, and — delayed by the agent's latency — pushes it to any agent
+/// listening on the perception port.
 // Resources + query for the per-agent perception build; grouping them into a
 // struct would obscure more than it saves.
 #[allow(clippy::too_many_arguments)]
@@ -88,6 +120,7 @@ pub fn route_perception(
     bounds: Res<ArenaBounds>,
     agents: Res<PerceptionAgents>,
     mut buffers: ResMut<PerceptionBuffers>,
+    mut overlay: ResMut<PerceptionOverlay>,
     query: Query<(&AgentName, &Transform, &Velocity, &Perceiver)>,
 ) {
     if tick.0 < *last_emit + TICKS_PER_FRAME {
@@ -104,9 +137,6 @@ pub fn route_perception(
         .collect();
 
     for (name, transform, velocity, perceiver) in &query {
-        if !agents.0.contains_key(&name.0) {
-            continue;
-        }
         let spec = &perceiver.0;
 
         // Other agents, as ground-truth entities to be perceived.
@@ -165,9 +195,16 @@ pub fn route_perception(
         let latency_frames = spec.latency_ticks as usize / TICKS_PER_FRAME as usize;
         let delayed = buffer.len().saturating_sub(1 + latency_frames);
         let send = buffer[delayed].clone();
-        perception
-            .0
-            .send(&name.0, &perception::ServerToAgent::Perception(send));
+
+        // Stash the delivered set for the viz debug overlay (every agent,
+        // listener or not), then deliver over the wire only to agents actually
+        // listening on the perception port.
+        overlay.0.insert(name.0.clone(), send.detections.clone());
+        if agents.0.contains_key(&name.0) {
+            perception
+                .0
+                .send(&name.0, &perception::ServerToAgent::Perception(send));
+        }
     }
 }
 

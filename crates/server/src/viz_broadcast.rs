@@ -25,6 +25,9 @@ pub struct VizEntity {
     pub kind: viz::EntityKind,
     pub shape: viz::Shape,
     pub color: viz::Color,
+    /// The agent's sensing region for the debug envelope overlay; `None` for
+    /// static geometry.
+    pub sensors: Option<viz::SensorView>,
 }
 
 pub fn viz_embodiment(embodiment: protocol::scenario::Embodiment) -> viz::Embodiment {
@@ -67,6 +70,7 @@ fn descriptor(entity: &VizEntity, transform: &Transform) -> viz::EntityDescripto
         shape: entity.shape,
         color: entity.color,
         transform: to_transform(transform),
+        sensors: entity.sensors,
     }
 }
 
@@ -127,6 +131,7 @@ pub fn broadcast_frames(
     mut last_emit: Local<u64>,
     viz: Res<Viz>,
     tick: Res<Tick>,
+    overlay: Res<crate::perception_router::PerceptionOverlay>,
     query: Query<(
         &VizEntity,
         &Transform,
@@ -161,6 +166,8 @@ pub fn broadcast_frames(
             id: entity.id.clone(),
             plan: plan_points,
             reflex_active: desired.map(|d| d.urgent).unwrap_or(false),
+            // The agent's latest perceived set (keyed by name == viz id).
+            detections: overlay.blips_for(&entity.id.0),
         });
     }
 

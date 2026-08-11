@@ -36,4 +36,29 @@ pub struct EntityDebug {
     pub plan: Vec<Vec3>,
     /// Whether a reflex is currently overriding this entity's plan.
     pub reflex_active: bool,
+    /// What this agent currently perceives through its simulated sensors —
+    /// the delayed, noised set actually delivered on the sensor pathway.
+    /// Debug overlay only (a viewer draws each as a "ghost"); empty for
+    /// non-agents. `#[serde(default)]` keeps pre-v3 encodings decodable.
+    #[serde(default)]
+    pub detections: Vec<Blip>,
+}
+
+/// What a perceived blip is, so a viewer can color a peer differently from a
+/// wall. Mirrors the perception pathway's kinds but kept viz-local so viz
+/// stays independent of the sensor crates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DetectionKind {
+    Agent,
+    Static,
+}
+
+/// One entity as an agent perceives it right now: its identity, the noised
+/// position the agent received, and what kind of thing it is. Debug-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Blip {
+    pub id: EntityId,
+    pub position: Vec3,
+    pub kind: DetectionKind,
 }
