@@ -46,12 +46,15 @@ fn main() {
             AgentSlot {
                 name: "car-1".into(),
                 embodiment: Embodiment::Holonomic,
+                sensors: Default::default(),
             },
             AgentSlot {
                 name: "car-2".into(),
                 embodiment: Embodiment::Holonomic,
+                sensors: Default::default(),
             },
         ],
+        seed: 0,
     };
 
     for (label, json) in [

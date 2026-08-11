@@ -39,7 +39,7 @@ fn planar_seek(current: Vec3, target: Vec3, speed: f32) -> Option<Vec3> {
 /// static (zero-velocity) obstacles for `time_to_collision`. Clamping to
 /// each wall's span gives the true nearest point on that wall segment for
 /// an axis-aligned arena, not just an approximation.
-fn wall_obstacles(position: Vec3, bounds: &ArenaBounds) -> [Obstacle; 4] {
+pub(crate) fn wall_obstacles(position: Vec3, bounds: &ArenaBounds) -> [Obstacle; 4] {
     let x = position.x.clamp(-bounds.half_width, bounds.half_width);
     let z = position.z.clamp(-bounds.half_depth, bounds.half_depth);
     [

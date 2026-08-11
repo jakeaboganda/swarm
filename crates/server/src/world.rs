@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw};
-use protocol::scenario::{ArenaConfig, Embodiment};
+use protocol::scenario::{ArenaConfig, Embodiment, SensorSpec};
 use transport::ConnectionId;
 
 use crate::agent::{AgentName, Connection, Plan, Reflexes};
+use crate::perception_router::Perceiver;
 use crate::viz_broadcast::{viz_embodiment, VizEntity};
 
 const WALL_HEIGHT: f32 = 3.0;
@@ -114,6 +115,7 @@ pub fn spawn_agent(
     position: Vec3,
     connection: ConnectionId,
     embodiment: Embodiment,
+    sensors: SensorSpec,
 ) -> Entity {
     let mut entity = commands.spawn((
         AgentName(name.to_string()),
@@ -121,6 +123,7 @@ pub fn spawn_agent(
         Plan::default(),
         Reflexes::default(),
         DesiredVelocity::default(),
+        Perceiver(sensors),
         Transform::from_translation(position),
         VizEntity {
             id: viz::EntityId(name.to_string()),

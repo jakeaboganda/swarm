@@ -1,6 +1,7 @@
 mod agent;
 mod arbitration;
 mod events;
+mod perception_router;
 mod scenario;
 mod scenario_state;
 mod transport_bridge;
@@ -16,6 +17,10 @@ use bevy_rapier3d::prelude::{NoUserData, RapierPhysicsPlugin};
 
 use agent::{AgentRegistry, AwaitingReconnect, PendingRoster};
 use events::ReflexFired;
+use perception_router::{
+    drain_perception_events, route_perception, Perception, PerceptionAgents, PerceptionBuffers,
+    PerceptionSeed,
+};
 use scenario::{ArenaBounds, Roster};
 use scenario_state::{EndReason, ScenarioState, Tick};
 use transport_bridge::{
@@ -34,6 +39,8 @@ fn main() -> anyhow::Result<()> {
         .nth(1)
         .unwrap_or_else(|| "scenario.json".to_string());
     let scenario_config = scenario::load_scenario(&scenario_path)?;
+    // Captured before the config is moved into the `Roster` resource below.
+    let perception_seed = scenario_config.seed;
 
     // Own the tokio runtime explicitly. The transport and viz servers run on
     // its background workers; Bevy's blocking headless run-loop then owns the
@@ -41,12 +48,14 @@ fn main() -> anyhow::Result<()> {
     // parked a worker under `#[tokio::main]`). The runtime must outlive the
     // app, so it's held here for the whole run.
     let runtime = tokio::runtime::Runtime::new()?;
-    let (transport_handle, viz_handle) = runtime.block_on(async {
+    let (transport_handle, viz_handle, perception_handle) = runtime.block_on(async {
         let transport_handle = transport::spawn(transport::Config::default()).await?;
         println!("listening for agents on {}", transport_handle.local_addr);
         let viz_handle = viz::spawn(viz::VizConfig::default()).await?;
         println!("streaming viz on {}", viz_handle.local_addr);
-        anyhow::Ok((transport_handle, viz_handle))
+        let perception_handle = perception::spawn(perception::PerceptionConfig::default()).await?;
+        println!("serving perception on {}", perception_handle.local_addr);
+        anyhow::Ok((transport_handle, viz_handle, perception_handle))
     })?;
     let _runtime_guard = runtime.enter();
 
@@ -105,6 +114,10 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(Tick::default())
         .insert_resource(Transport(transport_handle))
         .insert_resource(Viz(viz_handle))
+        .insert_resource(Perception(perception_handle))
+        .insert_resource(PerceptionSeed(perception_seed))
+        .insert_resource(PerceptionAgents::default())
+        .insert_resource(PerceptionBuffers::default())
         .add_systems(Startup, (setup_arena, deactivate_physics))
         // Ingest agent messages in the same fixed cadence as physics so a
         // submitted plan is seen on the step it applies to, rather than at
@@ -135,6 +148,13 @@ fn main() -> anyhow::Result<()> {
             broadcast_frames
                 .after(drain_viz_events)
                 .run_if(in_state(ScenarioState::Running)),
+        )
+        // Sensor pathway: register agents connecting on the perception port in
+        // all states; stream each its simulated perception only while Running.
+        .add_systems(Update, drain_perception_events)
+        .add_systems(
+            Update,
+            route_perception.run_if(in_state(ScenarioState::Running)),
         )
         .add_systems(
             OnEnter(ScenarioState::Running),

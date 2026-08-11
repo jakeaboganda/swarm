@@ -51,8 +51,10 @@ mod tests {
                 .map(|name| AgentSlot {
                     name: (*name).to_string(),
                     embodiment: Embodiment::Holonomic,
+                    sensors: Default::default(),
                 })
                 .collect(),
+            seed: 0,
         }
     }
 

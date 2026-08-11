@@ -18,6 +18,11 @@ pub enum Embodiment {
 pub struct AgentSlot {
     pub name: String,
     pub embodiment: Embodiment,
+    /// This agent's simulated-sensor impairment. Omitted in JSON leaves it
+    /// near-perfect (`SensorSpec::default`) — perception as it was before
+    /// simulated sensors existed.
+    #[serde(default)]
+    pub sensors: SensorSpec,
 }
 
 /// How well an agent perceives the world through its simulated sensors.
@@ -65,6 +70,10 @@ pub struct ArenaConfig {
 pub struct ScenarioConfig {
     pub arena: ArenaConfig,
     pub roster: Vec<AgentSlot>,
+    /// Base seed for reproducible simulated-perception noise. Omitted in JSON
+    /// defaults to 0.
+    #[serde(default)]
+    pub seed: u64,
 }
 
 #[cfg(test)]
@@ -82,20 +91,43 @@ mod tests {
                 AgentSlot {
                     name: "car-1".into(),
                     embodiment: Embodiment::Holonomic,
+                    sensors: SensorSpec::default(),
                 },
                 AgentSlot {
                     name: "car-2".into(),
                     embodiment: Embodiment::CarLike,
+                    sensors: SensorSpec {
+                        range: 20.0,
+                        fov_half_angle: 1.2,
+                        position_noise: 0.3,
+                        velocity_noise: 0.1,
+                        latency_ticks: 4,
+                    },
                 },
                 AgentSlot {
                     name: "car-3".into(),
                     embodiment: Embodiment::FullVehicle,
+                    sensors: SensorSpec::default(),
                 },
             ],
+            seed: 42,
         };
         let json = serde_json::to_string_pretty(&config).expect("serialize");
         let back: ScenarioConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, back);
+    }
+
+    #[test]
+    fn omitted_sensors_and_seed_default() {
+        // A scenario written before simulated sensors (no `sensors`, no `seed`)
+        // must still parse, leaving perfect perception and seed 0.
+        let json = r#"{
+            "arena": { "width": 50.0, "depth": 50.0 },
+            "roster": [{ "name": "car-1", "embodiment": "holonomic" }]
+        }"#;
+        let config: ScenarioConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.seed, 0);
+        assert_eq!(config.roster[0].sensors, SensorSpec::default());
     }
 
     #[test]
