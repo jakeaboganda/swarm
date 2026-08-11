@@ -13,6 +13,13 @@ const TRAIL_MAX: usize = 240;
 /// envelope isn't drawn (e.g. the near-perfect default's ~1e6 range, which
 /// would be an absurd ring dwarfing the arena).
 const MAX_ENVELOPE_RANGE: f32 = 500.0;
+/// The sensor model has no vertical FOV, so the view frustum uses this fixed
+/// modest vertical half-angle (~20°), clamped so the far plane stays above
+/// ground.
+const FRUSTUM_VFOV_HALF: f32 = 0.35;
+/// Clamp on the horizontal half-angle used for the frustum's far-plane width,
+/// so a very wide FOV can't blow it up via `tan()` near 90°.
+const FRUSTUM_MAX_HFOV: f32 = 1.3;
 
 /// Debug-layer state for a dynamic entity, updated from `DebugFrame`s.
 #[derive(Component, Default)]
@@ -194,18 +201,42 @@ pub fn draw_sensor_envelope(
         let forward = transform.forward();
         let heading = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
         if heading == Vec3::ZERO {
-            continue;
+            continue; // stationary: senses 360°, ring only
         }
-        // Two boundary rays plus an arc across the front, all at range.
-        const SEGMENTS: usize = 16;
-        let arc: Vec<Vec3> = (0..=SEGMENTS)
-            .map(|i| {
-                let t = env.fov_half_angle * (2.0 * (i as f32 / SEGMENTS as f32) - 1.0);
-                center + (Quat::from_rotation_y(t) * heading) * env.range
-            })
-            .collect();
-        gizmos.line(center, arc[0], color);
-        gizmos.line(center, arc[SEGMENTS], color);
-        gizmos.linestrip(arc, color);
+        draw_frustum(
+            &mut gizmos,
+            transform.translation,
+            heading,
+            env.range,
+            env.fov_half_angle,
+            color,
+        );
     }
+}
+
+/// Draws a camera-style view frustum: apex at the agent's eye, four edges out
+/// to a far rectangle at `range` along `heading`. The horizontal half-width is
+/// the real FOV half-angle; the vertical is a fixed modest default (not in the
+/// sensor model), clamped so the far plane stays above the ground.
+fn draw_frustum(
+    gizmos: &mut Gizmos,
+    origin: Vec3,
+    heading: Vec3,
+    range: f32,
+    hfov_half: f32,
+    color: Color,
+) {
+    let eye = Vec3::new(origin.x, origin.y.max(0.2), origin.z);
+    let right = heading.cross(Vec3::Y).normalize_or_zero();
+    let half_w = range * hfov_half.min(FRUSTUM_MAX_HFOV).tan();
+    let half_h = (range * FRUSTUM_VFOV_HALF.tan()).clamp(0.1, eye.y - 0.05);
+    let far = eye + heading * range;
+    let tl = far + Vec3::Y * half_h - right * half_w;
+    let tr = far + Vec3::Y * half_h + right * half_w;
+    let bl = far - Vec3::Y * half_h - right * half_w;
+    let br = far - Vec3::Y * half_h + right * half_w;
+    for corner in [tl, tr, bl, br] {
+        gizmos.line(eye, corner, color);
+    }
+    gizmos.linestrip([tl, tr, br, bl, tl], color);
 }
