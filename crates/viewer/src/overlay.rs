@@ -13,13 +13,10 @@ const TRAIL_MAX: usize = 240;
 /// envelope isn't drawn (e.g. the near-perfect default's ~1e6 range, which
 /// would be an absurd ring dwarfing the arena).
 const MAX_ENVELOPE_RANGE: f32 = 500.0;
-/// The sensor model has no vertical FOV, so the view frustum uses this fixed
-/// modest vertical half-angle (~20°), clamped so the far plane stays above
-/// ground.
-const FRUSTUM_VFOV_HALF: f32 = 0.35;
-/// Clamp on the horizontal half-angle used for the frustum's far-plane width,
-/// so a very wide FOV can't blow it up via `tan()` near 90°.
-const FRUSTUM_MAX_HFOV: f32 = 1.3;
+/// The FOV prism is drawn this tall (~the arena wall height). The sensor culls
+/// only horizontally — it's vertically unbounded — so this is a drawing
+/// extent, not a sensing limit: the prism's top and bottom are identical.
+const FOV_VOLUME_HEIGHT: f32 = 3.0;
 
 /// Debug-layer state for a dynamic entity, updated from `DebugFrame`s.
 #[derive(Component, Default)]
@@ -171,11 +168,11 @@ pub fn draw_detections(
     }
 }
 
-/// Draws each agent's sensing region: a range circle, plus a wedge around its
-/// current facing when the FOV is limited. The wedge follows the rendered
-/// facing (which tracks travel direction), so a stationary agent — which
-/// senses 360° — shows just the ring. Skipped when range is effectively
-/// unlimited (see `MAX_ENVELOPE_RANGE`).
+/// Draws each agent's sensing region: a range circle, plus an extruded FOV
+/// prism around its current facing when the FOV is limited. The prism follows
+/// the rendered facing (which tracks travel direction), so a stationary agent
+/// — which senses 360° — shows just the ring. Skipped when range is
+/// effectively unlimited (see `MAX_ENVELOPE_RANGE`).
 pub fn draw_sensor_envelope(
     toggles: Res<OverlayToggles>,
     mut gizmos: Gizmos,
@@ -203,7 +200,7 @@ pub fn draw_sensor_envelope(
         if heading == Vec3::ZERO {
             continue; // stationary: senses 360°, ring only
         }
-        draw_frustum(
+        draw_fov_prism(
             &mut gizmos,
             transform.translation,
             heading,
@@ -214,11 +211,12 @@ pub fn draw_sensor_envelope(
     }
 }
 
-/// Draws a camera-style view frustum: apex at the agent's eye, four edges out
-/// to a far rectangle at `range` along `heading`. The horizontal half-width is
-/// the real FOV half-angle; the vertical is a fixed modest default (not in the
-/// sensor model), clamped so the far plane stays above the ground.
-fn draw_frustum(
+/// Draws the FOV as an honest vertical prism: the horizontal wedge (apex at the
+/// agent, arc at true radial `range`) extruded straight up with parallel walls.
+/// The sensor culls only horizontally — all heights within range+bearing are
+/// seen — so there is no vertical FOV: top and bottom are identical, and the
+/// prism spans the arena's height rather than converging to a far plane.
+fn draw_fov_prism(
     gizmos: &mut Gizmos,
     origin: Vec3,
     heading: Vec3,
@@ -226,17 +224,30 @@ fn draw_frustum(
     hfov_half: f32,
     color: Color,
 ) {
-    let eye = Vec3::new(origin.x, origin.y.max(0.2), origin.z);
-    let right = heading.cross(Vec3::Y).normalize_or_zero();
-    let half_w = range * hfov_half.min(FRUSTUM_MAX_HFOV).tan();
-    let half_h = (range * FRUSTUM_VFOV_HALF.tan()).clamp(0.1, eye.y - 0.05);
-    let far = eye + heading * range;
-    let tl = far + Vec3::Y * half_h - right * half_w;
-    let tr = far + Vec3::Y * half_h + right * half_w;
-    let bl = far - Vec3::Y * half_h - right * half_w;
-    let br = far - Vec3::Y * half_h + right * half_w;
-    for corner in [tl, tr, bl, br] {
-        gizmos.line(eye, corner, color);
+    const SEGMENTS: usize = 16;
+    // The horizontal FOV arc at radial `range`, at a given height.
+    let arc = |y: f32| -> Vec<Vec3> {
+        (0..=SEGMENTS)
+            .map(|i| {
+                let t = hfov_half * (2.0 * (i as f32 / SEGMENTS as f32) - 1.0);
+                let dir = Quat::from_rotation_y(t) * heading;
+                Vec3::new(origin.x, y, origin.z) + dir * range
+            })
+            .collect()
+    };
+    let base = Vec3::new(origin.x, 0.0, origin.z);
+    let top = base + Vec3::Y * FOV_VOLUME_HEIGHT;
+    let floor = arc(0.0);
+    let ceil = arc(FOV_VOLUME_HEIGHT);
+    // Floor and ceiling wedges (apex + closing rays + arc), identical in size.
+    for (apex, ring) in [(base, &floor), (top, &ceil)] {
+        gizmos.line(apex, ring[0], color);
+        gizmos.line(apex, ring[SEGMENTS], color);
+        gizmos.linestrip(ring.iter().copied(), color);
     }
-    gizmos.linestrip([tl, tr, br, bl, tl], color);
+    // Vertical edges: the apex, plus the arc's ends and midpoint.
+    gizmos.line(base, top, color);
+    for i in [0, SEGMENTS / 2, SEGMENTS] {
+        gizmos.line(floor[i], ceil[i], color);
+    }
 }
