@@ -34,12 +34,15 @@ toy — an evolving project, not a fixed-spec deliverable.
     at its target speed, advancing to the next once within arrival
     tolerance.
   - **Reflexes**: declarative, agent-registered rules
-    (`sensor` `operator` `threshold` → `action`) evaluated entirely
-    server-side, every tick, from ground-truth world state. They override
-    plan-following when triggered — zero round-trip latency, since they
-    never wait on the agent. Each rule carries an agent-assigned
-    `priority` (higher wins on conflict; ties broken by registration
-    order).
+    (`sensor` `measure` `operator` `threshold` → `action`) evaluated
+    entirely server-side, every tick. `sensor` names a **device** to read —
+    the always-available `ground_truth` (perfect, instant), or a scenario-
+    equipped **simulated** device (see below) — and `measure` is the
+    predicate (`time_to_collision`/…). So a reflex can react to impaired
+    perception, not just the truth. They override plan-following when
+    triggered — zero round-trip latency, since they never wait on the agent.
+    Each rule carries an agent-assigned `priority` (higher wins on conflict;
+    ties broken by registration order).
 - **The world runs as a scenario**, not an open join-anytime space: a
   fixed roster of expected agents is declared upfront in a JSON scenario
   file, the server waits until every slot has connected, then runs. If any
@@ -57,45 +60,69 @@ toy — an evolving project, not a fixed-spec deliverable.
   (`Holonomic`, `CarLike`, and `FullVehicle` ship). Models implement
   `drive(&mut self, desired, body, dt) -> Actuation` (a force plus a yaw
   torque), carrying state that evolves over time (a car's steering angle).
-- **Sensors are a pluggable, per-predicate abstraction** (`sensors`
-  crate): v1 ships ground-truth implementations only
-  (`time_to_collision`, `distance_to`, `speed`), but the interface is
-  shaped so sensor-simulation (noise, limited range/field-of-view,
-  latency) can be added later as new implementations of the same trait.
-  This is active mid-term work, not indefinitely deferred — don't treat
-  the existence of the trait as a reason to avoid extending it.
+- **Sensors are first-class, world-equipped devices.** Each agent's roster
+  slot declares `sensors: Vec<SensorDef>` — named devices, each `ground_truth`
+  or `simulated` (with a `spec`: range, FOV half-angle, position/velocity
+  Gaussian noise, latency). Reflex rules reference a device by name; the
+  reserved `ground_truth` device is always available without declaration.
+  Trust is the *device's* property, not the rule's — a rule is a dumb
+  `measure op threshold`. The `sensors` crate holds both the predicate
+  readings (`time_to_collision`/`distance_to`/`speed`, ground-truth math
+  unchanged) and the impairment pipeline (`perceive`: range+FOV cull then
+  Gaussian noise, seeded per `(scenario_seed, agent, device, tick)`); latency
+  is a delivery-layer ring buffer. A `simulated` device's `time_to_collision`
+  is just the same reading over the culled/noised obstacle set. **v1 impairs
+  `time_to_collision` only**; `speed`/`distance_to` are self-referential and
+  stay ground-truth (filters over them come later).
+- **Perception is its own pathway** (`perception` crate, `:4002`): the sim
+  computes each agent's per-device perceived world once per tick (before
+  reflex arbitration, so a `Simulated` reflex reads exactly what was
+  delivered) and pushes it to any agent listening — one frame per simulated
+  device. `provider → server-router → agent`, provider-agnostic (analytic
+  today, a rendered-sensor provider later). Ground-truth devices are
+  reflex-only fail-safes — never streamed (an agent never *sees* ground
+  truth). The **viz** debug layer separately carries a *human-only*
+  perception overlay (see below); no agent consumes sensor data from viz.
 
 ## Crate layout
 
-Cargo workspace, seven crates:
+Cargo workspace, eight crates:
 
 - **`protocol`** — shared `serde` types for the *agent* pathway: WebSocket
   messages (`join`, plan submission, reflex-rule registration,
   `get_state`/snapshot, `reflex_fired`/`scenario_ended`/`error` events), and
-  the scenario JSON schema (world/walls + agent roster). Depends on nothing
-  else in the workspace.
+  the scenario JSON schema (world/walls + agent roster + per-agent
+  `SensorDef`s + `seed`). Depends on nothing else in the workspace.
 - **`movement`** — the pluggable embodiment trait +
   `Holonomic`/`CarLike`/`FullVehicle` implementations. No
   networking/scenario knowledge.
-- **`sensors`** — the named-sensor abstraction and reflex-rule evaluation
-  (predicate readings → threshold checks → actions). Depends on
-  `protocol` for rule/message shapes.
+- **`sensors`** — sensor readings (`time_to_collision`/`distance_to`/`speed`),
+  the perception-impairment pipeline (`perceive`: range/FOV cull + seeded
+  Gaussian noise), and reflex-rule evaluation (`evaluate` resolves each
+  rule's named device to a `SensorContext`, then applies threshold checks +
+  hysteresis + priority). Depends on `protocol` for rule/message shapes.
 - **`transport`** — the async *agent* WebSocket server: per-connection
   handling (heartbeat, malformed-message contract) and the bounded channels
   bridging async I/O into Bevy's synchronous ECS tick. Depends only on
   `protocol`.
-- **`viz`** — the *visualization* pathway: the semantic scene wire types
-  (MessagePack, versioned) and the WebSocket broadcast server that fans them
-  out to viewers. Independent of `protocol` (a separate pathway).
+- **`viz`** — the *visualization* pathway (`:4001`): the semantic scene wire
+  types (MessagePack, versioned) and the WebSocket broadcast server that fans
+  them out to viewers. Its debug layer also carries a human-only perception
+  overlay (per-agent detections + a sensing envelope). Independent of
+  `protocol` and `perception` (a separate pathway; viz-local types only).
+- **`perception`** — the *sensor* pathway (`:4002`): the JSON wire types
+  (`Hello`, per-device `PerceptionFrame`) and a per-agent-routed push server
+  (each agent receives only its own perception, unlike viz's identical
+  broadcast). Independent of `protocol`/`viz`.
 - **`server`** — the headless simulation binary: loads the scenario, runs
-  Rapier physics, dispatches movement per entity, invokes sensor evaluation,
-  resolves reflex-vs-plan arbitration each tick, manages scenario lifecycle,
-  and drives the viz broadcast. Owns the tokio runtime; Bevy runs on the
-  main thread.
+  Rapier physics, dispatches movement per entity, computes per-device
+  perceived worlds, resolves reflex-vs-plan arbitration each tick, manages
+  scenario lifecycle, and drives the viz + perception broadcasts. Owns the
+  tokio runtime; Bevy runs on the main thread.
 - **`viewer`** — the reference 3D visualizer binary: a Bevy app that
-  subscribes to the `viz` stream and renders the scene + debug overlays. One
-  of potentially many viewers (a browser viewer, a recorder, ...); holds no
-  simulation state.
+  subscribes to the `viz` stream and renders the scene + debug overlays
+  (plans, trails, and the perception overlay). One of potentially many
+  viewers (a browser viewer, a recorder, ...); holds no simulation state.
 
 ## Conventions
 
@@ -103,9 +130,10 @@ Cargo workspace, seven crates:
   `-D warnings`. Anything clippy flags must be fixed or explicitly
   `#[allow]`'d with a comment explaining why.
 - **Error handling**: `Result`-based throughout. Library crates
-  (`protocol`, `movement`, `sensors`, `transport`, `viz`) define their own
-  error enums via `thiserror` where they surface errors; the `server` and
-  `viewer` binaries may use `anyhow` for top-level error bubbling. Avoid `unwrap`/`expect` outside tests, except
+  (`protocol`, `movement`, `sensors`, `transport`, `viz`, `perception`) define
+  their own error enums via `thiserror` where they surface errors; the
+  `server` and `viewer` binaries may use `anyhow` for top-level error
+  bubbling. Avoid `unwrap`/`expect` outside tests, except
   for genuinely infallible cases — and those get a short comment saying
   why. Panics are for programmer-error invariant violations, not for
   expected/recoverable conditions (malformed agent input, disconnects,
@@ -117,9 +145,10 @@ Cargo workspace, seven crates:
   and drive *that* with tests (as `arbitration::planar_seek` and
   `AwaitingReconnect` are).
 - **Testing**: required for the pure/deterministic logic crates —
-  `protocol`/`viz` (serialization round-trips), `movement` (seek-controller
-  math), `sensors` (predicate evaluation, hysteresis, priority/tiebreak
-  resolution). Networking crates (`transport`, `viz` broadcaster) also carry
+  `protocol`/`viz`/`perception` (serialization round-trips), `movement`
+  (seek-controller math), `sensors` (predicate evaluation, perception
+  culling/noise, hysteresis, priority/tiebreak, device resolution). Networking
+  crates (`transport`, `viz` broadcaster, `perception` server) also carry
   integration tests over a real socket. Not required for `server`/`viewer`
   (ECS wiring, scenario timing, rendering) — that code is better verified by
   running the app than by unit tests.

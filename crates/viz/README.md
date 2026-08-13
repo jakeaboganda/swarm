@@ -2,8 +2,11 @@
 
 The visualization pathway: the semantic scene state the (headless) sim
 streams to viewers, plus the broadcast server that fans it out. A forward,
-observational channel — separate from the agent protocol, and carrying no
-sensor data (sensing is a distinct pathway).
+observational channel — separate from the agent protocol. The *agent-facing*
+sensor pathway is a distinct channel (the `perception` crate); no agent ever
+consumes sensor data from viz. viz's optional debug layer does carry a
+**human-only** perception overlay (what each agent perceives), for the
+viewer's benefit only — see below.
 
 ## Wire model
 
@@ -14,9 +17,12 @@ recorder, a USD/glTF exporter) can ignore the rest:
   lifecycle changes (spawn/despawn, scenario state) → `Frame`s streamed at a
   fixed rate. Entities carry a `Shape` + `Transform`; static geometry is
   sent once and never appears in frames.
-- **Debug layer** (optional): `DebugFrame` with per-entity plan paths and
-  reflex flags. Trails are *not* transmitted — a viewer derives those from
-  the frame stream.
+- **Debug layer** (optional): `DebugFrame` with per-entity plan paths, reflex
+  flags, and the perception overlay — each agent's currently-perceived
+  entities as `Blip`s (noised "ghost" positions). An `EntityDescriptor` also
+  carries an optional `SensorView` (range + FOV) for the sensing-envelope
+  overlay. All human-only diagnostics a viewer may render or ignore. Trails
+  are *not* transmitted — a viewer derives those from the frame stream.
 
 `ServerToViewer` / `ViewerToServer` are the top-level messages. Viewers are
 passive: the only thing they send is a connect-time `Hello`.

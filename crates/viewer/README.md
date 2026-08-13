@@ -24,8 +24,14 @@ on its own and each reconnect delivers a fresh scene-init.
   re-syncs), lifecycle events add/remove entities, and frames update
   transforms. It's defensive — spawns are idempotent and frames for unknown
   ids are ignored. Meshes are built from each entity's `Shape`.
-- **`overlay`** — draws the debug layer (plan paths, reflex highlight) and
-  viewer-derived motion trails with gizmos.
+- **`overlay`** — draws the debug layer with gizmos: plan paths, reflex
+  highlight, viewer-derived motion trails, and the **perception overlay** —
+  per agent, a line to each perceived "ghost" (its noised position) with a
+  connector back to the entity's true position (the perception error), plus a
+  sensing **envelope** (range circle + FOV prism) from the entity's
+  `SensorView`. Toggle detections with **P**, the envelope with **O**.
 
-The viewer never simulates: positions and orientations come straight off
-the wire.
+Playback runs on a sim-time render clock: `apply_stream` buffers each entity's
+recent poses and `advance_playback` interpolates them a few ticks behind the
+newest frame, so motion stays smooth under jittery frame arrival. The viewer
+never simulates: positions and orientations come straight off the wire.
