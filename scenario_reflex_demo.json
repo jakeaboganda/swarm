@@ -1,0 +1,29 @@
+{
+  "arena": {
+    "width": 70.0,
+    "depth": 40.0
+  },
+  "seed": 7,
+  "roster": [
+    { "name": "gt-chaser", "embodiment": "holonomic" },
+    { "name": "gt-target", "embodiment": "holonomic" },
+    {
+      "name": "sim-chaser",
+      "embodiment": "holonomic",
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 4.0,
+            "fov_half_angle": 3.15,
+            "position_noise": 0.15,
+            "velocity_noise": 0.1,
+            "latency_ticks": 4
+          }
+        }
+      ]
+    },
+    { "name": "sim-target", "embodiment": "holonomic" }
+  ]
+}
