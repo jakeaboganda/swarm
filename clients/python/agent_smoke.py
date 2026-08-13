@@ -29,7 +29,8 @@ async def agent(name, waypoints):
 
         await ws.send(json.dumps({"type": "submit_plan", "waypoints": waypoints}))
         await ws.send(json.dumps({"type": "register_reflexes", "rules": [
-            {"sensor": {"kind": "time_to_collision"}, "operator": "less_than",
+            {"sensor": "ground_truth", "measure": {"kind": "time_to_collision"},
+             "operator": "less_than",
              "threshold": 2.0, "action": "brake", "priority": 10}
         ]}))
 

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw};
-use protocol::scenario::{ArenaConfig, Embodiment, SensorSpec};
+use protocol::scenario::{ArenaConfig, Embodiment, SensorDef, SensorSource};
 use transport::ConnectionId;
 
 use crate::agent::{AgentName, Connection, Plan, Reflexes};
@@ -117,8 +117,18 @@ pub fn spawn_agent(
     position: Vec3,
     connection: ConnectionId,
     embodiment: Embodiment,
-    sensors: SensorSpec,
+    sensors: Vec<SensorDef>,
 ) -> Entity {
+    // The debug envelope shows the first simulated device (agents usually have
+    // one); drawing several overlapping envelopes is a later refinement.
+    let sensor_view = sensors
+        .iter()
+        .find(|d| d.source == SensorSource::Simulated)
+        .and_then(|d| d.spec)
+        .map(|s| viz::SensorView {
+            range: s.range,
+            fov_half_angle: s.fov_half_angle,
+        });
     let mut entity = commands.spawn((
         AgentName(name.to_string()),
         Connection(connection),
@@ -138,10 +148,7 @@ pub fn spawn_agent(
                 half_length: AGENT_HALF_HEIGHT,
             },
             color: AGENT_COLOR,
-            sensors: Some(viz::SensorView {
-                range: sensors.range,
-                fov_half_angle: sensors.fov_half_angle,
-            }),
+            sensors: sensor_view,
         },
         // Physics components, nested so the whole spawn stays within Bevy's
         // per-tuple bundle element limit.

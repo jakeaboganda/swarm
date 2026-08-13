@@ -49,7 +49,8 @@ async def agent(name, waypoints):
         await ws.recv()  # Joined
         await ws.send(json.dumps({"type": "submit_plan", "waypoints": waypoints}))
         await ws.send(json.dumps({"type": "register_reflexes", "rules": [
-            {"sensor": {"kind": "time_to_collision"}, "operator": "less_than",
+            {"sensor": "ground_truth", "measure": {"kind": "time_to_collision"},
+             "operator": "less_than",
              "threshold": 1.5, "action": "brake", "priority": 10}
         ]}))
         # Keep the connection open and report anything the server pushes.

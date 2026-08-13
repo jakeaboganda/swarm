@@ -231,6 +231,7 @@ mod tests {
 
     fn sample_frame(tick: u64) -> ServerToAgent {
         ServerToAgent::Perception(PerceptionFrame {
+            sensor: "radar".into(),
             tick,
             detections: vec![Detection {
                 id: "car-2".into(),

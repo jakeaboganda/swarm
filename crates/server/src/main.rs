@@ -18,7 +18,7 @@ use bevy_rapier3d::prelude::{NoUserData, RapierPhysicsPlugin};
 use agent::{AgentRegistry, AwaitingReconnect, PendingRoster};
 use events::ReflexFired;
 use perception_router::{
-    drain_perception_events, route_perception, Perception, PerceptionAgents, PerceptionBuffers,
+    drain_perception_events, route_perception, PerceivedWorlds, Perception, PerceptionAgents,
     PerceptionOverlay, PerceptionSeed,
 };
 use scenario::{ArenaBounds, Roster};
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(Perception(perception_handle))
         .insert_resource(PerceptionSeed(perception_seed))
         .insert_resource(PerceptionAgents::default())
-        .insert_resource(PerceptionBuffers::default())
+        .insert_resource(PerceivedWorlds::default())
         .insert_resource(PerceptionOverlay::default())
         .add_systems(Startup, (setup_arena, deactivate_physics))
         // Ingest agent messages in the same fixed cadence as physics so a
@@ -129,6 +129,15 @@ fn main() -> anyhow::Result<()> {
             (drain_transport, expire_reconnects)
                 .chain()
                 .before(arbitration::arbitrate),
+        )
+        // Recompute per-device perceived worlds before arbitration, so a
+        // `Simulated` reflex reads exactly what was delivered this frame (and
+        // the same set the agent gets on :4002).
+        .add_systems(
+            FixedUpdate,
+            route_perception
+                .before(arbitration::arbitrate)
+                .run_if(in_state(ScenarioState::Running)),
         )
         .add_systems(
             FixedUpdate,
@@ -146,20 +155,14 @@ fn main() -> anyhow::Result<()> {
         .add_systems(Update, (broadcast_spawns, drain_viz_events).chain())
         .add_systems(
             Update,
-            // After route_perception so the debug overlay carries this tick's
-            // perceived set, not last tick's.
+            // The overlay is written each fixed step by route_perception, so by
+            // Update it already carries this frame's perceived set.
             broadcast_frames
                 .after(drain_viz_events)
-                .after(route_perception)
                 .run_if(in_state(ScenarioState::Running)),
         )
-        // Sensor pathway: register agents connecting on the perception port in
-        // all states; stream each its simulated perception only while Running.
+        // Register agents connecting on the perception port, in all states.
         .add_systems(Update, drain_perception_events)
-        .add_systems(
-            Update,
-            route_perception.run_if(in_state(ScenarioState::Running)),
-        )
         .add_systems(
             OnEnter(ScenarioState::Running),
             (activate_physics, broadcast_state),

@@ -148,7 +148,8 @@ async def run_agent(name, angle, arena, world, stats, stop):
     async with websockets.connect(SERVER_URL, ping_interval=None) as ws:
         await ws.send(json.dumps({"type": "join", "name": name}))
         await ws.send(json.dumps({"type": "register_reflexes", "rules": [
-            {"sensor": {"kind": "time_to_collision"}, "operator": "less_than",
+            {"sensor": "ground_truth", "measure": {"kind": "time_to_collision"},
+             "operator": "less_than",
              "threshold": TTC_BRAKE, "action": "brake", "priority": 10}
         ]}))
         reader = asyncio.create_task(read_loop(ws, world, stats, stop, name))

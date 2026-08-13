@@ -169,7 +169,7 @@ pub fn drain_transport(
                         .position(|slot| slot.name == name)
                         .expect("checked above");
                     let embodiment = roster.0.roster[index].embodiment;
-                    let sensors = roster.0.roster[index].sensors;
+                    let sensors = roster.0.roster[index].sensors.clone();
                     let position = spawn_position(index, roster.0.roster.len());
                     let entity = spawn_agent(
                         &mut commands,

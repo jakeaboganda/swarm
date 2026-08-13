@@ -47,9 +47,12 @@ pub struct Scalars {
     pub speed: f32,
 }
 
-/// One perception tick for one agent.
+/// One perception tick for one agent, through one of its named devices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PerceptionFrame {
+    /// Which device produced this frame (the agent's `SensorDef` name), so an
+    /// agent with several sensors can tell them apart.
+    pub sensor: String,
     pub tick: u64,
     pub detections: Vec<Detection>,
     pub scalars: Scalars,
@@ -98,6 +101,7 @@ mod tests {
     #[test]
     fn perception_frame_round_trips() {
         let frame = ServerToAgent::Perception(PerceptionFrame {
+            sensor: "radar".into(),
             tick: 42,
             detections: vec![Detection {
                 id: "car-2".into(),

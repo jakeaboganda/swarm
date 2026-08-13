@@ -1,11 +1,15 @@
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::Velocity;
 use movement::DesiredVelocity;
 use protocol::messages::ReflexAction;
+use protocol::scenario::{SensorSource, GROUND_TRUTH_SENSOR};
 use sensors::{evaluate, Obstacle, SensorContext};
 
-use crate::agent::{Plan, Reflexes};
+use crate::agent::{AgentName, Plan, Reflexes};
 use crate::events::ReflexFired;
+use crate::perception_router::{PerceivedWorlds, Perceiver};
 use crate::scenario::ArenaBounds;
 use crate::scenario_state::Tick;
 use crate::world::AGENT_RADIUS;
@@ -69,14 +73,18 @@ pub(crate) fn wall_obstacles(position: Vec3, bounds: &ArenaBounds) -> [Obstacle;
 /// The per-tick control loop's steps 1-3: read sensors, evaluate reflexes,
 /// and resolve reflex-vs-plan arbitration into a `DesiredVelocity`. Step 4
 /// (force application) is `movement`'s job, ordered to run after this.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn arbitrate(
     mut tick: ResMut<Tick>,
     bounds: Res<ArenaBounds>,
+    worlds: Res<PerceivedWorlds>,
     mut reflex_fired: MessageWriter<ReflexFired>,
     mut query: Query<(
         Entity,
+        &AgentName,
         &Transform,
         &Velocity,
+        &Perceiver,
         &mut Plan,
         &mut Reflexes,
         &mut DesiredVelocity,
@@ -86,7 +94,7 @@ pub fn arbitrate(
 
     let others: Vec<(Entity, Obstacle)> = query
         .iter()
-        .map(|(entity, transform, velocity, ..)| {
+        .map(|(entity, _, transform, velocity, ..)| {
             (
                 entity,
                 Obstacle {
@@ -98,8 +106,12 @@ pub fn arbitrate(
         })
         .collect();
 
-    for (entity, transform, velocity, mut plan, mut reflexes, mut desired) in &mut query {
-        let mut obstacles: Vec<Obstacle> = others
+    for (entity, name, transform, velocity, perceiver, mut plan, mut reflexes, mut desired) in
+        &mut query
+    {
+        // Ground-truth context: every other agent, exact, plus the walls. This
+        // is the reserved `ground_truth` device — a perfect, instant fail-safe.
+        let mut gt_obstacles: Vec<Obstacle> = others
             .iter()
             .filter(|(other, _)| *other != entity)
             .map(|(_, obstacle)| Obstacle {
@@ -108,16 +120,38 @@ pub fn arbitrate(
                 radius: obstacle.radius,
             })
             .collect();
-        obstacles.extend(wall_obstacles(transform.translation, &bounds));
+        gt_obstacles.extend(wall_obstacles(transform.translation, &bounds));
 
-        let ctx = SensorContext {
+        let context = |obstacles| SensorContext {
             self_position: transform.translation,
             self_velocity: velocity.linear,
             self_radius: AGENT_RADIUS,
             obstacles,
         };
 
-        if let Some(action) = evaluate(&mut reflexes.0, &ctx) {
+        let mut contexts: HashMap<String, SensorContext> = HashMap::new();
+        contexts.insert(GROUND_TRUTH_SENSOR.to_string(), context(gt_obstacles));
+
+        // Each simulated device: its delivered (delayed, noised) detections as
+        // obstacles, plus walls (walls are perceived as static ground truth).
+        for def in &perceiver.0 {
+            if def.source != SensorSource::Simulated {
+                continue;
+            }
+            let mut obstacles: Vec<Obstacle> = worlds
+                .delivered(&name.0, &def.name)
+                .iter()
+                .map(|d| Obstacle {
+                    position: d.position,
+                    velocity: d.velocity,
+                    radius: AGENT_RADIUS,
+                })
+                .collect();
+            obstacles.extend(wall_obstacles(transform.translation, &bounds));
+            contexts.insert(def.name.clone(), context(obstacles));
+        }
+
+        if let Some(action) = evaluate(&mut reflexes.0, &contexts) {
             *desired = DesiredVelocity {
                 value: Vec3::ZERO,
                 urgent: true,
