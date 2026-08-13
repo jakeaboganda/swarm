@@ -4,13 +4,16 @@
 //!
 //! Run: `cargo run -p sensors --example reflex_brake`
 
+use std::collections::HashMap;
+
 use glam::Vec3;
 use protocol::messages::{Operator, ReflexAction, ReflexRule, SensorKind};
 use sensors::{evaluate, ActiveRule, Obstacle, Sensor, SensorContext, TimeToCollision};
 
 fn main() {
     let mut rules = vec![ActiveRule::new(ReflexRule {
-        sensor: SensorKind::TimeToCollision,
+        sensor: "ground_truth".into(),
+        measure: SensorKind::TimeToCollision,
         operator: Operator::LessThan,
         threshold: 2.0,
         action: ReflexAction::Brake,
@@ -33,7 +36,8 @@ fn main() {
         };
 
         let ttc = TimeToCollision.read(&ctx);
-        let action = evaluate(&mut rules, &ctx);
+        let contexts = HashMap::from([("ground_truth".to_string(), ctx)]);
+        let action = evaluate(&mut rules, &contexts);
         let label = match action {
             Some(a) => format!("{a:?}"),
             None => "-".to_string(),

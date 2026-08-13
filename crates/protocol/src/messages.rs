@@ -36,9 +36,14 @@ pub enum ReflexAction {
     StopAndHold,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReflexRule {
-    pub sensor: SensorKind,
+    /// Named device to read from: a scenario `SensorDef` name, or the reserved
+    /// `ground_truth` device (a perfect, instant fail-safe). Whether the
+    /// reading is impaired is the device's property, not the rule's.
+    pub sensor: String,
+    /// The predicate read from that device.
+    pub measure: SensorKind,
     pub operator: Operator,
     pub threshold: f32,
     pub action: ReflexAction,
@@ -121,7 +126,8 @@ mod tests {
         });
         round_trip(&ClientMessage::RegisterReflexes {
             rules: vec![ReflexRule {
-                sensor: SensorKind::TimeToCollision,
+                sensor: "ground_truth".into(),
+                measure: SensorKind::TimeToCollision,
                 operator: Operator::LessThan,
                 threshold: 2.0,
                 action: ReflexAction::Brake,
@@ -162,7 +168,8 @@ mod tests {
     #[test]
     fn distance_to_sensor_carries_target() {
         let rule = ReflexRule {
-            sensor: SensorKind::DistanceTo {
+            sensor: "ground_truth".into(),
+            measure: SensorKind::DistanceTo {
                 target: Vec3::new(5.0, 0.0, 5.0),
             },
             operator: Operator::LessThan,

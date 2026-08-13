@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::HashMap;
 
 use protocol::messages::{Operator, ReflexAction, ReflexRule};
 
@@ -43,14 +44,22 @@ fn condition_met(rule: &ReflexRule, reading: f32, currently_active: bool) -> boo
     }
 }
 
-/// Updates every rule's trigger state against the current world state and
-/// returns the action of the highest-priority active rule, if any. Ties
-/// are broken by registration order (earlier in `rules` wins) — priority
-/// is per-agent: this only ever compares one agent's rules against each
-/// other.
-pub fn evaluate(rules: &mut [ActiveRule], ctx: &SensorContext) -> Option<ReflexAction> {
+/// Updates every rule's trigger state and returns the action of the
+/// highest-priority active rule, if any. Each rule reads its `measure` from
+/// the device it names (`rule.sensor`), resolved via `contexts` (keyed by
+/// device name — e.g. `ground_truth` or a scenario sensor). A rule naming a
+/// device with no context reads nothing and stays inactive. Ties are broken by
+/// registration order (earlier wins); priority is per-agent.
+pub fn evaluate(
+    rules: &mut [ActiveRule],
+    contexts: &HashMap<String, SensorContext>,
+) -> Option<ReflexAction> {
     for active_rule in rules.iter_mut() {
-        let sensor = sensor_for(&active_rule.rule.sensor);
+        let Some(ctx) = contexts.get(&active_rule.rule.sensor) else {
+            active_rule.active = false;
+            continue;
+        };
+        let sensor = sensor_for(&active_rule.rule.measure);
         let reading = sensor.read(ctx);
         active_rule.active = condition_met(&active_rule.rule, reading, active_rule.active);
     }
@@ -71,7 +80,8 @@ mod tests {
 
     fn rule(operator: Operator, threshold: f32, action: ReflexAction, priority: i32) -> ReflexRule {
         ReflexRule {
-            sensor: protocol::messages::SensorKind::Speed,
+            sensor: "s".into(),
+            measure: protocol::messages::SensorKind::Speed,
             operator,
             threshold,
             action,
@@ -79,13 +89,17 @@ mod tests {
         }
     }
 
-    fn ctx_with_speed(speed: f32) -> SensorContext {
-        SensorContext {
-            self_position: Vec3::ZERO,
-            self_velocity: Vec3::new(speed, 0.0, 0.0),
-            self_radius: 0.0,
-            obstacles: vec![],
-        }
+    /// A one-device context map (name "s") holding a context with `speed`.
+    fn ctx_with_speed(speed: f32) -> HashMap<String, SensorContext> {
+        HashMap::from([(
+            "s".to_string(),
+            SensorContext {
+                self_position: Vec3::ZERO,
+                self_velocity: Vec3::new(speed, 0.0, 0.0),
+                self_radius: 0.0,
+                obstacles: vec![],
+            },
+        )])
     }
 
     #[test]
@@ -156,22 +170,26 @@ mod tests {
     #[test]
     fn time_to_collision_and_walls_are_reachable_through_evaluate() {
         let mut rules = vec![ActiveRule::new(ReflexRule {
-            sensor: protocol::messages::SensorKind::TimeToCollision,
+            sensor: "s".into(),
+            measure: protocol::messages::SensorKind::TimeToCollision,
             operator: Operator::LessThan,
             threshold: 5.0,
             action: ReflexAction::Brake,
             priority: 0,
         })];
-        let ctx = SensorContext {
-            self_position: Vec3::ZERO,
-            self_velocity: Vec3::new(1.0, 0.0, 0.0),
-            self_radius: 0.0,
-            obstacles: vec![Obstacle {
-                position: Vec3::new(3.0, 0.0, 0.0),
-                velocity: Vec3::ZERO,
-                radius: 0.0,
-            }],
-        };
-        assert_eq!(evaluate(&mut rules, &ctx), Some(ReflexAction::Brake));
+        let contexts = HashMap::from([(
+            "s".to_string(),
+            SensorContext {
+                self_position: Vec3::ZERO,
+                self_velocity: Vec3::new(1.0, 0.0, 0.0),
+                self_radius: 0.0,
+                obstacles: vec![Obstacle {
+                    position: Vec3::new(3.0, 0.0, 0.0),
+                    velocity: Vec3::ZERO,
+                    radius: 0.0,
+                }],
+            },
+        )]);
+        assert_eq!(evaluate(&mut rules, &contexts), Some(ReflexAction::Brake));
     }
 }

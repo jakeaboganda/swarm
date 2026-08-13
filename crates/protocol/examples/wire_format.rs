@@ -25,7 +25,8 @@ fn main() {
 
     let reflexes = ClientMessage::RegisterReflexes {
         rules: vec![ReflexRule {
-            sensor: SensorKind::TimeToCollision,
+            sensor: "ground_truth".into(),
+            measure: SensorKind::TimeToCollision,
             operator: Operator::LessThan,
             threshold: 2.0,
             action: ReflexAction::Brake,

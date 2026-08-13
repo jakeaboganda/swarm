@@ -14,16 +14,44 @@ pub enum Embodiment {
     FullVehicle,
 }
 
+/// The reserved device name every agent can read ground truth from without
+/// declaring a sensor (the zero-friction safety-reflex source). A scenario
+/// `SensorDef` may not reuse this name.
+pub const GROUND_TRUTH_SENSOR: &str = "ground_truth";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSlot {
     pub name: String,
     pub embodiment: Embodiment,
-    /// This agent's simulated-sensor impairment. Omitted in JSON leaves it
-    /// near-perfect (`SensorSpec::default`) — perception as it was before
-    /// simulated sensors existed. When present, the block is all-or-nothing:
-    /// every field must be given (there are no per-field defaults).
+    /// The perceiving devices the world equips this agent with, referenced by
+    /// name from its reflex rules. Omitted = none; the reserved
+    /// `GROUND_TRUTH_SENSOR` device is always available regardless.
     #[serde(default)]
-    pub sensors: SensorSpec,
+    pub sensors: Vec<SensorDef>,
+}
+
+/// A named perceiving device on an agent. A device is a perception *source*;
+/// reflex predicates (`SensorKind`) are read from it. Its fidelity is
+/// world-set (an agent can't declare its own perfect sensors and opt out of
+/// impairment).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SensorDef {
+    /// Unique per agent; how reflex rules reference this device.
+    pub name: String,
+    pub source: SensorSource,
+    /// Impairment, required when `source` is `Simulated`, forbidden otherwise
+    /// (validated at load).
+    #[serde(default)]
+    pub spec: Option<SensorSpec>,
+}
+
+/// Whether a device perceives ground truth (a perfect, instant fail-safe) or
+/// an impaired, delayed simulation of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorSource {
+    GroundTruth,
+    Simulated,
 }
 
 /// How well an agent perceives the world through its simulated sensors.
@@ -95,23 +123,34 @@ mod tests {
                 AgentSlot {
                     name: "car-1".into(),
                     embodiment: Embodiment::Holonomic,
-                    sensors: SensorSpec::default(),
+                    sensors: vec![],
                 },
                 AgentSlot {
                     name: "car-2".into(),
                     embodiment: Embodiment::CarLike,
-                    sensors: SensorSpec {
-                        range: 20.0,
-                        fov_half_angle: 1.2,
-                        position_noise: 0.3,
-                        velocity_noise: 0.1,
-                        latency_ticks: 4,
-                    },
+                    sensors: vec![
+                        SensorDef {
+                            name: "radar".into(),
+                            source: SensorSource::Simulated,
+                            spec: Some(SensorSpec {
+                                range: 20.0,
+                                fov_half_angle: 1.2,
+                                position_noise: 0.3,
+                                velocity_noise: 0.1,
+                                latency_ticks: 4,
+                            }),
+                        },
+                        SensorDef {
+                            name: "bumper".into(),
+                            source: SensorSource::GroundTruth,
+                            spec: None,
+                        },
+                    ],
                 },
                 AgentSlot {
                     name: "car-3".into(),
                     embodiment: Embodiment::FullVehicle,
-                    sensors: SensorSpec::default(),
+                    sensors: vec![],
                 },
             ],
             seed: 42,
@@ -123,15 +162,15 @@ mod tests {
 
     #[test]
     fn omitted_sensors_and_seed_default() {
-        // A scenario written before simulated sensors (no `sensors`, no `seed`)
-        // must still parse, leaving perfect perception and seed 0.
+        // A scenario with no `sensors` and no `seed` parses to an empty sensor
+        // list and seed 0.
         let json = r#"{
             "arena": { "width": 50.0, "depth": 50.0 },
             "roster": [{ "name": "car-1", "embodiment": "holonomic" }]
         }"#;
         let config: ScenarioConfig = serde_json::from_str(json).expect("deserialize");
         assert_eq!(config.seed, 0);
-        assert_eq!(config.roster[0].sensors, SensorSpec::default());
+        assert!(config.roster[0].sensors.is_empty());
     }
 
     #[test]
