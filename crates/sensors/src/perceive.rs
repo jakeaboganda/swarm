@@ -308,7 +308,12 @@ mod tests {
     // through-`perceive` tests only exercise obliquely). Eye at the origin,
     // target at x=10.
     fn sight(x: f32, z: f32, radius: f32) -> bool {
-        occludes(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), Vec3::new(x, 0.0, z), radius)
+        occludes(
+            Vec3::ZERO,
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(x, 0.0, z),
+            radius,
+        )
     }
 
     #[test]
