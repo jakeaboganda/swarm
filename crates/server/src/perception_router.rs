@@ -161,6 +161,7 @@ pub fn route_perception(
                     kind: DetectionKind::Agent,
                     position: *position,
                     velocity: *vel,
+                    radius: AGENT_RADIUS,
                 })
                 .collect();
 

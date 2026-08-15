@@ -51,6 +51,8 @@ pub struct PerceivedEntity {
     pub kind: DetectionKind,
     pub position: Vec3,
     pub velocity: Vec3,
+    pub radius: f32, // Body radius used for line of sight. Used for occlusion.
+                     // TODO: have much better occlusion
 }
 
 /// One entity as an agent perceives it: identity + kind carried through, pose
@@ -65,9 +67,11 @@ pub struct Detection {
     pub distance: f32,
 }
 
-/// The impairment pipeline: cull `others` by range then field of view, then
-/// perturb the survivors' pose with Gaussian noise. Pure — the caller owns
-/// the RNG (and thus the seed) and gathers the ground-truth `others`.
+/// The impairment pipeline: cull `others` by range, then field of view, then
+/// line of sight (another entity blocking the view), then perturb the
+/// survivors' pose with Gaussian noise. Pure — the caller owns the RNG (and
+/// thus the seed) and gathers the ground-truth `others`. All culls use true
+/// positions; noise is applied only to what survives.
 pub fn perceive(
     spec: &SensorSpec,
     self_position: Vec3,
@@ -93,6 +97,15 @@ pub fn perceive(
                 }
             }
         }
+        // Line of sight: blocked if another entity sits across the sight line
+        // between us and this one. (Walls don't occlude yet — that needs
+        // interior obstacles the world doesn't have.)
+        let occluded = others.iter().any(|o| {
+            o.id != entity.id && occludes(self_position, entity.position, o.position, o.radius)
+        });
+        if occluded {
+            continue;
+        }
         detections.push(Detection {
             id: entity.id.clone(),
             kind: entity.kind,
@@ -102,6 +115,26 @@ pub fn perceive(
         });
     }
     detections
+}
+
+/// Whether a disc of `radius` at `blocker` lies across the ground-plane sight
+/// line from `eye` to `target` — i.e. its centre is within `radius` of the
+/// segment and strictly between the endpoints (so a body beside the eye or at
+/// the target doesn't count).
+fn occludes(eye: Vec3, target: Vec3, blocker: Vec3, radius: f32) -> bool {
+    let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+    let (eye, target, blocker) = (flat(eye), flat(target), flat(blocker));
+    let line = target - eye;
+    let len2 = line.length_squared();
+    if len2 < 1e-9 {
+        return false;
+    }
+    let t = (blocker - eye).dot(line) / len2;
+    if !(1e-3..=1.0 - 1e-3).contains(&t) {
+        return false;
+    }
+    let closest = eye + line * t;
+    (blocker - closest).length() < radius
 }
 
 /// Unit xz-plane direction, or `None` if the vector has no horizontal extent.
@@ -130,6 +163,7 @@ mod tests {
             kind: DetectionKind::Agent,
             position,
             velocity,
+            radius: 0.5,
         }
     }
 
@@ -196,6 +230,62 @@ mod tests {
             &mut Rng::seed(1),
         );
         assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn entity_behind_another_is_occluded() {
+        // blocker at x=5 sits on the sight line to target at x=10.
+        let others = vec![
+            ent("blocker", Vec3::new(5.0, 0.0, 0.0), Vec3::ZERO),
+            ent("hidden", Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO),
+        ];
+        let d = perceive(
+            &spec(100.0, FULL, 0.0),
+            Vec3::ZERO,
+            Vec3::X,
+            &others,
+            &mut Rng::seed(1),
+        );
+        assert_eq!(
+            d.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            ["blocker"]
+        );
+    }
+
+    #[test]
+    fn occluder_off_the_sight_line_does_not_block() {
+        // Same target, but the other body is well off the line — clear view.
+        let others = vec![
+            ent("beside", Vec3::new(5.0, 0.0, 5.0), Vec3::ZERO),
+            ent("target", Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO),
+        ];
+        let d = perceive(
+            &spec(100.0, FULL, 0.0),
+            Vec3::ZERO,
+            Vec3::X,
+            &others,
+            &mut Rng::seed(1),
+        );
+        assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn a_body_past_the_target_does_not_occlude_it() {
+        // "far" is beyond "target", so it can't block the view of it.
+        let others = vec![
+            ent("target", Vec3::new(5.0, 0.0, 0.0), Vec3::ZERO),
+            ent("far", Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO),
+        ];
+        let d = perceive(
+            &spec(100.0, FULL, 0.0),
+            Vec3::ZERO,
+            Vec3::X,
+            &others,
+            &mut Rng::seed(1),
+        );
+        // target is visible; far is occluded by target.
+        assert!(d.iter().any(|x| x.id == "target"));
+        assert!(!d.iter().any(|x| x.id == "far"));
     }
 
     #[test]
