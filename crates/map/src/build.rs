@@ -52,34 +52,31 @@ fn reference_line() -> Polyline {
     }
 
     // A 90° left arc off the end of the straight. Heading rotates +X → −Z; the
-    // arc centre sits a radius to the left, at (STRAIGHT, ·, −RADIUS).
-    let mut angle = STEP / RADIUS;
-    while angle <= FRAC_PI_2 + 1e-4 {
+    // arc centre sits a radius to the left, at (STRAIGHT, ·, −RADIUS). Sample
+    // evenly and land exactly on 90° at the end (skip angle 0. it duplicates
+    // the straight's last point).
+    let steps = (FRAC_PI_2 * RADIUS / STEP).ceil() as usize;
+    for k in 1..=steps {
+        let angle = FRAC_PI_2 * k as f32 / steps as f32;
         let s = STRAIGHT + RADIUS * angle;
         points.push(Vec3::new(
             STRAIGHT + RADIUS * angle.sin(),
             s * GRADE,
             RADIUS * (angle.cos() - 1.0),
         ));
-        angle += STEP / RADIUS;
     }
 
     Polyline::new(points)
 }
 
-/// Offset a polyline laterally by `offset` (positive = left of travel).
+/// Offset a polyline laterally by `offset` (positive = left of travel), along
+/// each vertex's bisector normal so lane width stays consistent across vertices.
 fn offset_line(line: &Polyline, offset: f32) -> Polyline {
-    let points = line.points();
-    let n = points.len();
-    let shifted = (0..n)
-        .map(|i| {
-            let heading = if i + 1 < n {
-                points[i + 1] - points[i]
-            } else {
-                points[i] - points[i - 1]
-            };
-            points[i] + left_normal(heading) * offset
-        })
+    let shifted = line
+        .points()
+        .iter()
+        .zip(line.tangents())
+        .map(|(point, tangent)| *point + left_normal(*tangent) * offset)
         .collect();
     Polyline::new(shifted)
 }
@@ -94,13 +91,15 @@ mod tests {
     }
 
     #[test]
-    fn forward_lane_starts_heading_plus_x_and_climbs() {
+    fn forward_lane_starts_plus_x_ends_minus_z_and_climbs() {
         let net = demo_road();
         let lane = net.lane(LaneId(0)).expect("forward lane");
         let start = lane.center.pose_at(0.0);
-        assert!(start.heading.x > 0.9, "heading {:?}", start.heading);
-        // The far end is higher than the start (the constant grade).
         let end = lane.center.pose_at(lane.center.length());
+        // Straight start faces +X; after the 90° left curve it faces −Z.
+        assert!(start.heading.x > 0.9, "start {:?}", start.heading);
+        assert!(end.heading.z < -0.9, "end {:?}", end.heading);
+        // The constant grade climbs.
         assert!(end.position.y > start.position.y + 1.0);
     }
 
@@ -113,11 +112,26 @@ mod tests {
     #[test]
     fn nearest_lane_resolves_each_side_of_the_road() {
         let net = demo_road();
-        // Just off the start on the +Z side is the forward lane (offset −w/2 by
-        // left_normal(+X)=−Z lands it at +z), and −Z side is the backward lane.
+        // Forward lane (offset −w/2 by left_normal(+X)=−Z) lands on the +Z side;
+        // backward lane on the −Z side.
         let (near_plus_z, _) = net.nearest_lane(Vec3::new(1.0, 0.0, 1.6)).unwrap();
         let (near_minus_z, _) = net.nearest_lane(Vec3::new(1.0, 0.0, -1.6)).unwrap();
         assert_eq!(near_plus_z, LaneId(0));
         assert_eq!(near_minus_z, LaneId(1));
+    }
+
+    #[test]
+    fn lanes_keep_width_and_dont_invert_through_the_curve() {
+        let net = demo_road();
+        let forward = &net.lane(LaneId(0)).unwrap().center;
+        let backward = &net.lane(LaneId(1)).unwrap().center;
+        // Across the whole road (straight and curve), the two lane centers stay
+        // ~one lane width apart -- no inversion or width collapse on the arc.
+        for k in 0..=10 {
+            let s = forward.length() * k as f32 / 10.0;
+            let p = forward.point_at(s);
+            let gap = (p - backward.project(p).point).length();
+            assert!((gap - LANE_WIDTH).abs() < 0.4, "gap {gap} at s {s}");
+        }
     }
 }

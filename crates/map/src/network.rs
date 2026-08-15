@@ -2,7 +2,9 @@ use glam::Vec3;
 
 use crate::geometry::{Polyline, Projection};
 
-/// Index of a lane within its `RoadNetwork`.
+/// An opaque lane identifier. **Not** a vector index into `RoadNetwork.lanes` —
+/// an importer may assign arbitrary ids (e.g. from OpenDRIVE lane keys), so
+/// look lanes up with [`RoadNetwork::lane`], never by position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LaneId(pub usize);
 
@@ -42,8 +44,10 @@ pub struct RoadNetwork {
 }
 
 impl RoadNetwork {
+    /// The lane with this id, by identity (not position), so ids stay valid
+    /// however an importer assigns them.
     pub fn lane(&self, id: LaneId) -> Option<&Lane> {
-        self.lanes.get(id.0)
+        self.lanes.iter().find(|l| l.id == id)
     }
 
     pub fn driving_lanes(&self) -> impl Iterator<Item = &Lane> {
@@ -97,11 +101,26 @@ mod tests {
     }
 
     #[test]
-    fn lane_lookup_by_id() {
+    fn lane_lookup_is_by_id_not_position() {
+        // Ids need not equal vec positions — an importer may assign arbitrary
+        // ones. Position 0 holds id 17, position 1 holds id 4.
         let net = RoadNetwork {
-            lanes: vec![lane(0, &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])],
+            lanes: vec![
+                Lane {
+                    id: LaneId(17),
+                    ..lane(0, &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+                },
+                Lane {
+                    id: LaneId(4),
+                    ..lane(1, &[[0.0, 0.0, 5.0], [1.0, 0.0, 5.0]])
+                },
+            ],
         };
-        assert!(net.lane(LaneId(0)).is_some());
-        assert!(net.lane(LaneId(9)).is_none());
+        assert_eq!(net.lane(LaneId(17)).map(|l| l.id), Some(LaneId(17)));
+        assert_eq!(net.lane(LaneId(4)).map(|l| l.id), Some(LaneId(4)));
+        assert!(net.lane(LaneId(0)).is_none()); // position 0, but not id 0
+                                                // nearest_lane's returned id round-trips through lane().
+        let (id, _) = net.nearest_lane(Vec3::new(0.5, 0.0, 0.0)).unwrap();
+        assert!(net.lane(id).is_some());
     }
 }
