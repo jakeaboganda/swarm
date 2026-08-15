@@ -106,6 +106,12 @@ pub fn perceive(
         if occluded {
             continue;
         }
+        // Noise is drawn only for survivors, so a given entity's perturbation
+        // depends on how many earlier entities in `others` were culled (by
+        // range, FOV, or occlusion) — not on the entity alone. That's fine:
+        // it's deterministic for a fixed `others` order + seed (the router
+        // reseeds per (agent, device, tick)), and range/FOV already behaved
+        // this way.
         detections.push(Detection {
             id: entity.id.clone(),
             kind: entity.kind,
@@ -117,6 +123,14 @@ pub fn perceive(
     detections
 }
 
+/// Sight lines shorter than this (squared) are treated as zero-length — the
+/// eye and target coincide, so nothing is "between" them.
+const MIN_SIGHT_LEN_SQ: f32 = 1e-9;
+/// How much of the segment, at each end, doesn't count as "between": a blocker
+/// projecting into the first/last `ENDPOINT_BAND` fraction is essentially at
+/// the eye or the target itself, not an occluder in the middle.
+const ENDPOINT_BAND: f32 = 1e-3;
+
 /// Whether a disc of `radius` at `blocker` lies across the ground-plane sight
 /// line from `eye` to `target` — i.e. its centre is within `radius` of the
 /// segment and strictly between the endpoints (so a body beside the eye or at
@@ -126,11 +140,13 @@ fn occludes(eye: Vec3, target: Vec3, blocker: Vec3, radius: f32) -> bool {
     let (eye, target, blocker) = (flat(eye), flat(target), flat(blocker));
     let line = target - eye;
     let len2 = line.length_squared();
-    if len2 < 1e-9 {
+    if len2 < MIN_SIGHT_LEN_SQ {
         return false;
     }
+    // Project the blocker onto the sight line: t is its fractional position
+    // along eye→target. Only a blocker strictly between the endpoints occludes.
     let t = (blocker - eye).dot(line) / len2;
-    if !(1e-3..=1.0 - 1e-3).contains(&t) {
+    if !(ENDPOINT_BAND..=1.0 - ENDPOINT_BAND).contains(&t) {
         return false;
     }
     let closest = eye + line * t;
@@ -286,6 +302,45 @@ mod tests {
         // target is visible; far is occluded by target.
         assert!(d.iter().any(|x| x.id == "target"));
         assert!(!d.iter().any(|x| x.id == "far"));
+    }
+
+    // Direct coverage of the segment-vs-disc helper (the edge cases the
+    // through-`perceive` tests only exercise obliquely). Eye at the origin,
+    // target at x=10.
+    fn sight(x: f32, z: f32, radius: f32) -> bool {
+        occludes(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), Vec3::new(x, 0.0, z), radius)
+    }
+
+    #[test]
+    fn occludes_blocker_on_the_line_between() {
+        assert!(sight(5.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn occludes_blocker_behind_the_eye_does_not() {
+        assert!(!sight(-3.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn occludes_blocker_past_the_target_does_not() {
+        assert!(!sight(12.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn occludes_blocker_off_to_the_side_does_not() {
+        // On the line at t=0.5 but 2 units off — well outside radius 0.5.
+        assert!(!sight(5.0, 2.0, 0.5));
+    }
+
+    #[test]
+    fn occludes_grazing_within_radius() {
+        // 0.4 off the line, radius 0.5 — just clips it.
+        assert!(sight(5.0, 0.4, 0.5));
+    }
+
+    #[test]
+    fn occludes_zero_length_sight_line_does_not() {
+        assert!(!occludes(Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0.5));
     }
 
     #[test]

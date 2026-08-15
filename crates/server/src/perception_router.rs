@@ -144,6 +144,21 @@ pub fn route_perception(
     for (name, transform, velocity, perceiver) in &query {
         let mut overlay_blips: Vec<viz::Blip> = Vec::new();
 
+        // Other agents, as ground-truth entities to be perceived (and to
+        // occlude each other). The same set for every one of this agent's
+        // devices, so build it once.
+        let others: Vec<PerceivedEntity> = all
+            .iter()
+            .filter(|(other, _, _)| other != &name.0)
+            .map(|(id, position, vel)| PerceivedEntity {
+                id: id.clone(),
+                kind: DetectionKind::Agent,
+                position: *position,
+                velocity: *vel,
+                radius: AGENT_RADIUS,
+            })
+            .collect();
+
         for def in &perceiver.0 {
             let SensorSource::Simulated = def.source else {
                 continue; // ground-truth devices are exact; nothing to compute
@@ -151,19 +166,6 @@ pub fn route_perception(
             let Some(spec) = def.spec else {
                 continue; // validated present at load; skip defensively
             };
-
-            // Other agents, as ground-truth entities to be perceived.
-            let others: Vec<PerceivedEntity> = all
-                .iter()
-                .filter(|(other, _, _)| other != &name.0)
-                .map(|(id, position, vel)| PerceivedEntity {
-                    id: id.clone(),
-                    kind: DetectionKind::Agent,
-                    position: *position,
-                    velocity: *vel,
-                    radius: AGENT_RADIUS,
-                })
-                .collect();
 
             let heading = sensor_heading(transform, velocity.linear);
             let mut rng = perceiver_rng(seed.0, &name.0, &def.name, tick.0);
