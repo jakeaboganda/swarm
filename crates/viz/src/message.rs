@@ -9,7 +9,7 @@ use crate::scene::{SceneEvent, SceneInit};
 /// new message/enum variant (e.g. the future delta/keyframe frame), which
 /// an older internally-tagged decoder would otherwise fail on. Additive
 /// *fields* are backward compatible and don't require a bump.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Everything the sim streams to a viewer. The scene layer (`SceneInit`,
 /// `Event`, `Frame`) is canonical/physical; `DebugFrame` is the optional
@@ -120,6 +120,27 @@ mod tests {
                             r: 0.45,
                             g: 0.47,
                             b: 0.52,
+                        },
+                        transform: Transform::IDENTITY,
+                        sensors: None,
+                    },
+                    EntityDescriptor {
+                        id: EntityId("road".into()),
+                        name: "road".into(),
+                        kind: EntityKind::Static,
+                        shape: Shape::Mesh {
+                            positions: vec![
+                                Vec3::new(0.0, 0.0, -2.0),
+                                Vec3::new(0.0, 0.0, 2.0),
+                                Vec3::new(10.0, 0.0, 2.0),
+                            ],
+                            normals: vec![Vec3::new(0.0, 1.0, 0.0); 3],
+                            indices: vec![0, 1, 2],
+                        },
+                        color: Color {
+                            r: 0.2,
+                            g: 0.2,
+                            b: 0.22,
                         },
                         transform: Transform::IDENTITY,
                         sensors: None,

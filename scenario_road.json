@@ -1,0 +1,8 @@
+{
+  "arena": {
+    "width": 50.0,
+    "depth": 50.0
+  },
+  "map": "demo",
+  "roster": []
+}

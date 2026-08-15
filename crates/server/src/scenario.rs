@@ -112,6 +112,7 @@ mod tests {
                 })
                 .collect(),
             seed: 0,
+            map: None,
         }
     }
 

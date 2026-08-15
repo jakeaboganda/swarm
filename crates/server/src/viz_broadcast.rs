@@ -67,7 +67,7 @@ fn descriptor(entity: &VizEntity, transform: &Transform) -> viz::EntityDescripto
         id: entity.id.clone(),
         name: entity.name.clone(),
         kind: entity.kind,
-        shape: entity.shape,
+        shape: entity.shape.clone(),
         color: entity.color,
         transform: to_transform(transform),
         sensors: entity.sensors,

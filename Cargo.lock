@@ -5017,6 +5017,7 @@ dependencies = [
  "bevy",
  "bevy_rapier3d",
  "futures-util",
+ "map",
  "movement",
  "perception",
  "protocol",

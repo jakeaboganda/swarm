@@ -15,6 +15,7 @@ sensors = { workspace = true }
 transport = { workspace = true }
 viz = { workspace = true }
 perception = { workspace = true }
+map = { workspace = true }
 
 bevy = { workspace = true }
 bevy_rapier3d = { workspace = true }

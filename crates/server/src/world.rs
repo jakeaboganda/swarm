@@ -31,6 +31,56 @@ const AGENT_COLOR: viz::Color = viz::Color {
     g: 0.45,
     b: 0.1,
 };
+const ROAD_COLOR: viz::Color = viz::Color {
+    r: 0.20,
+    g: 0.20,
+    b: 0.22,
+};
+
+/// The loaded road network, or `None` for the flat arena world. Selects which
+/// world the Startup system builds (see `setup_world`).
+#[derive(Resource, Default)]
+pub struct MapWorld(pub Option<map::RoadNetwork>);
+
+fn to_viz_vec(v: &Vec3) -> viz::Vec3 {
+    viz::Vec3::new(v.x, v.y, v.z)
+}
+
+/// Spawns the road as one static trimesh collider, tagged with a `VizEntity`
+/// carrying its surface mesh so viewers render it. The baked `RoadNetwork` is
+/// the single source; the collider and the viewer see the same triangles.
+pub fn spawn_road(commands: &mut Commands, road: &map::RoadNetwork) {
+    let mesh = road.surface_mesh();
+    let triangles: Vec<[u32; 3]> = mesh
+        .indices
+        .chunks_exact(3)
+        .map(|t| [t[0], t[1], t[2]])
+        .collect();
+    // The mesh is our own generated geometry; a trimesh failure here is a
+    // construction bug, not a runtime condition.
+    let collider =
+        Collider::trimesh(mesh.vertices.clone(), triangles).expect("road surface is a valid mesh");
+
+    commands.spawn((
+        RigidBody::Fixed,
+        collider,
+        Transform::IDENTITY,
+        Friction::new(0.9),
+        Restitution::new(0.0),
+        VizEntity {
+            id: viz::EntityId("road".into()),
+            name: "road".into(),
+            kind: viz::EntityKind::Static,
+            shape: viz::Shape::Mesh {
+                positions: mesh.vertices.iter().map(to_viz_vec).collect(),
+                normals: mesh.normals.iter().map(to_viz_vec).collect(),
+                indices: mesh.indices,
+            },
+            color: ROAD_COLOR,
+            sensors: None,
+        },
+    ));
+}
 
 /// Spawns the ground and four bounding walls as static physics bodies, each
 /// tagged with a `VizEntity` so viewers can render it. No meshes, camera, or

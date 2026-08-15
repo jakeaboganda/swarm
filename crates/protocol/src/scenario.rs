@@ -106,6 +106,11 @@ pub struct ScenarioConfig {
     /// defaults to 0.
     #[serde(default)]
     pub seed: u64,
+    /// The road map to load. `None` (omitted) is the flat arena world;
+    /// `Some(name)` selects the automotive world. Only the built-in "demo" road
+    /// exists today; loading a real OpenDRIVE file by path arrives at P5.
+    #[serde(default)]
+    pub map: Option<String>,
 }
 
 #[cfg(test)]
@@ -154,6 +159,7 @@ mod tests {
                 },
             ],
             seed: 42,
+            map: Some("demo".into()),
         };
         let json = serde_json::to_string_pretty(&config).expect("serialize");
         let back: ScenarioConfig = serde_json::from_str(&json).expect("deserialize");

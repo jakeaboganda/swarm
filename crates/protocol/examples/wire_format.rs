@@ -56,6 +56,7 @@ fn main() {
             },
         ],
         seed: 0,
+        map: None,
     };
 
     for (label, json) in [

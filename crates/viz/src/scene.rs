@@ -17,13 +17,26 @@ pub struct Color {
     pub b: f32,
 }
 
-/// Geometry of an entity. Half-extents / radii so a viewer can build its
-/// own mesh at whatever resolution it likes.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Geometry of an entity. Primitives give half-extents / radii so a viewer can
+/// build its own mesh at whatever resolution it likes; `Mesh` carries baked
+/// triangle geometry (e.g. a road surface) outright.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum Shape {
-    Capsule { radius: f32, half_length: f32 },
-    Cuboid { half_extents: Vec3 },
+    Capsule {
+        radius: f32,
+        half_length: f32,
+    },
+    Cuboid {
+        half_extents: Vec3,
+    },
+    /// An explicit triangle mesh: per-vertex positions and up-normals, plus
+    /// triangle indices (three per triangle). Y-up, meters.
+    Mesh {
+        positions: Vec<Vec3>,
+        normals: Vec<Vec3>,
+        indices: Vec<u32>,
+    },
 }
 
 /// The movement model an agent is embodied with. Mirrors the sim's notion

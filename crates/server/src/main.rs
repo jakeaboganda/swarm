@@ -70,6 +70,16 @@ fn main() -> anyhow::Result<()> {
         half_width: scenario_config.arena.width / 2.0,
         half_depth: scenario_config.arena.depth / 2.0,
     };
+    // Select the world: a road map, or the flat arena. Only the built-in "demo"
+    // road exists today; loading a real OpenDRIVE file by path arrives at P5.
+    let map_world = match scenario_config.map.as_deref() {
+        None => None,
+        Some("demo") => Some(map::demo_road()),
+        Some(other) => anyhow::bail!(
+            "unknown map {other:?}: only the built-in \"demo\" road exists \
+             (OpenDRIVE file import arrives at P5)"
+        ),
+    };
 
     // Time model (env `SIM_TIME`):
     //   realtime (default) — the fixed step is paced to wall-clock, so one
@@ -107,6 +117,7 @@ fn main() -> anyhow::Result<()> {
         .add_message::<ReflexFired>()
         .insert_resource(Roster(scenario_config))
         .insert_resource(arena_bounds)
+        .insert_resource(world::MapWorld(map_world))
         .insert_resource(pending_roster)
         .insert_resource(AgentRegistry::default())
         .insert_resource(AwaitingReconnect::default())
@@ -119,7 +130,7 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(PerceptionAgents::default())
         .insert_resource(PerceivedWorlds::default())
         .insert_resource(PerceptionOverlay::default())
-        .add_systems(Startup, (setup_arena, deactivate_physics))
+        .add_systems(Startup, (setup_world, deactivate_physics))
         // Ingest agent messages in the same fixed cadence as physics so a
         // submitted plan is seen on the step it applies to, rather than at
         // render-frame rate. drain runs in all states (Join/disconnect);
@@ -184,6 +195,11 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn setup_arena(mut commands: Commands, roster: Res<Roster>) {
-    world::spawn_arena(&mut commands, &roster.0.arena);
+/// Builds the world at startup: the road map if the scenario selected one,
+/// otherwise the flat arena.
+fn setup_world(mut commands: Commands, roster: Res<Roster>, map: Res<world::MapWorld>) {
+    match &map.0 {
+        Some(road) => world::spawn_road(&mut commands, road),
+        None => world::spawn_arena(&mut commands, &roster.0.arena),
+    }
 }

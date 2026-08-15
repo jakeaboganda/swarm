@@ -1,6 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
 use viz::{EntityDescriptor, EntityId, SceneEvent, ServerToViewer, Shape};
 
 use crate::client::VizStream;
@@ -163,6 +165,24 @@ fn mesh_for(shape: &Shape, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
             half_extents.y * 2.0,
             half_extents.z * 2.0,
         )),
+        Shape::Mesh {
+            positions,
+            normals,
+            indices,
+        } => {
+            // Baked triangle geometry (e.g. the road surface) straight from the
+            // wire: positions + up-normals + triangle indices.
+            let mut mesh = Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            );
+            let verts: Vec<[f32; 3]> = positions.iter().map(|v| [v.x, v.y, v.z]).collect();
+            let norms: Vec<[f32; 3]> = normals.iter().map(|v| [v.x, v.y, v.z]).collect();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, verts);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, norms);
+            mesh.insert_indices(Indices::U32(indices.clone()));
+            meshes.add(mesh)
+        }
     }
 }
 
