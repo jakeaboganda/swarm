@@ -175,8 +175,14 @@ pub fn drain_transport(
                         .expect("checked above");
                     let embodiment = roster.0.roster[index].embodiment;
                     let sensors = roster.0.roster[index].sensors.clone();
+                    let color =
+                        roster.0.roster[index]
+                            .color
+                            .map(|[r, g, b]| viz::Color { r, g, b });
+                    let scale = roster.0.roster[index].scale.unwrap_or(1.0);
                     let base = spawn_position(index, roster.0.roster.len());
-                    let transform = agent_spawn_transform(embodiment, base, map_world.0.as_ref());
+                    let transform =
+                        agent_spawn_transform(embodiment, base, map_world.0.as_ref(), scale);
                     let spawned_at = transform.translation;
                     let entity = spawn_agent(
                         &mut commands,
@@ -185,6 +191,8 @@ pub fn drain_transport(
                         connection,
                         embodiment,
                         sensors,
+                        color,
+                        scale,
                     );
                     registry.insert(connection, name.clone(), entity);
                     pending.0.retain(|pending_name| pending_name != &name);

@@ -109,6 +109,8 @@ mod tests {
                     name: (*name).to_string(),
                     embodiment: Embodiment::Holonomic,
                     sensors: Default::default(),
+                    color: None,
+                    scale: None,
                 })
                 .collect(),
             seed: 0,

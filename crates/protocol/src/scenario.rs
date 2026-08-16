@@ -32,6 +32,16 @@ pub struct AgentSlot {
     /// `GROUND_TRUTH_SENSOR` device is always available regardless.
     #[serde(default)]
     pub sensors: Vec<SensorDef>,
+    /// Optional viewer color as linear RGB in `0.0..=1.0`. Omitted uses the
+    /// default agent color; set it to make a slot visually distinct (e.g. an
+    /// obstacle vs. the driven car).
+    #[serde(default)]
+    pub color: Option<[f32; 3]>,
+    /// Optional size multiplier for the body (viewer shape + collider). Omitted
+    /// = 1.0. Lets a slot be a big, obvious obstacle rather than a default-size
+    /// puck. Does not apply to the raycast-vehicle chassis.
+    #[serde(default)]
+    pub scale: Option<f32>,
 }
 
 /// A named perceiving device on an agent. A device is a perception *source*;
@@ -133,6 +143,8 @@ mod tests {
                     name: "car-1".into(),
                     embodiment: Embodiment::Holonomic,
                     sensors: vec![],
+                    color: Some([0.9, 0.1, 0.1]),
+                    scale: Some(2.5),
                 },
                 AgentSlot {
                     name: "car-2".into(),
@@ -155,11 +167,15 @@ mod tests {
                             spec: None,
                         },
                     ],
+                    color: None,
+                    scale: None,
                 },
                 AgentSlot {
                     name: "car-3".into(),
                     embodiment: Embodiment::FullVehicle,
                     sensors: vec![],
+                    color: None,
+                    scale: None,
                 },
             ],
             seed: 42,

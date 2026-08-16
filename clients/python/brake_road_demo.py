@@ -31,7 +31,6 @@ except ImportError:
 
 URL = "ws://127.0.0.1:4000"
 CRUISE = 6.0  # car target speed along the lane, m/s
-PARK_X = 30.0  # where the obstacle parks along the straight (x ~= arc length)
 TTC_THRESHOLD = 2.0  # brake when perceived time-to-collision drops below this, s
 
 world = {}  # agent_id -> position dict
@@ -58,11 +57,6 @@ def lane_plan(lane, start, speed):
     center = lane["centerline"]
     begin = min(range(len(center)), key=lambda i: dist2(center[i], start))
     return [wp(p, speed) for p in center[begin:]]
-
-
-def nearest_to_x(lane, x):
-    """The centerline point closest to a given x -- the obstacle's park spot."""
-    return min(lane["centerline"], key=lambda p: abs(p["x"] - x))
 
 
 def brake_reflex():
@@ -102,35 +96,49 @@ async def poll(ws):
 
 
 async def join(name):
+    """Connect and join. Returns (ws, reply); reply["type"] == "joined" on
+    success, else an error reply (the caller decides how fatal that is)."""
     ws = await websockets.connect(URL)
     await ws.send(json.dumps({"type": "join", "name": name}))
-    joined = json.loads(await ws.recv())
-    return ws, joined
+    return ws, json.loads(await ws.recv())
+
+
+WRONG_SCENARIO = (
+    "Run the P4 obstacle scenario (2 slots: car + obstacle):\n"
+    "    scripts/run.sh scenario_road_obstacle.json clients/python/brake_road_demo.py"
+)
 
 
 async def main():
     car_ws, car_joined = await join("car")
-    obs_ws, obs_joined = await join("obstacle")
-
+    if car_joined.get("type") != "joined":
+        print(f"car join refused: {car_joined.get('message', car_joined)}\n{WRONG_SCENARIO}")
+        await car_ws.close()
+        return
     lane = forward_driving_lane(car_joined.get("map") or {})
     if lane is None:
-        print("no forward driving lane -- is this the automotive scenario?")
-        for w in (car_ws, obs_ws):
-            await w.close()
+        print(f"no forward driving lane -- not the automotive scenario?\n{WRONG_SCENARIO}")
+        await car_ws.close()
         return
 
-    tasks = [
-        asyncio.create_task(reader(car_ws, "car")),
-        asyncio.create_task(reader(obs_ws, "obstacle")),
-        asyncio.create_task(poll(car_ws)),
-    ]
+    # The obstacle is optional: without it the car just drives the lane. So a
+    # refused obstacle join is a warning, never a reason to leave the car idle.
+    obs_ws, obs_joined = await join("obstacle")
+    have_obstacle = obs_joined.get("type") == "joined"
+    if not have_obstacle:
+        print(f"NOTE: no obstacle ({obs_joined.get('message', obs_joined)}); "
+              f"car will just drive the lane.\n{WRONG_SCENARIO}")
 
-    # Obstacle drives into the lane and parks (keeps the plan, so it station-
-    # keeps against the graded, frictionless surface instead of sliding).
-    park = nearest_to_x(lane, PARK_X)
-    await obs_ws.send(json.dumps({"type": "submit_plan", "waypoints": [wp(park, 4.0)]}))
-    print(f"obstacle moving to park at x={park['x']:.1f}, z={park['z']:.1f} ...")
-    await asyncio.sleep(5.0)
+    tasks = [asyncio.create_task(reader(car_ws, "car")), asyncio.create_task(poll(car_ws))]
+    if have_obstacle:
+        tasks.append(asyncio.create_task(reader(obs_ws, "obstacle")))
+        # The obstacle spawns already parked in the lane (server-placed
+        # downroad). Hold it there with a station-keep plan on its own spawn
+        # point, so it doesn't creep down the graded, frictionless surface.
+        spot = obs_joined["position"]
+        await obs_ws.send(json.dumps({"type": "submit_plan", "waypoints": [wp(spot, 1.0)]}))
+        print(f"obstacle parked at x={spot['x']:.1f}, z={spot['z']:.1f}")
+        await asyncio.sleep(1.5)
 
     # Arm the reflex, then send the car down its lane straight at the obstacle.
     plan = lane_plan(lane, car_joined["position"], CRUISE)
@@ -141,21 +149,23 @@ async def main():
     for _ in range(30):
         await asyncio.sleep(0.4)
         car, obs = world.get("car"), world.get("obstacle")
-        if car and obs:
-            gap = math.sqrt(dist2(car, obs))
-            print(
-                f"car x={car['x']:6.1f} y={car['y']:5.2f} z={car['z']:5.2f}"
-                f"   obstacle x={obs['x']:5.1f} y={obs['y']:5.2f} z={obs['z']:5.2f}"
-                f"   gap={gap:5.1f}  fires={fires}"
-            )
+        if not car:
+            continue
+        line = f"car x={car['x']:6.1f} y={car['y']:5.2f} z={car['z']:5.2f}"
+        if obs:
+            line += f"   obstacle x={obs['x']:5.1f}   gap={math.sqrt(dist2(car, obs)):5.1f}"
+        print(f"{line}   fires={fires}")
 
     car, obs = world.get("car"), world.get("obstacle")
+    print("\n=== result ===")
     if car and obs:
         gap = math.sqrt(dist2(car, obs))
-        print(f"\n=== result ===\ncar stopped {gap:.1f} m from the obstacle "
-              f"({fires} reflex fires). Perceived it via radar and braked in time."
+        print(f"car stopped {gap:.1f} m from the obstacle ({fires} reflex fires). "
+              "Perceived it via radar and braked in time."
               if fires else
-              f"\n=== result ===\ncar never braked (gap {gap:.1f} m) -- check radar range/FOV.")
+              f"car never braked (gap {gap:.1f} m) -- check radar range/FOV.")
+    elif car:
+        print(f"car drove to x={car['x']:.1f} (no obstacle in the scenario).")
 
     for t in tasks:
         t.cancel()

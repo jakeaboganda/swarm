@@ -22,6 +22,9 @@ const CAR_RIDE_HEIGHT: f32 = 1.2;
 /// A car spawns this far along its lane (arc length), so all four wheels clear
 /// the road's start edge rather than hanging off into space.
 const CAR_START_S: f32 = 10.0;
+/// An obstacle spawns this far along the lane -- downroad of the car, on the
+/// straight, so the car has clear room to perceive it and brake.
+const OBSTACLE_START_S: f32 = 32.0;
 
 // Colors are viz metadata, not rendering: the headless sim never draws
 // anything, it just tells viewers what color each entity should be.
@@ -83,23 +86,38 @@ pub fn to_map_data(net: &map::RoadNetwork) -> MapData {
     }
 }
 
-/// Where an agent's entity spawns and which way it faces. A car spawns *in its
-/// lane*: on the first forward driving lane's centerline, a little way in
-/// (`CAR_START_S`) so all wheels are on the road, at ride height, facing along
-/// the lane. Everything else spawns at its roster `base` position. Falls back to
-/// the base if there's no map or no forward lane (a car in the arena world).
+/// The first forward driving lane, if the world has a road.
+fn forward_lane(map: Option<&map::RoadNetwork>) -> Option<&map::Lane> {
+    map.and_then(|net| {
+        net.driving_lanes()
+            .find(|l| l.direction == map::Direction::Forward)
+    })
+}
+
+/// Where an agent's entity spawns and which way it faces. In the automotive
+/// world both are placed *in the forward lane*: a car at `CAR_START_S` (facing
+/// along it, at ride height), a non-car -- an obstacle -- further downroad at
+/// `OBSTACLE_START_S`, resting on the surface. A scaled body is lifted by its
+/// resting half-height so it settles rather than spawning embedded. Without a
+/// map (the arena world) everything spawns at its roster `base`.
 pub fn agent_spawn_transform(
     embodiment: Embodiment,
     base: Vec3,
     map: Option<&map::RoadNetwork>,
+    scale: f32,
 ) -> Transform {
+    let rest_half = (AGENT_RADIUS + AGENT_HALF_HEIGHT) * scale;
     if !matches!(embodiment, Embodiment::RaycastVehicle) {
-        return Transform::from_translation(base);
+        // A non-car in a road world is an obstacle: drop it onto the lane
+        // downroad of the car (heavy scaled bodies can't reliably drive there
+        // themselves). Arena world: its roster base, lifted clear of the ground.
+        if let Some(lane) = forward_lane(map) {
+            let pose = lane.center.pose_at(OBSTACLE_START_S);
+            return Transform::from_translation(pose.position + Vec3::Y * (rest_half + 0.2));
+        }
+        return Transform::from_translation(Vec3::new(base.x, rest_half + 0.2, base.z));
     }
-    if let Some(lane) = map.and_then(|net| {
-        net.driving_lanes()
-            .find(|l| l.direction == map::Direction::Forward)
-    }) {
+    if let Some(lane) = forward_lane(map) {
         let pose = lane.center.pose_at(CAR_START_S);
         let heading = if pose.heading.length_squared() > 1e-6 {
             pose.heading
@@ -229,6 +247,10 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
 /// `VizEntity` for viewers. Rotation is fully locked — models steer
 /// kinematically; the visual yaw viewers render comes from `movement`'s
 /// `face_velocity_direction`, which sets the transmitted Transform rotation.
+// Spawning an agent genuinely needs all of these (world handle, identity,
+// pose, connection, and the per-slot embodiment/sensors/color/scale); bundling
+// them into a struct would just move the argument list, not shorten it.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_agent(
     commands: &mut Commands,
     name: &str,
@@ -236,7 +258,10 @@ pub fn spawn_agent(
     connection: ConnectionId,
     embodiment: Embodiment,
     sensors: Vec<SensorDef>,
+    color: Option<viz::Color>,
+    scale: f32,
 ) -> Entity {
+    let color = color.unwrap_or(AGENT_COLOR);
     // The debug envelope shows the first simulated device (agents usually have
     // one); drawing several overlapping envelopes is a later refinement.
     let sensor_view = sensors
@@ -259,12 +284,16 @@ pub fn spawn_agent(
             Collider::cuboid(0.8, 0.4, 1.4),
         )
     } else {
+        // A scaled capsule is the obvious-obstacle case; the raycast chassis
+        // above ignores scale (its size is dynamics-tuned).
+        let radius = AGENT_RADIUS * scale;
+        let half_length = AGENT_HALF_HEIGHT * scale;
         (
             viz::Shape::Capsule {
-                radius: AGENT_RADIUS,
-                half_length: AGENT_HALF_HEIGHT,
+                radius,
+                half_length,
             },
-            Collider::capsule_y(AGENT_HALF_HEIGHT, AGENT_RADIUS),
+            Collider::capsule_y(half_length, radius),
         )
     };
     let mut entity = commands.spawn((
@@ -282,7 +311,7 @@ pub fn spawn_agent(
                 embodiment: viz_embodiment(embodiment),
             },
             shape: viz_shape,
-            color: AGENT_COLOR,
+            color,
             sensors: sensor_view,
         },
         // Physics components, nested so the whole spawn stays within Bevy's
