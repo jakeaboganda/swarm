@@ -1,0 +1,7 @@
+{
+  "arena": { "width": 400.0, "depth": 400.0 },
+  "map": "maps/e6mini.xodr",
+  "roster": [
+    { "name": "car", "embodiment": "raycast_vehicle" }
+  ]
+}
