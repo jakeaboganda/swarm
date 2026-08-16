@@ -4,6 +4,7 @@ use bevy_rapier3d::prelude::PhysicsSet;
 use crate::carlike::CarLike;
 use crate::fullvehicle::FullVehicle;
 use crate::holonomic::Holonomic;
+use crate::raycast_vehicle::drive_raycast_vehicles;
 use crate::systems::{apply_movement_force, face_velocity_direction};
 
 /// Lets other crates (`server`'s reflex-vs-plan arbitration) order their
@@ -28,6 +29,7 @@ impl Plugin for MovementPlugin {
                 apply_movement_force::<Holonomic>,
                 apply_movement_force::<CarLike>,
                 apply_movement_force::<FullVehicle>,
+                drive_raycast_vehicles,
             )
                 .in_set(MovementSet::ApplyForce)
                 .before(PhysicsSet::StepSimulation),

@@ -12,6 +12,10 @@ pub enum Embodiment {
     /// Single-track ("bicycle") dynamics: physical yaw plus tire-slip lateral
     /// forces, so understeer/oversteer emerge. Higher fidelity than `CarLike`.
     FullVehicle,
+    /// Full 3D raycast vehicle: four ray-cast wheels with spring-damper
+    /// suspension and tire grip, roll and pitch are real physics. Drives on the
+    /// road's terrain (grade, banking). For the automotive world.
+    RaycastVehicle,
 }
 
 /// The reserved device name every agent can read ground truth from without

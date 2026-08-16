@@ -47,6 +47,7 @@ pub enum Embodiment {
     Holonomic,
     CarLike,
     FullVehicle,
+    RaycastVehicle,
 }
 
 /// What kind of thing an entity is. `Static` geometry never appears in

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw};
+use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw, RaycastVehicle};
 use protocol::scenario::{ArenaConfig, Embodiment, SensorDef, SensorSource};
 use transport::ConnectionId;
 
@@ -179,6 +179,38 @@ pub fn spawn_agent(
             range: s.range,
             fov_half_angle: s.fov_half_angle,
         });
+    // A raycast vehicle is a box that rides on suspension and faces +X to
+    // start; the planar embodiments are capsules at the spawn point.
+    let is_car = matches!(embodiment, Embodiment::RaycastVehicle);
+    // Nudge a car forward onto the road so all four wheels clear the start
+    // edge (its rear wheels would otherwise hang off the back and miss the
+    // ground raycast). Proper map-aware spawning onto a lane is P3.
+    let position = if is_car {
+        position + Vec3::X * 10.0
+    } else {
+        position
+    };
+    let (viz_shape, collider) = if is_car {
+        (
+            viz::Shape::Cuboid {
+                half_extents: viz::Vec3::new(0.8, 0.4, 1.4),
+            },
+            Collider::cuboid(0.8, 0.4, 1.4),
+        )
+    } else {
+        (
+            viz::Shape::Capsule {
+                radius: AGENT_RADIUS,
+                half_length: AGENT_HALF_HEIGHT,
+            },
+            Collider::capsule_y(AGENT_HALF_HEIGHT, AGENT_RADIUS),
+        )
+    };
+    let transform = if is_car {
+        Transform::from_translation(position).looking_to(Vec3::X, Vec3::Y)
+    } else {
+        Transform::from_translation(position)
+    };
     let mut entity = commands.spawn((
         AgentName(name.to_string()),
         Connection(connection),
@@ -186,17 +218,14 @@ pub fn spawn_agent(
         Reflexes::default(),
         DesiredVelocity::default(),
         Perceiver(sensors),
-        Transform::from_translation(position),
+        transform,
         VizEntity {
             id: viz::EntityId(name.to_string()),
             name: name.to_string(),
             kind: viz::EntityKind::Agent {
                 embodiment: viz_embodiment(embodiment),
             },
-            shape: viz::Shape::Capsule {
-                radius: AGENT_RADIUS,
-                half_length: AGENT_HALF_HEIGHT,
-            },
+            shape: viz_shape,
             color: AGENT_COLOR,
             sensors: sensor_view,
         },
@@ -204,7 +233,7 @@ pub fn spawn_agent(
         // per-tuple bundle element limit.
         (
             RigidBody::Dynamic,
-            Collider::capsule_y(AGENT_HALF_HEIGHT, AGENT_RADIUS),
+            collider,
             Velocity::zero(),
             ExternalForce::default(),
             LockedAxes::ROTATION_LOCKED,
@@ -251,6 +280,30 @@ pub fn spawn_agent(
             Damping {
                 linear_damping: 0.75,
                 angular_damping: 3.0,
+            },
+        )),
+        Embodiment::RaycastVehicle => entity.insert((
+            RaycastVehicle::default(),
+            // Full 3D rotation: real roll and pitch on terrain and banking,
+            // yaw from tire forces. Overrides the shared `ROTATION_LOCKED`.
+            LockedAxes::empty(),
+            PhysicalYaw,
+            // A denser chassis (~14 kg) with the box's own inertia, so wheel
+            // torques don't spin the light body and make the tire grip react
+            // violently to its own rotation.
+            ColliderMassProperties::Density(4.0),
+            // A car coasts (little linear drag); some angular damping keeps it
+            // from spinning up under tire torques. Tuned by feel.
+            Damping {
+                linear_damping: 0.2,
+                angular_damping: 0.5,
+            },
+            // The chassis floats on suspension and rarely touches the ground;
+            // give it grip for the times it bottoms out. Wheels grip via forces
+            // regardless. Overrides the shared frictionless setting.
+            Friction {
+                coefficient: 0.8,
+                combine_rule: CoefficientCombineRule::Average,
             },
         )),
     };
