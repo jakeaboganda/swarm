@@ -12,7 +12,7 @@ use crate::events::ReflexFired;
 use crate::perception_router::{PerceivedWorlds, Perceiver};
 use crate::scenario::ArenaBounds;
 use crate::scenario_state::Tick;
-use crate::world::AGENT_RADIUS;
+use crate::world::Radius;
 
 /// A waypoint is reached once the entity is within this horizontal
 /// distance of it.
@@ -84,6 +84,7 @@ pub fn arbitrate(
         &AgentName,
         &Transform,
         &Velocity,
+        &Radius,
         &Perceiver,
         &mut Plan,
         &mut Reflexes,
@@ -94,20 +95,29 @@ pub fn arbitrate(
 
     let others: Vec<(Entity, Obstacle)> = query
         .iter()
-        .map(|(entity, _, transform, velocity, ..)| {
+        .map(|(entity, _, transform, velocity, radius, ..)| {
             (
                 entity,
                 Obstacle {
                     position: transform.translation,
                     velocity: velocity.linear,
-                    radius: AGENT_RADIUS,
+                    radius: radius.0,
                 },
             )
         })
         .collect();
 
-    for (entity, name, transform, velocity, perceiver, mut plan, mut reflexes, mut desired) in
-        &mut query
+    for (
+        entity,
+        name,
+        transform,
+        velocity,
+        radius,
+        perceiver,
+        mut plan,
+        mut reflexes,
+        mut desired,
+    ) in &mut query
     {
         // Ground-truth context: every other agent, exact, plus the walls. This
         // is the reserved `ground_truth` device — a perfect, instant fail-safe.
@@ -125,7 +135,7 @@ pub fn arbitrate(
         let context = |obstacles| SensorContext {
             self_position: transform.translation,
             self_velocity: velocity.linear,
-            self_radius: AGENT_RADIUS,
+            self_radius: radius.0,
             obstacles,
         };
 
@@ -144,7 +154,7 @@ pub fn arbitrate(
                 .map(|d| Obstacle {
                     position: d.position,
                     velocity: d.velocity,
-                    radius: AGENT_RADIUS,
+                    radius: d.radius,
                 })
                 .collect();
             obstacles.extend(wall_obstacles(transform.translation, &bounds));

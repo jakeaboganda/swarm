@@ -65,6 +65,10 @@ pub struct Detection {
     pub position: Vec3,
     pub velocity: Vec3,
     pub distance: f32,
+    /// The perceived entity's body radius, carried through so a consumer
+    /// (reflex TTC, avoidance) sizes the obstacle correctly instead of
+    /// assuming one. Not degraded by noise -- size is a known property here.
+    pub radius: f32,
 }
 
 /// The impairment pipeline: cull `others` by range, then field of view, then
@@ -118,6 +122,7 @@ pub fn perceive(
             position: entity.position + noise_vec(rng, spec.position_noise),
             velocity: entity.velocity + noise_vec(rng, spec.velocity_noise),
             distance,
+            radius: entity.radius,
         });
     }
     detections

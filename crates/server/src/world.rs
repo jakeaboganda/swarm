@@ -14,6 +14,17 @@ const WALL_THICKNESS: f32 = 0.5;
 const GROUND_HALF_THICKNESS: f32 = 0.1;
 pub const AGENT_RADIUS: f32 = 0.5;
 const AGENT_HALF_HEIGHT: f32 = 0.5;
+/// A car's perception/collision radius -- a sphere roughly bounding the cuboid
+/// chassis, used when it perceives or is perceived (TTC, avoidance). Not tied to
+/// `AGENT_RADIUS`, which is the planar-capsule size.
+const CAR_RADIUS: f32 = 1.0;
+
+/// An entity's body radius for perception and time-to-collision: how big it is
+/// as a sphere, both as a perceiver (`self_radius`) and as a perceived obstacle.
+/// Set per entity at spawn so a scaled obstacle or a car is sized correctly,
+/// rather than every entity assuming `AGENT_RADIUS`.
+#[derive(Component, Clone, Copy)]
+pub struct Radius(pub f32);
 
 /// A car's chassis center rides this far above the lane surface at spawn, so it
 /// settles gently onto its suspension instead of launching off over-compressed
@@ -276,6 +287,13 @@ pub fn spawn_agent(
     // embodiments are capsules. The spawn pose is computed by the caller (see
     // `agent_spawn_transform`, which places a car in its lane).
     let is_car = matches!(embodiment, Embodiment::RaycastVehicle);
+    // Perception/TTC size: a car is a ~1 m sphere; a planar body is its scaled
+    // capsule radius. Threaded so an obstacle is perceived at its true size.
+    let body_radius = if is_car {
+        CAR_RADIUS
+    } else {
+        AGENT_RADIUS * scale
+    };
     let (viz_shape, collider) = if is_car {
         (
             viz::Shape::Cuboid {
@@ -340,6 +358,7 @@ pub fn spawn_agent(
             Restitution::new(0.1),
         ),
     ));
+    entity.insert(Radius(body_radius));
     // The movement model is a distinct component type per embodiment, so it
     // is inserted here rather than in the shared bundle above.
     match embodiment {

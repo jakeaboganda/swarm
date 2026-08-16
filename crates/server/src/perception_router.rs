@@ -12,7 +12,7 @@ use crate::agent::AgentName;
 use crate::arbitration::wall_obstacles;
 use crate::scenario::ArenaBounds;
 use crate::scenario_state::Tick;
-use crate::world::AGENT_RADIUS;
+use crate::world::Radius;
 
 /// Recompute perceived worlds every N physics ticks — ~32 Hz. Latency is
 /// counted in these frames, so this also sets the latency quantum.
@@ -126,22 +126,27 @@ pub fn route_perception(
     agents: Res<PerceptionAgents>,
     mut worlds: ResMut<PerceivedWorlds>,
     mut overlay: ResMut<PerceptionOverlay>,
-    query: Query<(&AgentName, &Transform, &Velocity, &Perceiver)>,
+    query: Query<(&AgentName, &Transform, &Velocity, &Radius, &Perceiver)>,
 ) {
     if tick.0 < *last_emit + TICKS_PER_FRAME {
         return;
     }
     *last_emit = tick.0;
 
-    // Ground truth for every agent, gathered once.
-    let all: Vec<(String, Vec3, Vec3)> = query
+    // Ground truth for every agent, gathered once (position, velocity, radius).
+    let all: Vec<(String, Vec3, Vec3, f32)> = query
         .iter()
-        .map(|(name, transform, velocity, _)| {
-            (name.0.clone(), transform.translation, velocity.linear)
+        .map(|(name, transform, velocity, radius, _)| {
+            (
+                name.0.clone(),
+                transform.translation,
+                velocity.linear,
+                radius.0,
+            )
         })
         .collect();
 
-    for (name, transform, velocity, perceiver) in &query {
+    for (name, transform, velocity, radius, perceiver) in &query {
         let mut overlay_blips: Vec<viz::Blip> = Vec::new();
 
         // Other agents, as ground-truth entities to be perceived (and to
@@ -149,13 +154,13 @@ pub fn route_perception(
         // devices, so build it once.
         let others: Vec<PerceivedEntity> = all
             .iter()
-            .filter(|(other, _, _)| other != &name.0)
-            .map(|(id, position, vel)| PerceivedEntity {
+            .filter(|(other, ..)| other != &name.0)
+            .map(|(id, position, vel, r)| PerceivedEntity {
                 id: id.clone(),
                 kind: DetectionKind::Agent,
                 position: *position,
                 velocity: *vel,
-                radius: AGENT_RADIUS,
+                radius: *r,
             })
             .collect();
 
@@ -199,6 +204,7 @@ pub fn route_perception(
                     &delivered,
                     transform.translation,
                     velocity.linear,
+                    radius.0,
                     &bounds,
                 );
                 perception
@@ -219,6 +225,7 @@ fn wire_frame(
     delivered: &[Detection],
     self_position: Vec3,
     self_velocity: Vec3,
+    self_radius: f32,
     bounds: &ArenaBounds,
 ) -> perception::PerceptionFrame {
     let mut obstacles: Vec<Obstacle> = delivered
@@ -226,14 +233,14 @@ fn wire_frame(
         .map(|d| Obstacle {
             position: d.position,
             velocity: d.velocity,
-            radius: AGENT_RADIUS,
+            radius: d.radius,
         })
         .collect();
     obstacles.extend(wall_obstacles(self_position, bounds));
     let ttc = TimeToCollision.read(&SensorContext {
         self_position,
         self_velocity,
-        self_radius: AGENT_RADIUS,
+        self_radius,
         obstacles,
     });
     perception::PerceptionFrame {
