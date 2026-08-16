@@ -1,9 +1,10 @@
 //! A small, pure-Rust OpenDRIVE (`.xodr`) importer that bakes a road into
-//! `map::RoadNetwork`. It implements only the subset our baked model needs --
-//! `line` and `arc` reference geometry, an elevation profile, and per-lane
-//! widths -- and samples everything to polylines at load. No junctions, no
-//! routing graph, no lane-section transitions yet (see the crate README / the
-//! DECISIONS "roll our own" note). Anything richer is future work.
+//! `map::RoadNetwork`. It implements the subset our baked model needs --
+//! `line`, `arc`, and `spiral` (clothoid) reference geometry, an elevation
+//! profile, per-lane widths, `laneOffset`, and multiple lane sections -- and
+//! samples everything to polylines at load. Not yet: `poly3`/`paramPoly3`
+//! geometry, junctions, or a routing graph (see the DECISIONS "roll our own"
+//! note). Anything richer is future work.
 //!
 //! ## Coordinate mapping
 //! OpenDRIVE is right-handed **Z-up** (reference line in the X-Y plane, `hdg`
@@ -73,7 +74,48 @@ fn sanitize(xml: &str) -> std::borrow::Cow<'_, str> {
 
 enum Geom {
     Line,
-    Arc { curvature: f64 },
+    Arc {
+        curvature: f64,
+    },
+    /// A clothoid (linearly varying curvature). Baked to `(ds, x, y, hdg)`
+    /// samples at load, since it has no elementary closed form -- see
+    /// `bake_spiral`. `pose` interpolates them.
+    Spiral {
+        samples: Vec<(f64, f64, f64, f64)>,
+    },
+}
+
+/// Bake a clothoid to fine `(ds, x, y, hdg)` samples. Curvature varies linearly
+/// `curv_start -> curv_end` over `length`, so heading is the closed form
+/// `hdg0 + curv_start*u + (c_dot/2)*u^2`; position is its running integral,
+/// which has no elementary form, so integrate cos/sin(heading) by the midpoint
+/// rule at a fine step (mm-accurate over hundreds of meters).
+fn bake_spiral(
+    x0: f64,
+    y0: f64,
+    hdg0: f64,
+    curv_start: f64,
+    curv_end: f64,
+    length: f64,
+) -> Vec<(f64, f64, f64, f64)> {
+    const STEP: f64 = 0.25;
+    let c_dot = if length > 1e-9 {
+        (curv_end - curv_start) / length
+    } else {
+        0.0
+    };
+    let heading = |u: f64| hdg0 + curv_start * u + 0.5 * c_dot * u * u;
+    let (mut x, mut y, mut u) = (x0, y0, 0.0);
+    let mut out = vec![(0.0, x0, y0, hdg0)];
+    while u < length - 1e-9 {
+        let step = STEP.min(length - u);
+        let theta_mid = heading(u + step / 2.0);
+        x += theta_mid.cos() * step;
+        y += theta_mid.sin() * step;
+        u += step;
+        out.push((u, x, y, heading(u)));
+    }
+    out
 }
 
 /// One `<geometry>` record: its start pose on the reference line plus its shape.
@@ -89,12 +131,28 @@ impl GeomRec {
     /// Position `(x, y)` and heading at road arc-length `s` within this record.
     fn pose(&self, s: f64) -> (f64, f64, f64) {
         let ds = s - self.s;
-        match self.geom {
+        match &self.geom {
             Geom::Arc { curvature } if curvature.abs() > 1e-9 => {
                 let h = self.hdg + curvature * ds;
                 let x = self.x + (h.sin() - self.hdg.sin()) / curvature;
                 let y = self.y - (h.cos() - self.hdg.cos()) / curvature;
                 (x, y, h)
+            }
+            Geom::Spiral { samples } => {
+                let max = samples.last().map(|p| p.0).unwrap_or(0.0);
+                let ds = ds.clamp(0.0, max);
+                let i = samples
+                    .partition_point(|p| p.0 <= ds)
+                    .saturating_sub(1)
+                    .min(samples.len().saturating_sub(2));
+                let (a_s, ax, ay, ah) = samples[i];
+                let (b_s, bx, by, bh) = samples[i + 1];
+                let t = if b_s > a_s {
+                    (ds - a_s) / (b_s - a_s)
+                } else {
+                    0.0
+                };
+                (ax + (bx - ax) * t, ay + (by - ay) * t, ah + (bh - ah) * t)
             }
             // A line, or a degenerate (straight) arc.
             _ => (
@@ -161,15 +219,27 @@ fn parse_road(
         let x = req_f64(g, "x")?;
         let y = req_f64(g, "y")?;
         let hdg = req_f64(g, "hdg")?;
+        let length = req_f64(g, "length")?;
         let geom = if let Some(arc) = child(g, "arc") {
             Geom::Arc {
                 curvature: req_f64(arc, "curvature")?,
             }
+        } else if let Some(sp) = child(g, "spiral") {
+            Geom::Spiral {
+                samples: bake_spiral(
+                    x,
+                    y,
+                    hdg,
+                    req_f64(sp, "curvStart")?,
+                    req_f64(sp, "curvEnd")?,
+                    length,
+                ),
+            }
         } else if child(g, "line").is_some() {
             Geom::Line
         } else {
-            // paramPoly3/spiral/poly3 arrive in P5b; skip unknown shapes rather
-            // than fail the whole load.
+            // poly3/paramPoly3 arrive later; skip unknown shapes rather than
+            // fail the whole load.
             continue;
         };
         geoms.push(GeomRec { s, x, y, hdg, geom });
@@ -573,6 +643,35 @@ mod tests {
         // Sections span [0,25] and [25,40] -> ~25 and ~15 m.
         assert!((lens[0] - 15.0).abs() < 1.0, "short section {}", lens[0]);
         assert!((lens[1] - 25.0).abs() < 1.0, "long section {}", lens[1]);
+    }
+
+    // A pure clothoid: curvStart 0, curvEnd 0.1 over 10 m. End heading is the
+    // closed form 0.5*c_dot*L^2 = 0.5*(0.01)*100 = 0.5 rad (a left turn -> -Z).
+    const SPIRAL_ONLY: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sp" length="10.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="10.0">
+        <spiral curvStart="0.0" curvEnd="0.1"/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn spiral_heading_matches_closed_form() {
+        // Sampled at s=5 (interior, where the polyline's interpolated tangent is
+        // accurate -- the very endpoint tangent is a last-segment artifact).
+        // Reference heading there = 0.5*c_dot*s^2 = 0.5*0.01*25 = 0.125 rad.
+        let net = load_str(SPIRAL_ONLY).expect("import");
+        let h = net.lanes[0].center.pose_at(5.0).heading;
+        let theta = (-h.z).atan2(h.x);
+        assert!((theta - 0.125).abs() < 0.03, "mid heading angle {theta}");
     }
 
     #[test]

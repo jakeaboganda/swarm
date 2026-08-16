@@ -8,6 +8,7 @@
 use map_opendrive::load_file;
 
 const REAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/real_roads.xodr");
+const SPIRAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/spiral.xodr");
 
 #[test]
 fn real_map_loads_with_finite_geometry() {
@@ -22,6 +23,31 @@ fn real_map_loads_with_finite_geometry() {
             lane.id
         );
         let len = lane.center.length();
-        assert!(len.is_finite() && len > 0.0, "lane {:?} length {len}", lane.id);
+        assert!(
+            len.is_finite() && len > 0.0,
+            "lane {:?} length {len}",
+            lane.id
+        );
     }
+}
+
+// A 100 m line then a 300 m clothoid (curvStart 0 -> curvEnd -0.02), so the
+// heading swings by ~-3 rad. Every lane follows the reference, so a correctly
+// imported spiral leaves the end heading far from the initial +X. With the
+// spiral skipped the road stays straight (start == end) and this fails.
+#[test]
+fn spiral_road_actually_curves() {
+    let net = load_file(SPIRAL).expect("spiral map should load");
+    let lane = net
+        .lanes
+        .iter()
+        .max_by(|a, b| a.center.length().total_cmp(&b.center.length()))
+        .expect("a lane");
+    let start = lane.center.pose_at(0.0).heading;
+    let end = lane.center.pose_at(lane.center.length()).heading;
+    assert!(
+        start.dot(end) < 0.0,
+        "road did not curve: start {start:?} end {end:?} dot {}",
+        start.dot(end)
+    );
 }
