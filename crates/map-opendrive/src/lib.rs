@@ -1,9 +1,10 @@
 //! A small, pure-Rust OpenDRIVE (`.xodr`) importer that bakes a road into
-//! `map::RoadNetwork`. It implements the subset our baked model needs --
-//! `line`, `arc`, `spiral` (clothoid), and `paramPoly3` reference geometry, an
-//! elevation profile, per-lane widths, `laneOffset`, and multiple lane sections
-//! -- and samples everything to polylines at load. Not yet: the rare `poly3`
-//! geometry, junctions, or a routing graph (see the DECISIONS "roll our own"
+//! `map::RoadNetwork`. It implements `line`, `arc`, `spiral` (clothoid),
+//! `paramPoly3`, and `poly3` reference geometry; an elevation profile; per-lane
+//! widths; `laneOffset`; multiple lane sections; and **drive-direction lane
+//! connectivity** -- road/lane `<link>`s and `<junction>`s resolved into each
+//! `Lane`'s `successors`/`predecessors` (see `links`). Not yet: a higher-level
+//! routing/pathfinding API over the graph (see the DECISIONS "roll our own"
 //! note). Anything richer is future work.
 //!
 //! ## Coordinate mapping
@@ -15,6 +16,9 @@
 
 use glam::Vec3;
 use map::{Direction, Lane, LaneId, LaneKind, Polyline, RoadNetwork};
+
+mod links;
+use links::{LaneMeta, RoadInfo, Topology};
 
 /// Arc-length spacing (meters) at which curved geometry is baked to points.
 const SAMPLE_STEP: f64 = 2.0;
@@ -38,18 +42,18 @@ pub fn load_file(path: impl AsRef<std::path::Path>) -> Result<RoadNetwork, Impor
 pub fn load_str(xml: &str) -> Result<RoadNetwork, ImportError> {
     let cleaned = sanitize(xml);
     let doc = roxmltree::Document::parse(cleaned.as_ref())?;
+    let root = doc.root_element();
     let mut lanes = Vec::new();
-    let mut next_id = 0usize;
-    for road in doc
-        .root_element()
-        .children()
-        .filter(|n| n.has_tag_name("road"))
-    {
-        parse_road(road, &mut lanes, &mut next_id)?;
+    let mut topo = Topology::default();
+    for road in root.children().filter(|n| n.has_tag_name("road")) {
+        parse_road(road, &mut lanes, &mut topo)?;
     }
     if lanes.is_empty() {
         return Err(ImportError::Malformed("no driving lanes found".into()));
     }
+    // Resolve connectivity once all lanes exist and are registered.
+    topo.junctions = links::junctions(root);
+    links::resolve(&mut lanes, &topo);
     Ok(RoadNetwork { lanes })
 }
 
@@ -236,6 +240,8 @@ fn active(records: &[Cubic], s: f64) -> Option<&Cubic> {
 struct LaneDef {
     id: i32,
     widths: Vec<Cubic>,
+    pred_link: Option<i32>,
+    succ_link: Option<i32>,
 }
 
 // --- Parsing ------------------------------------------------------------------
@@ -253,8 +259,9 @@ fn req_f64(node: roxmltree::Node, name: &str) -> Result<f64, ImportError> {
 fn parse_road(
     road: roxmltree::Node,
     out: &mut Vec<Lane>,
-    next_id: &mut usize,
+    topo: &mut Topology,
 ) -> Result<(), ImportError> {
+    let road_id = road.attribute("id").unwrap_or_default().to_string();
     let length = req_f64(road, "length")?;
 
     let plan_view = child(road, "planView")
@@ -301,11 +308,25 @@ fn parse_road(
                     length,
                 ),
             }
+        } else if let Some(p3) = child(g, "poly3") {
+            // poly3 is the special case of paramPoly3 with u(p)=p and v(p) the
+            // cubic in u; reuse the same baker over p in [0, length].
+            let coeff = |n: &str| attr_f64(p3, n).unwrap_or(0.0);
+            Geom::Baked {
+                samples: bake_param_poly3(
+                    x,
+                    y,
+                    hdg,
+                    [0.0, 1.0, 0.0, 0.0],
+                    [coeff("a"), coeff("b"), coeff("c"), coeff("d")],
+                    length,
+                    length,
+                ),
+            }
         } else if child(g, "line").is_some() {
             Geom::Line
         } else {
-            // poly3 (the u->v special case) can arrive later; skip unknown
-            // shapes rather than fail the whole load.
+            // An unknown geometry shape: skip it rather than fail the load.
             continue;
         };
         geoms.push(GeomRec { s, x, y, hdg, geom });
@@ -341,6 +362,18 @@ fn parse_road(
             .unwrap_or(0.0)
             .total_cmp(&attr_f64(*b, "s").unwrap_or(0.0))
     });
+
+    // Record the road's link targets + section count for connectivity.
+    let (predecessor, successor) = links::road_link(road);
+    topo.roads.insert(
+        road_id.clone(),
+        RoadInfo {
+            sections: sections.len(),
+            predecessor,
+            successor,
+        },
+    );
+
     for (i, section) in sections.iter().enumerate() {
         let s_start = attr_f64(*section, "s").unwrap_or(0.0);
         let s_end = sections
@@ -359,7 +392,9 @@ fn parse_road(
             &elevations,
             &lane_offsets,
             out,
-            next_id,
+            topo,
+            &road_id,
+            i,
         );
     }
     Ok(())
@@ -376,7 +411,9 @@ fn emit_section(
     elevations: &[Cubic],
     lane_offsets: &[Cubic],
     out: &mut Vec<Lane>,
-    next_id: &mut usize,
+    topo: &mut Topology,
+    road_id: &str,
+    section_idx: usize,
 ) {
     let (mut left, mut right) = (Vec::new(), Vec::new());
     for side in ["left", "right"] {
@@ -394,7 +431,13 @@ fn emit_section(
             if widths.is_empty() {
                 continue; // a driving lane with no width can't be sampled
             }
-            let def = LaneDef { id, widths };
+            let (pred_link, succ_link) = links::lane_link(lane);
+            let def = LaneDef {
+                id,
+                widths,
+                pred_link,
+                succ_link,
+            };
             if id > 0 {
                 left.push(def);
             } else if id < 0 {
@@ -434,14 +477,29 @@ fn emit_section(
             let Some(center) = Polyline::try_new(points) else {
                 continue;
             };
+            let id = LaneId(topo.next_id);
+            topo.next_id += 1;
+            topo.registry
+                .insert((road_id.to_string(), section_idx, lane.id), id);
+            topo.metas.push(LaneMeta {
+                id,
+                road: road_id.to_string(),
+                section: section_idx,
+                od_id: lane.id,
+                direction,
+                succ_link: lane.succ_link,
+                pred_link: lane.pred_link,
+            });
             out.push(Lane {
-                id: LaneId(*next_id),
+                id,
                 kind: LaneKind::Driving,
                 direction,
                 center,
                 width: width_at(lane, 0.0) as f32,
+                // Filled by links::resolve once all lanes are registered.
+                successors: Vec::new(),
+                predecessors: Vec::new(),
             });
-            *next_id += 1;
         }
     }
 }
@@ -769,6 +827,121 @@ mod tests {
             .position;
         assert!(end.x > 8.0, "end x {}", end.x);
         assert!(end.z < -3.0, "end z {} (should follow v to ~-5)", end.z);
+    }
+
+    // poly3 with v(u)=0.05*u^2 over length 10 -- curves laterally toward -z
+    // (like the arcLength paramPoly3 case; exact endpoint depends on the
+    // arc-length reparametrization, so just assert a clear deviation).
+    const POLY3: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="p3" length="10.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="10.0">
+        <poly3 a="0" b="0" c="0.05" d="0"/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn poly3_curves_laterally() {
+        let net = load_str(POLY3).expect("import");
+        let end = net.lanes[0]
+            .center
+            .pose_at(net.lanes[0].center.length())
+            .position;
+        assert!(end.z < -2.0, "end z {} (poly3 should curve)", end.z);
+    }
+
+    // Two lane sections in one road, linked lane -1 -> lane -1.
+    const TWO_SECTION_LINKED: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="r" length="40.0" id="1" junction="-1">
+    <planView><geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="40.0"><line/></geometry></planView>
+    <lanes>
+      <laneSection s="0.0"><right><lane id="-1" type="driving">
+        <link><successor id="-1"/></link><width sOffset="0.0" a="3.5"/>
+      </lane></right></laneSection>
+      <laneSection s="15.0"><right><lane id="-1" type="driving">
+        <link><predecessor id="-1"/></link><width sOffset="0.0" a="3.5"/>
+      </lane></right></laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn cross_section_link() {
+        let net = load_str(TWO_SECTION_LINKED).expect("import");
+        assert_eq!(net.lanes.len(), 2);
+        assert_eq!(net.lanes[0].successors, vec![net.lanes[1].id]);
+        assert_eq!(net.lanes[1].predecessors, vec![net.lanes[0].id]);
+    }
+
+    // Road 1 -> road 2 (its successor), each a single forward lane.
+    const TWO_ROADS_LINKED: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="a" length="20.0" id="1" junction="-1">
+    <link><successor elementType="road" elementId="2" contactPoint="start"/></link>
+    <planView><geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry></planView>
+    <lanes><laneSection s="0.0"><right><lane id="-1" type="driving">
+      <link><successor id="-1"/></link><width sOffset="0.0" a="3.5"/>
+    </lane></right></laneSection></lanes>
+  </road>
+  <road name="b" length="20.0" id="2" junction="-1">
+    <link><predecessor elementType="road" elementId="1" contactPoint="end"/></link>
+    <planView><geometry s="0.0" x="20.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry></planView>
+    <lanes><laneSection s="0.0"><right><lane id="-1" type="driving">
+      <link><predecessor id="-1"/></link><width sOffset="0.0" a="3.5"/>
+    </lane></right></laneSection></lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn road_to_road_link() {
+        let net = load_str(TWO_ROADS_LINKED).expect("import");
+        assert_eq!(net.lanes.len(), 2);
+        assert_eq!(net.lanes[0].successors, vec![net.lanes[1].id], "A -> B");
+        assert_eq!(net.lanes[1].predecessors, vec![net.lanes[0].id]);
+    }
+
+    // Road 1 -> junction 100 -> connecting road 2, via a laneLink.
+    const JUNCTION: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="in" length="20.0" id="1" junction="-1">
+    <link><successor elementType="junction" elementId="100"/></link>
+    <planView><geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry></planView>
+    <lanes><laneSection s="0.0"><right><lane id="-1" type="driving">
+      <link><successor id="-1"/></link><width sOffset="0.0" a="3.5"/>
+    </lane></right></laneSection></lanes>
+  </road>
+  <road name="conn" length="20.0" id="2" junction="100">
+    <link><predecessor elementType="road" elementId="1" contactPoint="end"/></link>
+    <planView><geometry s="0.0" x="20.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry></planView>
+    <lanes><laneSection s="0.0"><right><lane id="-1" type="driving">
+      <width sOffset="0.0" a="3.5"/>
+    </lane></right></laneSection></lanes>
+  </road>
+  <junction id="100">
+    <connection id="0" incomingRoad="1" connectingRoad="2" contactPoint="start">
+      <laneLink from="-1" to="-1"/>
+    </connection>
+  </junction>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn junction_link() {
+        let net = load_str(JUNCTION).expect("import");
+        assert_eq!(net.lanes.len(), 2);
+        assert_eq!(
+            net.lanes[0].successors,
+            vec![net.lanes[1].id],
+            "road -> junction -> connecting road"
+        );
     }
 
     #[test]

@@ -33,6 +33,12 @@ pub struct Lane {
     pub center: Polyline,
     /// Constant lane width (per-vertex widths can come later).
     pub width: f32,
+    /// Lanes reachable by driving off this lane's exit (travel-direction) end.
+    /// May fan out (a junction) or be empty (a dead end / unlinked lane). Built
+    /// by an importer from road/lane links and junctions; empty otherwise.
+    pub successors: Vec<LaneId>,
+    /// Lanes that drive into this lane -- the reverse of `successors`.
+    pub predecessors: Vec<LaneId>,
 }
 
 /// The "compiled map": everything a consumer needs, baked and format-agnostic.
@@ -52,6 +58,14 @@ impl RoadNetwork {
 
     pub fn driving_lanes(&self) -> impl Iterator<Item = &Lane> {
         self.lanes.iter().filter(|l| l.kind == LaneKind::Driving)
+    }
+
+    /// The lanes reachable by driving off `id`'s exit end (its `successors`).
+    pub fn successors(&self, id: LaneId) -> impl Iterator<Item = &Lane> {
+        self.lane(id)
+            .into_iter()
+            .flat_map(|l| l.successors.iter())
+            .filter_map(|s| self.lane(*s))
     }
 
     /// The driving lane whose centerline is nearest `point`, with the
@@ -79,6 +93,8 @@ mod tests {
             direction: Direction::Forward,
             center: Polyline::new(points.iter().map(|p| Vec3::from_array(*p)).collect()),
             width: 3.5,
+            successors: Vec::new(),
+            predecessors: Vec::new(),
         }
     }
 

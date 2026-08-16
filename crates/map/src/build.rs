@@ -28,6 +28,8 @@ pub fn demo_road() -> RoadNetwork {
                 direction: Direction::Forward,
                 center: forward,
                 width: LANE_WIDTH,
+                successors: Vec::new(),
+                predecessors: Vec::new(),
             },
             Lane {
                 id: LaneId(1),
@@ -35,6 +37,8 @@ pub fn demo_road() -> RoadNetwork {
                 direction: Direction::Backward,
                 center: backward,
                 width: LANE_WIDTH,
+                successors: Vec::new(),
+                predecessors: Vec::new(),
             },
         ],
     }

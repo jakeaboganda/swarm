@@ -53,6 +53,29 @@ fn spiral_road_actually_curves() {
     );
 }
 
+// A real, junction-rich map (Town07: 234 roads, 31 junctions) should resolve
+// into a populated connectivity graph -- most lanes lead somewhere, and every
+// successor is a real lane in the network.
+#[test]
+fn real_map_builds_a_connected_graph() {
+    let net = load_file(REAL).expect("load");
+    let total = net.driving_lanes().count();
+    let with_succ = net
+        .driving_lanes()
+        .filter(|l| !l.successors.is_empty())
+        .count();
+    assert!(
+        with_succ * 2 > total,
+        "only {with_succ}/{total} lanes have a successor"
+    );
+    // Every successor id resolves to a real lane (no dangling references).
+    for lane in &net.lanes {
+        for s in &lane.successors {
+            assert!(net.lane(*s).is_some(), "dangling successor {s:?}");
+        }
+    }
+}
+
 // esmini e6mini.xodr: a real highway built from paramPoly3 (+ line) geometry.
 // With paramPoly3 skipped, its curved segments would be dropped; this pins that
 // the real file imports into finite lanes.

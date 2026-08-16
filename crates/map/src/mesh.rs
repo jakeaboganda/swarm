@@ -69,6 +69,8 @@ mod tests {
                     Vec3::new(10.0, 0.0, 0.0),
                 ]),
                 width: 4.0,
+                successors: Vec::new(),
+                predecessors: Vec::new(),
             }],
         };
         let mesh = net.surface_mesh();
