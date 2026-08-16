@@ -1,0 +1,583 @@
+//! A small, pure-Rust OpenDRIVE (`.xodr`) importer that bakes a road into
+//! `map::RoadNetwork`. It implements only the subset our baked model needs --
+//! `line` and `arc` reference geometry, an elevation profile, and per-lane
+//! widths -- and samples everything to polylines at load. No junctions, no
+//! routing graph, no lane-section transitions yet (see the crate README / the
+//! DECISIONS "roll our own" note). Anything richer is future work.
+//!
+//! ## Coordinate mapping
+//! OpenDRIVE is right-handed **Z-up** (reference line in the X-Y plane, `hdg`
+//! the heading in that plane, elevation along +Z). Our world is **Y-up** with
+//! the ground in X-Z. We map `(x_od, y_od, elev)` -> `(x_od, elev, -y_od)`, so a
+//! left turn in OpenDRIVE (increasing heading) curves toward our -Z, matching
+//! the hand-authored `demo_road`.
+
+use glam::Vec3;
+use map::{Direction, Lane, LaneId, LaneKind, Polyline, RoadNetwork};
+
+/// Arc-length spacing (meters) at which curved geometry is baked to points.
+const SAMPLE_STEP: f64 = 2.0;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ImportError {
+    #[error("invalid OpenDRIVE XML: {0}")]
+    Xml(#[from] roxmltree::Error),
+    #[error("malformed OpenDRIVE: {0}")]
+    Malformed(String),
+}
+
+/// Load an OpenDRIVE file from disk and bake it into a `RoadNetwork`.
+pub fn load_file(path: impl AsRef<std::path::Path>) -> Result<RoadNetwork, ImportError> {
+    let xml = std::fs::read_to_string(path.as_ref())
+        .map_err(|e| ImportError::Malformed(format!("reading {:?}: {e}", path.as_ref())))?;
+    load_str(&xml)
+}
+
+/// Bake an OpenDRIVE document (as a string) into a `RoadNetwork`.
+pub fn load_str(xml: &str) -> Result<RoadNetwork, ImportError> {
+    let cleaned = sanitize(xml);
+    let doc = roxmltree::Document::parse(cleaned.as_ref())?;
+    let mut lanes = Vec::new();
+    let mut next_id = 0usize;
+    for road in doc
+        .root_element()
+        .children()
+        .filter(|n| n.has_tag_name("road"))
+    {
+        parse_road(road, &mut lanes, &mut next_id)?;
+    }
+    if lanes.is_empty() {
+        return Err(ImportError::Malformed("no driving lanes found".into()));
+    }
+    Ok(RoadNetwork { lanes })
+}
+
+/// Make a real-world document parseable: strip a UTF-8 BOM and remove the
+/// `<?xml ... ?>` declaration. Tools (e.g. CARLA) emit a license comment
+/// *before* the declaration, which is malformed XML that strict parsers reject;
+/// the declaration only names version/encoding, which we don't need for UTF-8.
+fn sanitize(xml: &str) -> std::borrow::Cow<'_, str> {
+    let xml = xml.trim_start_matches('\u{feff}');
+    if let Some(start) = xml.find("<?xml") {
+        if let Some(rel_end) = xml[start..].find("?>") {
+            let mut out = String::with_capacity(xml.len());
+            out.push_str(&xml[..start]);
+            out.push_str(&xml[start + rel_end + 2..]);
+            return std::borrow::Cow::Owned(out);
+        }
+    }
+    std::borrow::Cow::Borrowed(xml)
+}
+
+// --- Reference-line geometry --------------------------------------------------
+
+enum Geom {
+    Line,
+    Arc { curvature: f64 },
+}
+
+/// One `<geometry>` record: its start pose on the reference line plus its shape.
+struct GeomRec {
+    s: f64,
+    x: f64,
+    y: f64,
+    hdg: f64,
+    geom: Geom,
+}
+
+impl GeomRec {
+    /// Position `(x, y)` and heading at road arc-length `s` within this record.
+    fn pose(&self, s: f64) -> (f64, f64, f64) {
+        let ds = s - self.s;
+        match self.geom {
+            Geom::Arc { curvature } if curvature.abs() > 1e-9 => {
+                let h = self.hdg + curvature * ds;
+                let x = self.x + (h.sin() - self.hdg.sin()) / curvature;
+                let y = self.y - (h.cos() - self.hdg.cos()) / curvature;
+                (x, y, h)
+            }
+            // A line, or a degenerate (straight) arc.
+            _ => (
+                self.x + ds * self.hdg.cos(),
+                self.y + ds * self.hdg.sin(),
+                self.hdg,
+            ),
+        }
+    }
+}
+
+/// One cubic record (elevation, or a lane width), evaluated relative to its
+/// own start offset: `a + b*ds + c*ds^2 + d*ds^3`.
+struct Cubic {
+    start: f64,
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+}
+
+impl Cubic {
+    fn eval(&self, s: f64) -> f64 {
+        let ds = s - self.start;
+        self.a + self.b * ds + self.c * ds * ds + self.d * ds * ds * ds
+    }
+}
+
+/// The record whose start is the greatest not exceeding `s` (records sorted by
+/// start). `None` if `s` precedes them all / the list is empty.
+fn active(records: &[Cubic], s: f64) -> Option<&Cubic> {
+    records.iter().rev().find(|r| r.start <= s + 1e-9)
+}
+
+struct LaneDef {
+    id: i32,
+    widths: Vec<Cubic>,
+}
+
+// --- Parsing ------------------------------------------------------------------
+
+fn attr_f64(node: roxmltree::Node, name: &str) -> Option<f64> {
+    node.attribute(name).and_then(|s| s.parse().ok())
+}
+
+fn req_f64(node: roxmltree::Node, name: &str) -> Result<f64, ImportError> {
+    attr_f64(node, name).ok_or_else(|| {
+        ImportError::Malformed(format!("<{}> missing '{name}'", node.tag_name().name()))
+    })
+}
+
+fn parse_road(
+    road: roxmltree::Node,
+    out: &mut Vec<Lane>,
+    next_id: &mut usize,
+) -> Result<(), ImportError> {
+    let length = req_f64(road, "length")?;
+
+    let plan_view = child(road, "planView")
+        .ok_or_else(|| ImportError::Malformed("road missing <planView>".into()))?;
+    let mut geoms: Vec<GeomRec> = Vec::new();
+    for g in plan_view.children().filter(|n| n.has_tag_name("geometry")) {
+        let s = req_f64(g, "s")?;
+        let x = req_f64(g, "x")?;
+        let y = req_f64(g, "y")?;
+        let hdg = req_f64(g, "hdg")?;
+        let geom = if let Some(arc) = child(g, "arc") {
+            Geom::Arc {
+                curvature: req_f64(arc, "curvature")?,
+            }
+        } else if child(g, "line").is_some() {
+            Geom::Line
+        } else {
+            // paramPoly3/spiral/poly3 arrive in P5b; skip unknown shapes rather
+            // than fail the whole load.
+            continue;
+        };
+        geoms.push(GeomRec { s, x, y, hdg, geom });
+    }
+    if geoms.is_empty() {
+        return Err(ImportError::Malformed(
+            "road has no supported <geometry> (line/arc)".into(),
+        ));
+    }
+    geoms.sort_by(|a, b| a.s.total_cmp(&b.s));
+
+    let lanes_node = child(road, "lanes")
+        .ok_or_else(|| ImportError::Malformed("road missing <lanes>".into()))?;
+    let elevations = child(road, "elevationProfile")
+        .map(|n| cubics_in(n, "elevation", "s"))
+        .unwrap_or_default();
+    // laneOffset shifts the whole lane cross-section laterally off lane 0 (lane
+    // widening, merges, a centerline that isn't the road reference). It adds to
+    // every lane's offset, so it must be applied or all lanes are mis-placed.
+    let lane_offsets = cubics_in(lanes_node, "laneOffset", "s");
+
+    // Every lane section becomes its own set of lanes, each spanning that
+    // section's `s`-range `[start, next-start-or-length]`.
+    let mut sections: Vec<roxmltree::Node> = lanes_node
+        .children()
+        .filter(|n| n.has_tag_name("laneSection"))
+        .collect();
+    if sections.is_empty() {
+        return Err(ImportError::Malformed("road has no <laneSection>".into()));
+    }
+    sections.sort_by(|a, b| {
+        attr_f64(*a, "s")
+            .unwrap_or(0.0)
+            .total_cmp(&attr_f64(*b, "s").unwrap_or(0.0))
+    });
+    for (i, section) in sections.iter().enumerate() {
+        let s_start = attr_f64(*section, "s").unwrap_or(0.0);
+        let s_end = sections
+            .get(i + 1)
+            .map(|n| attr_f64(*n, "s").unwrap_or(length))
+            .unwrap_or(length)
+            .min(length);
+        if s_end - s_start < 1e-3 {
+            continue; // zero-length section
+        }
+        emit_section(
+            *section,
+            s_start,
+            s_end,
+            &geoms,
+            &elevations,
+            &lane_offsets,
+            out,
+            next_id,
+        );
+    }
+    Ok(())
+}
+
+/// Append each driving lane of one section as a `Lane` spanning `[s_start,
+/// s_end]`. Malformed individual lanes are skipped, not fatal (real files).
+#[allow(clippy::too_many_arguments)]
+fn emit_section(
+    section: roxmltree::Node,
+    s_start: f64,
+    s_end: f64,
+    geoms: &[GeomRec],
+    elevations: &[Cubic],
+    lane_offsets: &[Cubic],
+    out: &mut Vec<Lane>,
+    next_id: &mut usize,
+) {
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    for side in ["left", "right"] {
+        let Some(side_node) = child(section, side) else {
+            continue;
+        };
+        for lane in side_node.children().filter(|n| n.has_tag_name("lane")) {
+            if lane.attribute("type") != Some("driving") {
+                continue;
+            }
+            let Some(id) = lane.attribute("id").and_then(|s| s.parse::<i32>().ok()) else {
+                continue;
+            };
+            let widths = parse_width_cubics(lane);
+            if widths.is_empty() {
+                continue; // a driving lane with no width can't be sampled
+            }
+            let def = LaneDef { id, widths };
+            if id > 0 {
+                left.push(def);
+            } else if id < 0 {
+                right.push(def);
+            }
+        }
+    }
+    // Order each side from the center outward, so cumulative width works.
+    left.sort_by_key(|l| l.id); // 1, 2, 3, ...
+    right.sort_by_key(|l| -l.id); // -1, -2, -3, ...
+
+    let sample_s = sample_positions(s_start, s_end);
+    for side in [&left, &right] {
+        // Left lanes (positive id) offset toward +t and travel against +s;
+        // right lanes (negative id) offset toward -t and travel with +s.
+        let is_left = side.first().map(|l| l.id > 0).unwrap_or(false);
+        let sign = if is_left { 1.0 } else { -1.0 };
+        // Standard right-hand-traffic convention: negative-id (right) lanes run
+        // with +s, positive-id (left) against it. OpenDRIVE itself encodes no
+        // travel direction; a left-hand-traffic map would invert this.
+        let direction = if is_left {
+            Direction::Backward
+        } else {
+            Direction::Forward
+        };
+        for (i, lane) in side.iter().enumerate() {
+            let points = sample_lane(
+                geoms,
+                elevations,
+                lane_offsets,
+                s_start,
+                lane,
+                &side[..i], // inner lanes on the same side, closer to center
+                sign,
+                &sample_s,
+            );
+            let Some(center) = Polyline::try_new(points) else {
+                continue;
+            };
+            out.push(Lane {
+                id: LaneId(*next_id),
+                kind: LaneKind::Driving,
+                direction,
+                center,
+                width: width_at(lane, 0.0) as f32,
+            });
+            *next_id += 1;
+        }
+    }
+}
+
+/// Sample one lane's centerline to points in our coordinate frame.
+#[allow(clippy::too_many_arguments)]
+fn sample_lane(
+    geoms: &[GeomRec],
+    elevations: &[Cubic],
+    lane_offsets: &[Cubic],
+    section_s: f64,
+    lane: &LaneDef,
+    inner: &[LaneDef],
+    sign: f64,
+    sample_s: &[f64],
+) -> Vec<Vec3> {
+    sample_s
+        .iter()
+        .map(|&s| {
+            let s_lane = s - section_s;
+            // Center offset: the road's laneOffset (shared by all lanes) plus
+            // this lane's own: cumulative inner-lane widths + half its width.
+            let base = active(lane_offsets, s).map(|o| o.eval(s)).unwrap_or(0.0);
+            let inner_w: f64 = inner.iter().map(|l| width_at(l, s_lane)).sum();
+            let t = base + sign * (inner_w + width_at(lane, s_lane) / 2.0);
+
+            let g = geom_at(geoms, s);
+            let (x, y, hdg) = g.pose(s);
+            let elev = active(elevations, s).map(|e| e.eval(s)).unwrap_or(0.0);
+            // ref -> our frame, then offset along the left-hand normal.
+            // left_normal(our tangent) = (-sin hdg, 0, -cos hdg).
+            Vec3::new(
+                (x - t * hdg.sin()) as f32,
+                elev as f32,
+                (-y - t * hdg.cos()) as f32,
+            )
+        })
+        .collect()
+}
+
+fn width_at(lane: &LaneDef, s_lane: f64) -> f64 {
+    active(&lane.widths, s_lane)
+        .map(|w| w.eval(s_lane).max(0.0))
+        .unwrap_or(0.0)
+}
+
+fn geom_at(geoms: &[GeomRec], s: f64) -> &GeomRec {
+    geoms
+        .iter()
+        .rev()
+        .find(|g| g.s <= s + 1e-9)
+        .unwrap_or(&geoms[0])
+}
+
+/// Arc-length sample positions over `[start, end]`, spaced `SAMPLE_STEP`,
+/// always including the exact endpoints.
+fn sample_positions(start: f64, end: f64) -> Vec<f64> {
+    let mut ss = Vec::new();
+    let mut s = start;
+    while s < end - 1e-6 {
+        ss.push(s);
+        s += SAMPLE_STEP;
+    }
+    ss.push(end);
+    ss
+}
+
+/// Parse every `<item>` child of `parent` as a cubic (elevation, laneOffset),
+/// keyed on `start_attr`, sorted by start.
+fn cubics_in(parent: roxmltree::Node, item: &str, start_attr: &str) -> Vec<Cubic> {
+    let mut out: Vec<Cubic> = parent
+        .children()
+        .filter(|n| n.has_tag_name(item))
+        .filter_map(|n| {
+            Some(Cubic {
+                start: attr_f64(n, start_attr)?,
+                a: attr_f64(n, "a").unwrap_or(0.0),
+                b: attr_f64(n, "b").unwrap_or(0.0),
+                c: attr_f64(n, "c").unwrap_or(0.0),
+                d: attr_f64(n, "d").unwrap_or(0.0),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.start.total_cmp(&b.start));
+    out
+}
+
+fn parse_width_cubics(lane: roxmltree::Node) -> Vec<Cubic> {
+    let mut out: Vec<Cubic> = lane
+        .children()
+        .filter(|n| n.has_tag_name("width"))
+        .filter_map(|n| {
+            Some(Cubic {
+                start: attr_f64(n, "sOffset").unwrap_or(0.0),
+                a: attr_f64(n, "a")?,
+                b: attr_f64(n, "b").unwrap_or(0.0),
+                c: attr_f64(n, "c").unwrap_or(0.0),
+                d: attr_f64(n, "d").unwrap_or(0.0),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.start.total_cmp(&b.start));
+    out
+}
+
+fn child<'a>(node: roxmltree::Node<'a, 'a>, tag: &str) -> Option<roxmltree::Node<'a, 'a>> {
+    node.children().find(|n| n.has_tag_name(tag))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A straight 40 m road climbing at 4%, one right (forward) driving lane.
+    const STRAIGHT: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="s" length="40.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="40.0"><line/></geometry>
+    </planView>
+    <elevationProfile>
+      <elevation s="0.0" a="0.0" b="0.04" c="0.0" d="0.0"/>
+    </elevationProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <right>
+          <lane id="-1" type="driving">
+            <width sOffset="0.0" a="3.5" b="0.0" c="0.0" d="0.0"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn straight_one_forward_lane() {
+        let net = load_str(STRAIGHT).expect("import");
+        assert_eq!(net.driving_lanes().count(), 1);
+        let lane = net.lanes.first().unwrap();
+        assert_eq!(lane.direction, Direction::Forward);
+        let start = lane.center.pose_at(0.0);
+        let end = lane.center.pose_at(lane.center.length());
+        // Heads +X, the right lane sits on the +Z side, and it climbs.
+        assert!(start.heading.x > 0.9, "start heading {:?}", start.heading);
+        assert!(
+            (start.position.z - 1.75).abs() < 0.1,
+            "z {}",
+            start.position.z
+        );
+        assert!(end.position.y > start.position.y + 1.0, "no climb");
+    }
+
+    // A straight then a 90-degree left arc (radius 30), two opposing lanes --
+    // the same shape as the hand-authored demo_road.
+    const STRAIGHT_ARC: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sa" length="87.12" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="40.0"><line/></geometry>
+      <geometry s="40.0" x="40.0" y="0.0" hdg="0.0" length="47.12"><arc curvature="0.03333"/></geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </left>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn straight_then_left_arc_two_lanes() {
+        let net = load_str(STRAIGHT_ARC).expect("import");
+        assert_eq!(net.driving_lanes().count(), 2);
+        // Forward lane = the right (negative-id) lane.
+        let fwd = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Forward)
+            .unwrap();
+        let start = fwd.center.pose_at(0.0);
+        let end = fwd.center.pose_at(fwd.center.length());
+        assert!(start.heading.x > 0.9, "start {:?}", start.heading);
+        // After a 90-degree left turn, heading points toward -Z.
+        assert!(end.heading.z < -0.9, "end {:?}", end.heading);
+    }
+
+    #[test]
+    fn lanes_sit_a_width_apart() {
+        let net = load_str(STRAIGHT_ARC).expect("import");
+        let fwd = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Forward)
+            .unwrap();
+        let bwd = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Backward)
+            .unwrap();
+        // On the straight, the two lane centers are ~one lane width apart.
+        let a = fwd.center.point_at(10.0);
+        let gap = (a - bwd.center.project(a).point).length();
+        assert!((gap - 3.5).abs() < 0.2, "gap {gap}");
+    }
+
+    // A straight road with a constant laneOffset of +2.0 (shifts the whole
+    // cross-section left, toward -Z in our frame).
+    const STRAIGHT_OFFSET: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="o" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lanes>
+      <laneOffset s="0.0" a="2.0" b="0.0" c="0.0" d="0.0"/>
+      <laneSection s="0.0">
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn lane_offset_shifts_the_cross_section() {
+        // Right lane without offset sits at z = +1.75; laneOffset +2.0 shifts
+        // it left by 2.0 -> z = -0.25.
+        let net = load_str(STRAIGHT_OFFSET).expect("import");
+        let z = net.lanes[0].center.pose_at(0.0).position.z;
+        assert!((z - (-0.25)).abs() < 0.05, "z {z}");
+    }
+
+    // A straight road split into two lane sections at s=25. Each section's
+    // lanes should become their own polyline spanning only that section.
+    const TWO_SECTIONS: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="ms" length="40.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="40.0"><line/></geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+      <laneSection s="25.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn each_lane_section_becomes_its_own_lane() {
+        let net = load_str(TWO_SECTIONS).expect("import");
+        assert_eq!(net.driving_lanes().count(), 2, "one lane per section");
+        let mut lens: Vec<f32> = net.lanes.iter().map(|l| l.center.length()).collect();
+        lens.sort_by(|a, b| a.total_cmp(b));
+        // Sections span [0,25] and [25,40] -> ~25 and ~15 m.
+        assert!((lens[0] - 15.0).abs() < 1.0, "short section {}", lens[0]);
+        assert!((lens[1] - 25.0).abs() < 1.0, "long section {}", lens[1]);
+    }
+
+    #[test]
+    fn empty_or_junk_is_an_error() {
+        assert!(load_str("<OpenDRIVE></OpenDRIVE>").is_err());
+        assert!(load_str("not xml at all <<<").is_err());
+    }
+}

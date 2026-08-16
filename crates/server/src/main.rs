@@ -70,15 +70,20 @@ fn main() -> anyhow::Result<()> {
         half_width: scenario_config.arena.width / 2.0,
         half_depth: scenario_config.arena.depth / 2.0,
     };
-    // Select the world: a road map, or the flat arena. Only the built-in "demo"
-    // road exists today; loading a real OpenDRIVE file by path arrives at P5.
+    // Select the world: a road map, or the flat arena. `"demo"` is the built-in
+    // hand-authored road; a path ending in `.xodr` is loaded via the OpenDRIVE
+    // importer and baked into the same `RoadNetwork` (nothing downstream cares
+    // which source it came from).
     let map_world = match scenario_config.map.as_deref() {
         None => None,
         Some("demo") => Some(map::demo_road()),
-        Some(other) => anyhow::bail!(
-            "unknown map {other:?}: only the built-in \"demo\" road exists \
-             (OpenDRIVE file import arrives at P5)"
+        Some(path) if path.ends_with(".xodr") => Some(
+            map_opendrive::load_file(path)
+                .map_err(|e| anyhow::anyhow!("loading map {path:?}: {e}"))?,
         ),
+        Some(other) => {
+            anyhow::bail!("unknown map {other:?}: use \"demo\" or a path ending in .xodr")
+        }
     };
 
     // Time model (env `SIM_TIME`):

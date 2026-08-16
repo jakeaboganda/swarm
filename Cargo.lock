@@ -3590,6 +3590,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "map-opendrive"
+version = "0.1.0"
+dependencies = [
+ "glam 0.32.1",
+ "map",
+ "roxmltree",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4831,6 +4841,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
 name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5018,6 +5034,7 @@ dependencies = [
  "bevy_rapier3d",
  "futures-util",
  "map",
+ "map-opendrive",
  "movement",
  "perception",
  "protocol",

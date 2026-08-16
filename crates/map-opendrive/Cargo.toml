@@ -1,0 +1,11 @@
+[package]
+name = "map-opendrive"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+map = { workspace = true }
+glam = { workspace = true }
+thiserror = { workspace = true }
+roxmltree = { workspace = true }
