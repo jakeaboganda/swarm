@@ -69,6 +69,12 @@ fn on_plane(x: f32, z: f32) -> Vec3 {
     Vec3::new(x, VIZ_HEIGHT, z)
 }
 
+/// Lift a real 3D point by the gizmo draw height, keeping its own elevation.
+/// Unlike `on_plane`, this follows a sloped road instead of flattening to y=0.
+fn lift(p: Vec3) -> Vec3 {
+    Vec3::new(p.x, p.y + VIZ_HEIGHT, p.z)
+}
+
 /// Appends the current position to each entity's trail, but only when it
 /// actually moved. `record_trails` runs at render FPS while positions
 /// update at the ~30 Hz frame rate, so deduping keeps the trail a
@@ -98,9 +104,9 @@ pub fn draw_plans(mut gizmos: Gizmos, query: Query<(&Transform, &DebugData)>) {
         } else {
             Color::srgb(0.2, 0.8, 1.0)
         };
-        let mut prev = on_plane(transform.translation.x, transform.translation.z);
+        let mut prev = lift(transform.translation);
         for waypoint in &debug.plan {
-            let point = on_plane(waypoint.x, waypoint.z);
+            let point = lift(*waypoint);
             gizmos.line(prev, point, color);
             gizmos.sphere(Isometry3d::from_translation(point), 0.35, color);
             prev = point;

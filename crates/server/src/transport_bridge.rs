@@ -12,7 +12,7 @@ use crate::agent::{
 use crate::events::ReflexFired;
 use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
-use crate::world::spawn_agent;
+use crate::world::{agent_spawn_transform, spawn_agent, to_map_data, MapWorld};
 
 /// How long a mid-scenario agent has to reconnect (re-`Join` by name)
 /// before the scenario ends. Absorbs a transient network blip on a slow,
@@ -67,8 +67,12 @@ pub fn drain_transport(
     end_reason: Res<EndReason>,
     tick: Res<Tick>,
     viz_res: Res<crate::viz_broadcast::Viz>,
+    map_world: Res<MapWorld>,
     mut query: Query<(&Transform, &Velocity, &mut Plan, &mut Reflexes, &AgentName)>,
 ) {
+    // The static road prior, delivered with every `Joined`. `None` in the arena
+    // world. Built once per tick; cheap, and only cloned onto an actual join.
+    let map_payload = map_world.0.as_ref().map(to_map_data);
     while let Ok(event) = transport.0.events.try_recv() {
         if let ConnectionEvent::Disconnected(connection) = event {
             let Some(entity) = registry.remove_connection(connection) else {
@@ -140,6 +144,7 @@ pub fn drain_transport(
                                 ServerMessage::Joined {
                                     agent_id: AgentId(name),
                                     position: to_wire(position),
+                                    map: map_payload.clone(),
                                 },
                             );
                         }
@@ -170,11 +175,13 @@ pub fn drain_transport(
                         .expect("checked above");
                     let embodiment = roster.0.roster[index].embodiment;
                     let sensors = roster.0.roster[index].sensors.clone();
-                    let position = spawn_position(index, roster.0.roster.len());
+                    let base = spawn_position(index, roster.0.roster.len());
+                    let transform = agent_spawn_transform(embodiment, base, map_world.0.as_ref());
+                    let spawned_at = transform.translation;
                     let entity = spawn_agent(
                         &mut commands,
                         &name,
-                        position,
+                        transform,
                         connection,
                         embodiment,
                         sensors,
@@ -186,7 +193,8 @@ pub fn drain_transport(
                         connection,
                         ServerMessage::Joined {
                             agent_id: AgentId(name),
-                            position: to_wire(position),
+                            position: to_wire(spawned_at),
+                            map: map_payload.clone(),
                         },
                     );
 

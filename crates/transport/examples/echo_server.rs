@@ -43,6 +43,7 @@ async fn main() {
         ServerMessage::Joined {
             agent_id: AgentId("car-1".into()),
             position: Vec3::ZERO,
+            map: None,
         },
     );
 

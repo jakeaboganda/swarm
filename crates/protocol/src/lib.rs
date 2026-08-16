@@ -1,5 +1,6 @@
 mod vec3;
 
+pub mod map;
 pub mod messages;
 pub mod scenario;
 

@@ -126,7 +126,7 @@ mod tests {
         let forward = &net.lane(LaneId(0)).unwrap().center;
         let backward = &net.lane(LaneId(1)).unwrap().center;
         // Across the whole road (straight and curve), the two lane centers stay
-        // ~one lane width apart -- no inversion or width collapse on the arc.
+        // ~one lane width apart --] no inversion or width collapse on the arc.
         for k in 0..=10 {
             let s = forward.length() * k as f32 / 10.0;
             let p = forward.point_at(s);

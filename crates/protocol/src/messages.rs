@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::map::MapData;
 use crate::Vec3;
 
 /// Identifies an agent. Equal to the `name` it registered under in the
@@ -85,6 +86,10 @@ pub enum ServerMessage {
     Joined {
         agent_id: AgentId,
         position: Vec3,
+        /// The static road prior, in the automotive world. `None` in the flat
+        /// arena. Delivered once, at join -- the agent lays its path from this.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        map: Option<MapData>,
     },
     State(StateSnapshot),
     ReflexFired {
@@ -142,6 +147,20 @@ mod tests {
         round_trip(&ServerMessage::Joined {
             agent_id: AgentId("car-1".into()),
             position: Vec3::ZERO,
+            map: None,
+        });
+        round_trip(&ServerMessage::Joined {
+            agent_id: AgentId("car-1".into()),
+            position: Vec3::ZERO,
+            map: Some(crate::map::MapData {
+                lanes: vec![crate::map::LaneData {
+                    id: 0,
+                    kind: crate::map::LaneKind::Driving,
+                    direction: crate::map::LaneDirection::Forward,
+                    width: 3.5,
+                    centerline: vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)],
+                }],
+            }),
         });
         round_trip(&ServerMessage::State(StateSnapshot {
             tick: 42,

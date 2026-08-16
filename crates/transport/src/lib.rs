@@ -60,6 +60,7 @@ mod tests {
             ServerMessage::Joined {
                 agent_id: protocol::messages::AgentId("car-1".into()),
                 position: protocol::Vec3::ZERO,
+                map: None,
             },
         );
 

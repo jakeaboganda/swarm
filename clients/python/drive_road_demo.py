@@ -1,4 +1,9 @@
-"""Drives a raycast vehicle straight down the demo road on a plan.
+"""Drives a raycast vehicle down its lane, following the map delivered at join.
+
+The server hands the road's lanes in the `joined` message (P3). The agent picks
+the forward driving lane, samples its centerline into a plan of waypoints from
+where the car spawned to the lane's end, and submits it. The path-tracking
+driver follows it -- around the curve and up the grade, staying in-lane.
 
 Run the server first (or use scripts/run.sh):
     cargo run --bin server -- scenario_road_car.json
@@ -10,6 +15,7 @@ Needs the scenario_road_car.json roster. `pip install websockets`.
 
 import asyncio
 import json
+import math
 import sys
 
 try:
@@ -19,7 +25,31 @@ except ImportError:
     sys.exit(2)
 
 URL = "ws://127.0.0.1:4000"
+CRUISE = 6.0  # target speed along the lane, m/s
 pos = {}
+
+
+def dist2(a, b):
+    return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
+
+
+def lane_plan(lane, start):
+    """Waypoints down `lane`'s centerline, from the point nearest `start` to the
+    end. Skipping the points behind the car keeps it driving forward, not back
+    to the lane's origin."""
+    center = lane["centerline"]
+    begin = min(range(len(center)), key=lambda i: dist2(center[i], start))
+    return [
+        {"position": {"x": p["x"], "y": p["y"], "z": p["z"]}, "speed": CRUISE}
+        for p in center[begin:]
+    ]
+
+
+def forward_driving_lane(map_data):
+    for lane in map_data["lanes"]:
+        if lane["kind"] == "driving" and lane["direction"] == "forward":
+            return lane
+    return None
 
 
 async def reader(ws):
@@ -35,22 +65,44 @@ async def reader(ws):
 async def main():
     ws = await websockets.connect(URL)
     await ws.send(json.dumps({"type": "join", "name": "car"}))
-    await ws.recv()  # Joined
-    r = asyncio.create_task(reader(ws))
+    joined = json.loads(await ws.recv())
 
-    # Drive straight down the road (+X), accelerating to 6 m/s.
-    plan = [
-        {"position": {"x": x, "y": 0.0, "z": 0.0}, "speed": 6.0}
-        for x in (15.0, 30.0, 38.0)
-    ]
+    map_data = joined.get("map")
+    if not map_data:
+        print("no map delivered -- is this the automotive scenario?")
+        await ws.close()
+        return
+    lane = forward_driving_lane(map_data)
+    if lane is None:
+        print("no forward driving lane in the delivered map")
+        await ws.close()
+        return
+
+    spawn = joined["position"]
+    plan = lane_plan(lane, spawn)
+    end = plan[-1]["position"]
+    print(
+        f"following lane {lane['id']} ({len(plan)} waypoints) "
+        f"from x={spawn['x']:.1f},z={spawn['z']:.1f} "
+        f"to x={end['x']:.1f},z={end['z']:.1f}"
+    )
+
+    r = asyncio.create_task(reader(ws))
     await ws.send(json.dumps({"type": "submit_plan", "waypoints": plan}))
 
-    for _ in range(20):
+    for _ in range(40):
         await ws.send(json.dumps({"type": "get_state"}))
         await asyncio.sleep(0.4)
         p = pos.get("car")
         if p:
-            print(f"car  x={p['x']:6.1f}  y={p['y']:5.2f}  z={p['z']:6.2f}")
+            # Lateral error off the lane end direction isn't computed here; just
+            # show the track so you can eyeball in-lane progress round the curve.
+            near = min(lane["centerline"], key=lambda c: dist2(c, p))
+            off = math.sqrt(dist2(near, p))
+            print(
+                f"car  x={p['x']:6.1f}  y={p['y']:5.2f}  z={p['z']:6.2f}"
+                f"   lane-offset={off:4.1f} m"
+            )
 
     r.cancel()
     await ws.close()

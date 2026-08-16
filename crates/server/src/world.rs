@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw, RaycastVehicle};
+use protocol::map::{LaneData, LaneDirection, LaneKind as WireLaneKind, MapData};
 use protocol::scenario::{ArenaConfig, Embodiment, SensorDef, SensorSource};
 use transport::ConnectionId;
 
@@ -13,6 +14,14 @@ const WALL_THICKNESS: f32 = 0.5;
 const GROUND_HALF_THICKNESS: f32 = 0.1;
 pub const AGENT_RADIUS: f32 = 0.5;
 const AGENT_HALF_HEIGHT: f32 = 0.5;
+
+/// A car's chassis center rides this far above the lane surface at spawn, so it
+/// settles gently onto its suspension instead of launching off over-compressed
+/// springs (matched to the raycast vehicle's rest geometry).
+const CAR_RIDE_HEIGHT: f32 = 1.2;
+/// A car spawns this far along its lane (arc length), so all four wheels clear
+/// the road's start edge rather than hanging off into space.
+const CAR_START_S: f32 = 10.0;
 
 // Colors are viz metadata, not rendering: the headless sim never draws
 // anything, it just tells viewers what color each entity should be.
@@ -44,6 +53,65 @@ pub struct MapWorld(pub Option<map::RoadNetwork>);
 
 fn to_viz_vec(v: &Vec3) -> viz::Vec3 {
     viz::Vec3::new(v.x, v.y, v.z)
+}
+
+fn to_wire_vec(v: &Vec3) -> protocol::Vec3 {
+    protocol::Vec3::new(v.x, v.y, v.z)
+}
+
+/// Convert the sim-side road network into the wire form delivered to agents at
+/// join. Lanes with their baked centerlines -- everything an agent needs to lay
+/// a lane-following path, nothing about the (perceived) dynamic world.
+pub fn to_map_data(net: &map::RoadNetwork) -> MapData {
+    MapData {
+        lanes: net
+            .lanes
+            .iter()
+            .map(|lane| LaneData {
+                id: lane.id.0 as u64,
+                kind: match lane.kind {
+                    map::LaneKind::Driving => WireLaneKind::Driving,
+                },
+                direction: match lane.direction {
+                    map::Direction::Forward => LaneDirection::Forward,
+                    map::Direction::Backward => LaneDirection::Backward,
+                },
+                width: lane.width,
+                centerline: lane.center.points().iter().map(to_wire_vec).collect(),
+            })
+            .collect(),
+    }
+}
+
+/// Where an agent's entity spawns and which way it faces. A car spawns *in its
+/// lane*: on the first forward driving lane's centerline, a little way in
+/// (`CAR_START_S`) so all wheels are on the road, at ride height, facing along
+/// the lane. Everything else spawns at its roster `base` position. Falls back to
+/// the base if there's no map or no forward lane (a car in the arena world).
+pub fn agent_spawn_transform(
+    embodiment: Embodiment,
+    base: Vec3,
+    map: Option<&map::RoadNetwork>,
+) -> Transform {
+    if !matches!(embodiment, Embodiment::RaycastVehicle) {
+        return Transform::from_translation(base);
+    }
+    if let Some(lane) = map.and_then(|net| {
+        net.driving_lanes()
+            .find(|l| l.direction == map::Direction::Forward)
+    }) {
+        let pose = lane.center.pose_at(CAR_START_S);
+        let heading = if pose.heading.length_squared() > 1e-6 {
+            pose.heading
+        } else {
+            Vec3::X
+        };
+        return Transform::from_translation(pose.position + Vec3::Y * CAR_RIDE_HEIGHT)
+            .looking_to(heading, Vec3::Y);
+    }
+    // No lane to place onto: keep the car above ground and facing +X.
+    Transform::from_translation(Vec3::new(base.x, CAR_RIDE_HEIGHT, base.z))
+        .looking_to(Vec3::X, Vec3::Y)
 }
 
 /// Spawns the road as one static trimesh collider, tagged with a `VizEntity`
@@ -164,7 +232,7 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
 pub fn spawn_agent(
     commands: &mut Commands,
     name: &str,
-    position: Vec3,
+    transform: Transform,
     connection: ConnectionId,
     embodiment: Embodiment,
     sensors: Vec<SensorDef>,
@@ -179,18 +247,10 @@ pub fn spawn_agent(
             range: s.range,
             fov_half_angle: s.fov_half_angle,
         });
-    // A raycast vehicle is a box that rides on suspension and faces +X to
-    // start; the planar embodiments are capsules at the spawn point.
+    // A raycast vehicle is a box that rides on suspension; the planar
+    // embodiments are capsules. The spawn pose is computed by the caller (see
+    // `agent_spawn_transform`, which places a car in its lane).
     let is_car = matches!(embodiment, Embodiment::RaycastVehicle);
-    // Place a car ~10 m onto the road (so all four wheels clear the start
-    // edge) and at roughly its suspension ride height above the graded surface,
-    // so it settles gently instead of launching off over-compressed springs.
-    // Proper map-aware spawning onto a lane is P3.
-    let position = if is_car {
-        Vec3::new(position.x + 10.0, 1.6, position.z)
-    } else {
-        position
-    };
     let (viz_shape, collider) = if is_car {
         (
             viz::Shape::Cuboid {
@@ -206,11 +266,6 @@ pub fn spawn_agent(
             },
             Collider::capsule_y(AGENT_HALF_HEIGHT, AGENT_RADIUS),
         )
-    };
-    let transform = if is_car {
-        Transform::from_translation(position).looking_to(Vec3::X, Vec3::Y)
-    } else {
-        Transform::from_translation(position)
     };
     let mut entity = commands.spawn((
         AgentName(name.to_string()),
