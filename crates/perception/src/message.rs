@@ -34,6 +34,10 @@ pub struct Detection {
     pub position: Vec3,
     pub velocity: Vec3,
     pub distance: f32,
+    /// The perceived entity's body radius, so the agent's own avoidance can
+    /// size the obstacle rather than assuming one. Size is a known property,
+    /// so it isn't degraded by the sensor's position/velocity noise.
+    pub radius: f32,
 }
 
 /// Impaired scalar readings computed over the same detected set — the
@@ -109,6 +113,7 @@ mod tests {
                 position: Vec3::new(1.0, 0.0, 2.0),
                 velocity: Vec3::new(-1.0, 0.0, 0.0),
                 distance: 5.0,
+                radius: 0.75,
             }],
             scalars: Scalars {
                 time_to_collision: Some(1.5),

@@ -305,6 +305,7 @@ fn to_wire(detection: &Detection) -> perception::Detection {
         position: to_wire_vec(detection.position),
         velocity: to_wire_vec(detection.velocity),
         distance: detection.distance,
+        radius: detection.radius,
     }
 }
 

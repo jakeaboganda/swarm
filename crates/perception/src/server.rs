@@ -239,6 +239,7 @@ mod tests {
                 position: Vec3::new(1.0, 0.0, 2.0),
                 velocity: Vec3::new(0.0, 0.0, 0.0),
                 distance: 5.0,
+                radius: 0.75,
             }],
             scalars: Scalars {
                 time_to_collision: Some(2.0),
