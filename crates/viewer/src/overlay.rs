@@ -65,12 +65,8 @@ impl Default for OverlayToggles {
 #[derive(Component, Default)]
 pub struct Trail(VecDeque<Vec3>);
 
-fn on_plane(x: f32, z: f32) -> Vec3 {
-    Vec3::new(x, VIZ_HEIGHT, z)
-}
-
-/// Lift a real 3D point by the gizmo draw height, keeping its own elevation.
-/// Unlike `on_plane`, this follows a sloped road instead of flattening to y=0.
+/// Lift a real 3D point by the gizmo draw height, keeping its own elevation so
+/// overlays sit just above a sloped road instead of flattening to y=0.
 fn lift(p: Vec3) -> Vec3 {
     Vec3::new(p.x, p.y + VIZ_HEIGHT, p.z)
 }
@@ -81,7 +77,7 @@ fn lift(p: Vec3) -> Vec3 {
 /// consistent length in time rather than in frames.
 pub fn record_trails(mut query: Query<(&Transform, &mut Trail)>) {
     for (transform, mut trail) in &mut query {
-        let point = on_plane(transform.translation.x, transform.translation.z);
+        let point = lift(transform.translation);
         if trail.0.back() == Some(&point) {
             continue;
         }
@@ -154,9 +150,9 @@ pub fn draw_detections(
         return;
     }
     for (observer, data) in &observers {
-        let from = on_plane(observer.translation.x, observer.translation.z);
+        let from = lift(observer.translation);
         for blip in &data.detections {
-            let ghost = on_plane(blip.position.x, blip.position.z);
+            let ghost = lift(blip.position);
             let color = match blip.kind {
                 DetectionKind::Agent => Color::srgb(1.0, 0.85, 0.2),
                 DetectionKind::Static => Color::srgb(0.6, 0.7, 1.0),
@@ -166,7 +162,7 @@ pub fn draw_detections(
             // Connector from the perceived ghost to the true position.
             if let Some(entity) = map.get(&blip.id) {
                 if let Ok(truth) = transforms.get(entity) {
-                    let true_pos = on_plane(truth.translation.x, truth.translation.z);
+                    let true_pos = lift(truth.translation);
                     gizmos.line(ghost, true_pos, Color::srgb(1.0, 0.3, 0.3).with_alpha(0.8));
                 }
             }
@@ -192,7 +188,7 @@ pub fn draw_sensor_envelope(
         if !env.range.is_finite() || env.range > MAX_ENVELOPE_RANGE {
             continue;
         }
-        let center = on_plane(transform.translation.x, transform.translation.z);
+        let center = lift(transform.translation);
         gizmos.circle(
             Isometry3d::new(center, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
             env.range,
@@ -208,7 +204,7 @@ pub fn draw_sensor_envelope(
         }
         draw_fov_prism(
             &mut gizmos,
-            transform.translation,
+            center,
             heading,
             env.range,
             env.fov_half_angle,
@@ -221,7 +217,8 @@ pub fn draw_sensor_envelope(
 /// agent, arc at true radial `range`) extruded straight up with parallel walls.
 /// The sensor culls only horizontally — all heights within range+bearing are
 /// seen — so there is no vertical FOV: top and bottom are identical, and the
-/// prism spans the arena's height rather than converging to a far plane.
+/// prism rises a fixed height from the agent's own elevation rather than
+/// converging to a far plane.
 fn draw_fov_prism(
     gizmos: &mut Gizmos,
     origin: Vec3,
@@ -241,10 +238,10 @@ fn draw_fov_prism(
             })
             .collect()
     };
-    let base = Vec3::new(origin.x, 0.0, origin.z);
+    let base = origin;
     let top = base + Vec3::Y * FOV_VOLUME_HEIGHT;
-    let floor = arc(0.0);
-    let ceil = arc(FOV_VOLUME_HEIGHT);
+    let floor = arc(origin.y);
+    let ceil = arc(origin.y + FOV_VOLUME_HEIGHT);
     // Floor and ceiling wedges (apex + closing rays + arc), identical in size.
     for (apex, ring) in [(base, &floor), (top, &ceil)] {
         gizmos.line(apex, ring[0], color);
