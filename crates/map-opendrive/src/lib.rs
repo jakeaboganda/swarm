@@ -1,8 +1,8 @@
 //! A small, pure-Rust OpenDRIVE (`.xodr`) importer that bakes a road into
 //! `map::RoadNetwork`. It implements the subset our baked model needs --
-//! `line`, `arc`, and `spiral` (clothoid) reference geometry, an elevation
-//! profile, per-lane widths, `laneOffset`, and multiple lane sections -- and
-//! samples everything to polylines at load. Not yet: `poly3`/`paramPoly3`
+//! `line`, `arc`, `spiral` (clothoid), and `paramPoly3` reference geometry, an
+//! elevation profile, per-lane widths, `laneOffset`, and multiple lane sections
+//! -- and samples everything to polylines at load. Not yet: the rare `poly3`
 //! geometry, junctions, or a routing graph (see the DECISIONS "roll our own"
 //! note). Anything richer is future work.
 //!
@@ -77,10 +77,11 @@ enum Geom {
     Arc {
         curvature: f64,
     },
-    /// A clothoid (linearly varying curvature). Baked to `(ds, x, y, hdg)`
-    /// samples at load, since it has no elementary closed form -- see
-    /// `bake_spiral`. `pose` interpolates them.
-    Spiral {
+    /// A curve with no elementary arc-length form (spiral/clothoid or
+    /// paramPoly3), baked to `(ds, x, y, hdg)` samples at load -- see
+    /// `bake_spiral` / `bake_param_poly3`. `pose` interpolates them by arc
+    /// length `ds`.
+    Baked {
         samples: Vec<(f64, f64, f64, f64)>,
     },
 }
@@ -118,6 +119,51 @@ fn bake_spiral(
     out
 }
 
+/// Evaluate `a + b*p + c*p^2 + d*p^3`.
+fn eval_poly3([a, b, c, d]: [f64; 4], p: f64) -> f64 {
+    a + b * p + c * p * p + d * p * p * p
+}
+
+/// Bake a paramPoly3 to `(ds, x, y, hdg)` samples. The curve is given in a local
+/// `(u, v)` frame (u forward, v left of `hdg0`) by two cubics in a parameter
+/// `p`; `p_max` is `1` for `pRange="normalized"`, else the geometry length.
+/// Because `p` is not arc length, we step `p` finely, transform each point into
+/// world space, and accumulate the true arc length `ds` so `pose` can sample by
+/// distance like every other geometry.
+fn bake_param_poly3(
+    x0: f64,
+    y0: f64,
+    hdg0: f64,
+    u: [f64; 4],
+    v: [f64; 4],
+    p_max: f64,
+    length: f64,
+) -> Vec<(f64, f64, f64, f64)> {
+    let (sin, cos) = hdg0.sin_cos();
+    let world = |p: f64| {
+        let (uu, vv) = (eval_poly3(u, p), eval_poly3(v, p));
+        (x0 + uu * cos - vv * sin, y0 + uu * sin + vv * cos)
+    };
+    let heading = |p: f64| {
+        let du = u[1] + 2.0 * u[2] * p + 3.0 * u[3] * p * p;
+        let dv = v[1] + 2.0 * v[2] * p + 3.0 * v[3] * p * p;
+        hdg0 + dv.atan2(du)
+    };
+    // ~0.25 m resolution, from the geometry length.
+    let n = ((length / 0.25).ceil() as usize).max(8);
+    let (mut px, mut py) = world(0.0);
+    let mut ds = 0.0;
+    let mut out = vec![(0.0, px, py, heading(0.0))];
+    for k in 1..=n {
+        let p = p_max * (k as f64) / (n as f64);
+        let (x, y) = world(p);
+        ds += ((x - px).powi(2) + (y - py).powi(2)).sqrt();
+        out.push((ds, x, y, heading(p)));
+        (px, py) = (x, y);
+    }
+    out
+}
+
 /// One `<geometry>` record: its start pose on the reference line plus its shape.
 struct GeomRec {
     s: f64,
@@ -138,7 +184,7 @@ impl GeomRec {
                 let y = self.y - (h.cos() - self.hdg.cos()) / curvature;
                 (x, y, h)
             }
-            Geom::Spiral { samples } => {
+            Geom::Baked { samples } => {
                 let max = samples.last().map(|p| p.0).unwrap_or(0.0);
                 let ds = ds.clamp(0.0, max);
                 let i = samples
@@ -225,7 +271,7 @@ fn parse_road(
                 curvature: req_f64(arc, "curvature")?,
             }
         } else if let Some(sp) = child(g, "spiral") {
-            Geom::Spiral {
+            Geom::Baked {
                 samples: bake_spiral(
                     x,
                     y,
@@ -235,18 +281,38 @@ fn parse_road(
                     length,
                 ),
             }
+        } else if let Some(pp) = child(g, "paramPoly3") {
+            let coeff = |n: &str| attr_f64(pp, n).unwrap_or(0.0);
+            // "arcLength" -> p in [0,len]; anything else, including an absent
+            // attribute, is "normalized" p in [0,1] -- matching libOpenDRIVE's
+            // default and case-insensitive compare (files set it explicitly).
+            let p_max = match pp.attribute("pRange").map(str::to_ascii_lowercase) {
+                Some(ref r) if r == "arclength" => length,
+                _ => 1.0,
+            };
+            Geom::Baked {
+                samples: bake_param_poly3(
+                    x,
+                    y,
+                    hdg,
+                    [coeff("aU"), coeff("bU"), coeff("cU"), coeff("dU")],
+                    [coeff("aV"), coeff("bV"), coeff("cV"), coeff("dV")],
+                    p_max,
+                    length,
+                ),
+            }
         } else if child(g, "line").is_some() {
             Geom::Line
         } else {
-            // poly3/paramPoly3 arrive later; skip unknown shapes rather than
-            // fail the whole load.
+            // poly3 (the u->v special case) can arrive later; skip unknown
+            // shapes rather than fail the whole load.
             continue;
         };
         geoms.push(GeomRec { s, x, y, hdg, geom });
     }
     if geoms.is_empty() {
         return Err(ImportError::Malformed(
-            "road has no supported <geometry> (line/arc)".into(),
+            "road has no supported <geometry>".into(),
         ));
     }
     geoms.sort_by(|a, b| a.s.total_cmp(&b.s));
@@ -672,6 +738,37 @@ mod tests {
         let h = net.lanes[0].center.pose_at(5.0).heading;
         let theta = (-h.z).atan2(h.x);
         assert!((theta - 0.125).abs() < 0.03, "mid heading angle {theta}");
+    }
+
+    // A normalized paramPoly3: u(p)=10p, v(p)=5p^2 for p in [0,1], so the curve
+    // runs from OD (0,0) to OD (10,5) -> our frame end near z=-5. The road is
+    // longer than the curve (arc length ~11.5), so the end clamps to that point.
+    // A straight line (v ignored) would end at z=0.
+    const PARAM_POLY3: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="pp" length="15.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="15.0">
+        <paramPoly3 pRange="normalized" aU="0" bU="10" cU="0" dU="0" aV="0" bV="0" cV="5" dV="0"/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn param_poly3_follows_the_v_deviation() {
+        let net = load_str(PARAM_POLY3).expect("import");
+        let end = net.lanes[0]
+            .center
+            .pose_at(net.lanes[0].center.length())
+            .position;
+        assert!(end.x > 8.0, "end x {}", end.x);
+        assert!(end.z < -3.0, "end z {} (should follow v to ~-5)", end.z);
     }
 
     #[test]

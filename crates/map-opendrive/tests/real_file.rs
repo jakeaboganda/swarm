@@ -9,6 +9,7 @@ use map_opendrive::load_file;
 
 const REAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/real_roads.xodr");
 const SPIRAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/spiral.xodr");
+const PARAM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/param_poly3.xodr");
 
 #[test]
 fn real_map_loads_with_finite_geometry() {
@@ -50,4 +51,20 @@ fn spiral_road_actually_curves() {
         "road did not curve: start {start:?} end {end:?} dot {}",
         start.dot(end)
     );
+}
+
+// esmini e6mini.xodr: a real highway built from paramPoly3 (+ line) geometry.
+// With paramPoly3 skipped, its curved segments would be dropped; this pins that
+// the real file imports into finite lanes.
+#[test]
+fn param_poly3_map_loads_with_finite_geometry() {
+    let net = load_file(PARAM).expect("paramPoly3 map should load");
+    assert!(net.driving_lanes().count() > 0, "no driving lanes");
+    for lane in &net.lanes {
+        assert!(
+            lane.center.points().iter().all(|p| p.is_finite()),
+            "lane {:?} has a non-finite point",
+            lane.id
+        );
+    }
 }
