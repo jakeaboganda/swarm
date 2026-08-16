@@ -182,11 +182,12 @@ pub fn spawn_agent(
     // A raycast vehicle is a box that rides on suspension and faces +X to
     // start; the planar embodiments are capsules at the spawn point.
     let is_car = matches!(embodiment, Embodiment::RaycastVehicle);
-    // Nudge a car forward onto the road so all four wheels clear the start
-    // edge (its rear wheels would otherwise hang off the back and miss the
-    // ground raycast). Proper map-aware spawning onto a lane is P3.
+    // Place a car ~10 m onto the road (so all four wheels clear the start
+    // edge) and at roughly its suspension ride height above the graded surface,
+    // so it settles gently instead of launching off over-compressed springs.
+    // Proper map-aware spawning onto a lane is P3.
     let position = if is_car {
-        position + Vec3::X * 10.0
+        Vec3::new(position.x + 10.0, 1.6, position.z)
     } else {
         position
     };

@@ -6,6 +6,7 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 use viz::{EntityDescriptor, EntityId, SceneEvent, ServerToViewer, Shape};
 
 use crate::client::VizStream;
+use crate::follow::{FollowCam, Followable};
 use crate::overlay::{DebugData, PerceivedBlip, SensorEnvelope, Trail};
 
 /// How many ticks behind the newest frame the render clock plays, so there
@@ -219,7 +220,15 @@ fn spawn_entity(
         transform,
     ));
     if descriptor.kind.is_dynamic() {
-        entity.insert((DebugData::default(), Trail::default(), History::default()));
+        entity.insert((
+            DebugData::default(),
+            Trail::default(),
+            History::default(),
+            Followable {
+                id: descriptor.id.clone(),
+                name: descriptor.name.clone(),
+            },
+        ));
     }
     if let Some(sensors) = descriptor.sensors {
         entity.insert(SensorEnvelope {
@@ -453,8 +462,13 @@ pub fn advance_playback(
 
 /// Frames the top-down camera to the arena once its bounds arrive (and if
 /// they change between scenarios).
-pub fn frame_camera(state: Res<ViewerState>, mut camera: Query<&mut Transform, With<Camera3d>>) {
-    if !state.is_changed() {
+pub fn frame_camera(
+    state: Res<ViewerState>,
+    follow: Res<FollowCam>,
+    mut camera: Query<&mut Transform, With<Camera3d>>,
+) {
+    // In follow mode the follow camera owns the transform.
+    if follow.target.is_some() || !state.is_changed() {
         return;
     }
     let Some(arena) = state.arena else {

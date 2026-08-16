@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{ExternalForce, QueryFilter, ReadRapierContext, Velocity};
 
@@ -183,7 +185,10 @@ pub fn drive_raycast_vehicles(
         let center = transform.translation;
         let up = *transform.up();
         let right = *transform.right();
-        let heading = horizontal(*transform.forward());
+        let forward = *transform.forward();
+        // Horizontal heading for the driver and drive direction; the full
+        // (possibly tilted) body axes place the wheels.
+        let heading = horizontal(forward);
 
         let forward_speed = velocity.linear.dot(heading);
         let controls = driver(&vehicle, *desired, heading, forward_speed, dt);
@@ -196,12 +201,19 @@ pub fn drive_raycast_vehicles(
         let mut total_force = Vec3::ZERO;
         let mut total_torque = Vec3::ZERO;
 
-        for (fb, lr, steered) in WHEELS {
+        let debug = std::env::var("VEHICLE_DEBUG").is_ok();
+        const NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
+        let mut wheels_dbg = String::new();
+
+        for (i, (fb, lr, steered)) in WHEELS.into_iter().enumerate() {
             let attach = center
-                + heading * (vehicle.half_wheelbase * fb)
+                + forward * (vehicle.half_wheelbase * fb)
                 + right * (vehicle.half_track * lr)
                 + up * vehicle.wheel_y;
             let Some((_, toi)) = context.cast_ray(attach, -up, max_reach, true, filter) else {
+                if debug {
+                    let _ = write!(wheels_dbg, " {}:air", NAMES[i]);
+                }
                 continue; // wheel off the ground: no force
             };
 
@@ -220,12 +232,15 @@ pub fn drive_raycast_vehicles(
             );
             apply(&mut total_force, &mut total_torque, up * spring, arm);
 
-            // Longitudinal drive/brake along the heading.
+            // Longitudinal drive/brake along the heading, applied through the
+            // center of mass (arm 0) so hard acceleration on the light chassis
+            // doesn't pitch it into a wheelie. Weight transfer is a later
+            // refinement.
             apply(
                 &mut total_force,
                 &mut total_torque,
                 heading * per_wheel_drive,
-                arm,
+                Vec3::ZERO,
             );
 
             // Lateral tire grip: cancel sideways slip at the wheel's axle.
@@ -233,21 +248,41 @@ pub fn drive_raycast_vehicles(
             let slip = point_velocity.dot(lateral);
             let grip = (-vehicle.grip * slip).clamp(-vehicle.max_lateral, vehicle.max_lateral);
             apply(&mut total_force, &mut total_torque, lateral * grip, arm);
+
+            if debug {
+                let _ = write!(
+                    wheels_dbg,
+                    " {}:c{:.2}/f{:.0}",
+                    NAMES[i], compression, spring
+                );
+            }
         }
 
         // Overwrite, not accumulate (ExternalForce persists across ticks).
         force.force = total_force;
         force.torque = total_torque;
 
-        if std::env::var("VEHICLE_DEBUG").is_ok() {
+        if debug {
+            // Chassis attitude: pitch = nose above horizontal (+ is nose-up),
+            // roll = right side above horizontal.
+            let pitch = transform.forward().y.asin().to_degrees();
+            let roll = right.y.asin().to_degrees();
             eprintln!(
-                "desired={:.2?} heading={:.2?} fspeed={:.2} drive={:.1} steer={:.2} force={:.1?}",
-                desired.value,
-                heading,
+                "y={:.2} pitch={:+.1} roll={:+.1} fspeed={:.2} drive={:.0} steer={:+.2} \
+                 F=({:.0},{:.0},{:.0}) T=({:.0},{:.0},{:.0}){}",
+                center.y,
+                pitch,
+                roll,
                 forward_speed,
                 controls.drive_force,
                 vehicle.steer,
-                total_force
+                total_force.x,
+                total_force.y,
+                total_force.z,
+                total_torque.x,
+                total_torque.y,
+                total_torque.z,
+                wheels_dbg,
             );
         }
     }

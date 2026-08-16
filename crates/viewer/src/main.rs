@@ -1,4 +1,5 @@
 mod client;
+mod follow;
 mod overlay;
 mod scene;
 
@@ -60,20 +61,31 @@ async fn main() {
         .insert_resource(RenderClock::default())
         .insert_resource(Diag::new(std::env::var("VIZ_DIAG").is_ok()))
         .insert_resource(overlay::OverlayToggles::default())
-        .add_systems(Startup, scene::setup_camera)
+        .insert_resource(follow::FollowCam::default())
+        .add_systems(Startup, (scene::setup_camera, follow::setup_follow_label))
         // Apply the stream, then advance the sim-time render clock to pose
-        // entities; overlays read the posed transforms, so run after.
+        // entities; the cameras and overlays read the posed transforms, so run
+        // after. follow_camera drives the camera in follow mode; frame_camera
+        // owns it in overview.
         .add_systems(
             Update,
             (
                 scene::apply_stream,
                 scene::advance_playback,
+                follow::follow_camera,
                 scene::frame_camera,
             )
                 .chain(),
         )
         .add_systems(Update, scene::log_timing.after(scene::advance_playback))
-        .add_systems(Update, overlay::toggle_overlays)
+        .add_systems(
+            Update,
+            (
+                overlay::toggle_overlays,
+                follow::follow_input,
+                follow::update_follow_label,
+            ),
+        )
         .add_systems(
             Update,
             (
