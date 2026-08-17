@@ -1,0 +1,31 @@
+{
+  "arena": { "width": 600.0, "depth": 600.0 },
+  "map": "maps/town07.xodr",
+  "seed": 7,
+  "roster": [
+    { "name": "car-0", "embodiment": "raycast_vehicle", "color": [0.90, 0.12, 0.12],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-1", "embodiment": "raycast_vehicle", "color": [0.95, 0.52, 0.10],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-2", "embodiment": "raycast_vehicle", "color": [0.92, 0.86, 0.12],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-3", "embodiment": "raycast_vehicle", "color": [0.20, 0.80, 0.25],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-4", "embodiment": "raycast_vehicle", "color": [0.10, 0.78, 0.70],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-5", "embodiment": "raycast_vehicle", "color": [0.22, 0.42, 0.95],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-6", "embodiment": "raycast_vehicle", "color": [0.62, 0.30, 0.92],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] },
+    { "name": "car-7", "embodiment": "raycast_vehicle", "color": [0.92, 0.22, 0.70],
+      "sensors": [{ "name": "radar", "source": "simulated",
+        "spec": { "range": 40.0, "fov_half_angle": 0.6, "position_noise": 0.2, "velocity_noise": 0.1, "latency_ticks": 2 } }] }
+  ]
+}

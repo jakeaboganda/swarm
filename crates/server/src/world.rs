@@ -33,6 +33,10 @@ const CAR_RIDE_HEIGHT: f32 = 1.2;
 /// A car spawns this far along its lane (arc length), so all four wheels clear
 /// the road's start edge rather than hanging off into space.
 const CAR_START_S: f32 = 10.0;
+/// When more cars share the map than there are forward lanes, cars that wrap
+/// onto the same lane are staggered this far apart (arc length) so they spawn
+/// single-file rather than stacked on top of each other.
+const CAR_SPACING: f32 = 14.0;
 /// An obstacle spawns this far along the lane -- downroad of the car, on the
 /// straight, so the car has clear room to perceive it and brake.
 const OBSTACLE_START_S: f32 = 32.0;
@@ -108,17 +112,42 @@ fn forward_lane(map: Option<&map::RoadNetwork>) -> Option<&map::Lane> {
     })
 }
 
+/// Every forward driving lane, in network order, for spreading a fleet of cars
+/// across the map.
+fn forward_lanes(map: Option<&map::RoadNetwork>) -> Vec<&map::Lane> {
+    map.map(|net| {
+        net.driving_lanes()
+            .filter(|l| l.direction == map::Direction::Forward)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Which forward lane (by position in `forward_lanes`) a car with spawn `index`
+/// takes, and how far along it to start. Cars fan out round-robin across the
+/// `n_lanes` forward lanes; any that wrap onto an already-used lane are
+/// staggered by `CAR_SPACING` so a fleet larger than the lane count still
+/// spawns single-file rather than stacked. `n_lanes` must be non-zero.
+fn car_placement(n_lanes: usize, index: usize) -> (usize, f32) {
+    let lane_idx = index % n_lanes;
+    let ring = index / n_lanes;
+    (lane_idx, CAR_START_S + ring as f32 * CAR_SPACING)
+}
+
 /// Where an agent's entity spawns and which way it faces. In the automotive
-/// world both are placed *in the forward lane*: a car at `CAR_START_S` (facing
-/// along it, at ride height), a non-car -- an obstacle -- further downroad at
-/// `OBSTACLE_START_S`, resting on the surface. A scaled body is lifted by its
-/// resting half-height so it settles rather than spawning embedded. Without a
-/// map (the arena world) everything spawns at its roster `base`.
+/// world both are placed *in a forward lane*: cars fan out across the forward
+/// lanes by spawn `index` (`car_placement`), each facing along its lane at ride
+/// height, so a fleet doesn't stack on one spot; a non-car -- an obstacle -- is
+/// dropped further downroad at `OBSTACLE_START_S`, resting on the surface. A
+/// scaled body is lifted by its resting half-height so it settles rather than
+/// spawning embedded. Without a map (the arena world) everything spawns at its
+/// roster `base`.
 pub fn agent_spawn_transform(
     embodiment: Embodiment,
     base: Vec3,
     map: Option<&map::RoadNetwork>,
     scale: f32,
+    index: usize,
 ) -> Transform {
     let rest_half = (AGENT_RADIUS + AGENT_HALF_HEIGHT) * scale;
     if !matches!(embodiment, Embodiment::RaycastVehicle) {
@@ -131,8 +160,10 @@ pub fn agent_spawn_transform(
         }
         return Transform::from_translation(Vec3::new(base.x, rest_half + 0.2, base.z));
     }
-    if let Some(lane) = forward_lane(map) {
-        let pose = lane.center.pose_at(CAR_START_S);
+    let lanes = forward_lanes(map);
+    if !lanes.is_empty() {
+        let (lane_idx, start_s) = car_placement(lanes.len(), index);
+        let pose = lanes[lane_idx].center.pose_at(start_s);
         let heading = if pose.heading.length_squared() > 1e-6 {
             pose.heading
         } else {
@@ -415,4 +446,34 @@ pub fn spawn_agent(
         )),
     };
     entity.id()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fleet_smaller_than_lanes_gets_a_distinct_lane_each() {
+        // With more forward lanes than cars, every car takes its own lane at
+        // the same start distance -- nobody wraps or stacks.
+        let n_lanes = 8;
+        let placements: Vec<_> = (0..5).map(|i| car_placement(n_lanes, i)).collect();
+        let lanes: Vec<usize> = placements.iter().map(|(l, _)| *l).collect();
+        assert_eq!(lanes, vec![0, 1, 2, 3, 4]);
+        for (_, start_s) in placements {
+            assert_eq!(start_s, CAR_START_S);
+        }
+    }
+
+    #[test]
+    fn fleet_larger_than_lanes_wraps_and_staggers() {
+        // Only two lanes for four cars: they round-robin across the lanes, and
+        // the wrapped cars start a `CAR_SPACING` further down so they spawn
+        // single-file behind the first pair rather than on top of them.
+        let n_lanes = 2;
+        assert_eq!(car_placement(n_lanes, 0), (0, CAR_START_S));
+        assert_eq!(car_placement(n_lanes, 1), (1, CAR_START_S));
+        assert_eq!(car_placement(n_lanes, 2), (0, CAR_START_S + CAR_SPACING));
+        assert_eq!(car_placement(n_lanes, 3), (1, CAR_START_S + CAR_SPACING));
+    }
 }

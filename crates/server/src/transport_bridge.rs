@@ -184,7 +184,7 @@ pub fn drain_transport(
                     let scale = roster.0.roster[index].scale.unwrap_or(1.0);
                     let base = spawn_position(index, roster.0.roster.len());
                     let transform =
-                        agent_spawn_transform(embodiment, base, map_world.0.as_ref(), scale);
+                        agent_spawn_transform(embodiment, base, map_world.0.as_ref(), scale, index);
                     let spawned_at = transform.translation;
                     let entity = spawn_agent(
                         &mut commands,
