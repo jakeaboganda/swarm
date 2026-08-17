@@ -316,6 +316,7 @@ pub fn spawn_agent(
         .map(|s| viz::SensorView {
             range: s.range,
             fov_half_angle: s.fov_half_angle,
+            vertical_fov_half_angle: s.vertical_fov_half_angle,
         });
     // A raycast vehicle is a box that rides on suspension; the planar
     // embodiments are capsules. The spawn pose is computed by the caller (see

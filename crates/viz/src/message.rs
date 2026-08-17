@@ -92,6 +92,7 @@ mod tests {
             sensors: Some(SensorView {
                 range: 20.0,
                 fov_half_angle: 1.2,
+                vertical_fov_half_angle: 0.5,
             }),
         }
     }

@@ -101,6 +101,17 @@ pub fn perceive(
                 }
             }
         }
+        // Vertical field of view: elevation above/below the sensor's horizontal
+        // plane. Combined with the horizontal cone this closes the wedge into a
+        // frustum. Heading-independent (a level sensor), so it applies even to a
+        // still agent. Skipped when unbounded (`>= PI`), leaving the wedge.
+        if spec.vertical_fov_half_angle < std::f32::consts::PI {
+            let horizontal = (offset.x * offset.x + offset.z * offset.z).sqrt();
+            let elevation = offset.y.atan2(horizontal);
+            if elevation.abs() > spec.vertical_fov_half_angle {
+                continue;
+            }
+        }
         // Line of sight: blocked if another entity sits across the sight line
         // between us and this one. (Walls don't occlude yet — that needs
         // interior obstacles the world doesn't have.)
@@ -192,9 +203,21 @@ mod tests {
         SensorSpec {
             range,
             fov_half_angle: fov,
+            // Unbounded vertical FOV: the classic wedge, so these tests are
+            // unaffected by the frustum cull.
+            vertical_fov_half_angle: FULL,
             position_noise,
             velocity_noise: 0.0,
             latency_ticks: 0,
+        }
+    }
+
+    /// A frustum spec: wide open horizontally, but limited vertically to
+    /// `v_half`, so only elevation gets exercised.
+    fn frustum_spec(v_half: f32) -> SensorSpec {
+        SensorSpec {
+            vertical_fov_half_angle: v_half,
+            ..spec(100.0, FULL, 0.0)
         }
     }
 
@@ -251,6 +274,56 @@ mod tests {
             &mut Rng::seed(1),
         );
         assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn above_vertical_fov_is_culled_but_level_target_kept() {
+        // 45° vertical half-angle. "level" is dead ahead at the same height;
+        // "high" is 10 m ahead but 20 m up (~63° elevation) -- outside the cone.
+        let others = vec![
+            ent("level", Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO),
+            ent("high", Vec3::new(10.0, 20.0, 0.0), Vec3::ZERO),
+        ];
+        let d = perceive(
+            &frustum_spec(std::f32::consts::FRAC_PI_4),
+            Vec3::ZERO,
+            Vec3::X,
+            &others,
+            &mut Rng::seed(1),
+        );
+        assert_eq!(
+            d.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            ["level"]
+        );
+    }
+
+    #[test]
+    fn within_vertical_fov_is_kept() {
+        // Same 45° cone, but the raised target is only 5 m up at 10 m out
+        // (~27° elevation) -- inside the cone, so it survives.
+        let others = vec![ent("raised", Vec3::new(10.0, 5.0, 0.0), Vec3::ZERO)];
+        let d = perceive(
+            &frustum_spec(std::f32::consts::FRAC_PI_4),
+            Vec3::ZERO,
+            Vec3::X,
+            &others,
+            &mut Rng::seed(1),
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn unbounded_vertical_keeps_a_target_straight_overhead() {
+        // The wedge default (vertical FOV >= PI) sees a target directly above.
+        let others = vec![ent("overhead", Vec3::new(0.0, 30.0, 0.0), Vec3::ZERO)];
+        let d = perceive(
+            &spec(100.0, FULL, 0.0),
+            Vec3::ZERO,
+            Vec3::X,
+            &others,
+            &mut Rng::seed(1),
+        );
+        assert_eq!(d.len(), 1);
     }
 
     #[test]

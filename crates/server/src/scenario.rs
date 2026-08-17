@@ -67,6 +67,7 @@ fn validate_sensors(slot: &AgentSlot) -> Result<()> {
                 for (field, value) in [
                     ("range", spec.range),
                     ("fov_half_angle", spec.fov_half_angle),
+                    ("vertical_fov_half_angle", spec.vertical_fov_half_angle),
                     ("position_noise", spec.position_noise),
                     ("velocity_noise", spec.velocity_noise),
                 ] {

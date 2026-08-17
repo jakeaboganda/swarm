@@ -1,0 +1,26 @@
+{
+  "arena": { "width": 80.0, "depth": 80.0 },
+  "map": "demo",
+  "seed": 7,
+  "roster": [
+    {
+      "name": "car",
+      "embodiment": "raycast_vehicle",
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 30.0,
+            "fov_half_angle": 0.8,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.15,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    { "name": "obstacle", "embodiment": "holonomic", "color": [0.9, 0.1, 0.1], "scale": 3.0 }
+  ]
+}

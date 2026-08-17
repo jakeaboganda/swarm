@@ -110,6 +110,10 @@ scripts/run.sh scenario_road_car.json clients/python/drive_road_demo.py
 # Brake for a *perceived* obstacle: the car sees a barrier on radar and stops
 scripts/run.sh scenario_road_obstacle.json clients/python/brake_road_demo.py
 
+# Same, but the radar is a frustum (finite vertical FOV) instead of a wedge --
+# press O in the viewer to see the sensing volume close top and bottom
+scripts/run.sh scenario_road_frustum.json clients/python/brake_road_demo.py
+
 # Perception matters: two identical chasers, one with a short-range radar,
 # rear-ends its target because it "sees" it too late
 scripts/run.sh scenario_reflex_demo.json clients/python/perception_reflex_demo.py

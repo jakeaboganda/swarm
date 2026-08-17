@@ -234,6 +234,7 @@ fn spawn_entity(
         entity.insert(SensorEnvelope {
             range: sensors.range,
             fov_half_angle: sensors.fov_half_angle,
+            vertical_fov_half_angle: sensors.vertical_fov_half_angle,
         });
     }
     map.0.insert(descriptor.id.clone(), entity.id());

@@ -88,13 +88,16 @@ pub struct EntityDescriptor {
     pub sensors: Option<SensorView>,
 }
 
-/// Just the two numbers a viewer needs to draw an agent's sensing region:
-/// max range and FOV half-angle (radians; `>= PI` means full 360°). Kept
-/// viz-local so viz doesn't depend on the sensor crates' full `SensorSpec`.
+/// The few numbers a viewer needs to draw an agent's sensing region: max
+/// range, horizontal FOV half-angle, and vertical FOV half-angle (radians;
+/// `>= PI` means unbounded on that axis — full 360° horizontally, or a
+/// vertically-unbounded wedge). Kept viz-local so viz doesn't depend on the
+/// sensor crates' full `SensorSpec`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SensorView {
     pub range: f32,
     pub fov_half_angle: f32,
+    pub vertical_fov_half_angle: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

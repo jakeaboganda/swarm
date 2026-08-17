@@ -80,6 +80,13 @@ pub struct SensorSpec {
     /// Half-angle of the forward detection cone (radians), relative to the
     /// agent's heading. `>= PI` means no field-of-view limit (full 360°).
     pub fov_half_angle: f32,
+    /// Half-angle of the *vertical* detection cone (radians): how far up/down
+    /// from the sensor's horizontal plane a target may be and still be seen.
+    /// Combined with `fov_half_angle` this makes a frustum (a target is culled
+    /// if it exceeds either angle). `>= PI` (the default) means no vertical
+    /// limit -- the vertically-unbounded wedge, i.e. today's behavior.
+    #[serde(default = "full_angle")]
+    pub vertical_fov_half_angle: f32,
     /// Gaussian sigma applied to each detected position component.
     pub position_noise: f32,
     /// Gaussian sigma applied to each detected velocity component.
@@ -91,13 +98,20 @@ pub struct SensorSpec {
     pub latency_ticks: u32,
 }
 
+/// The "no limit" angle used as the default for both FOV half-angles: at or
+/// past `PI`, the corresponding cull is skipped entirely.
+fn full_angle() -> f32 {
+    std::f32::consts::PI
+}
+
 impl Default for SensorSpec {
     fn default() -> Self {
         Self {
             // Finite (not INFINITY: serde_json renders that as null) but far
             // larger than any arena.
             range: 1.0e6,
-            fov_half_angle: std::f32::consts::PI,
+            fov_half_angle: full_angle(),
+            vertical_fov_half_angle: full_angle(),
             position_noise: 0.0,
             velocity_noise: 0.0,
             latency_ticks: 0,
@@ -156,6 +170,7 @@ mod tests {
                             spec: Some(SensorSpec {
                                 range: 20.0,
                                 fov_half_angle: 1.2,
+                                vertical_fov_half_angle: 0.3,
                                 position_noise: 0.3,
                                 velocity_noise: 0.1,
                                 latency_ticks: 4,
@@ -204,6 +219,7 @@ mod tests {
         let spec = SensorSpec {
             range: 20.0,
             fov_half_angle: 1.2,
+            vertical_fov_half_angle: 0.3,
             position_noise: 0.3,
             velocity_noise: 0.1,
             latency_ticks: 4,
@@ -211,6 +227,21 @@ mod tests {
         let json = serde_json::to_string(&spec).expect("serialize");
         let back: SensorSpec = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(spec, back);
+    }
+
+    #[test]
+    fn omitted_vertical_fov_defaults_to_unbounded() {
+        // A spec written before the vertical FOV existed (no such field) must
+        // still parse -- to an unbounded vertical cone, i.e. the wedge.
+        let json = r#"{
+            "range": 20.0,
+            "fov_half_angle": 1.2,
+            "position_noise": 0.0,
+            "velocity_noise": 0.0,
+            "latency_ticks": 0
+        }"#;
+        let spec: SensorSpec = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(spec.vertical_fov_half_angle, std::f32::consts::PI);
     }
 
     #[test]

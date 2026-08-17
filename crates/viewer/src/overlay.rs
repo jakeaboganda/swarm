@@ -41,6 +41,10 @@ pub struct PerceivedBlip {
 pub struct SensorEnvelope {
     pub range: f32,
     pub fov_half_angle: f32,
+    /// Vertical FOV half-angle (radians). `>= PI` = unbounded: draw the
+    /// vertically-unbounded wedge prism. Finite: draw an honest frustum that
+    /// closes top and bottom at this elevation.
+    pub vertical_fov_half_angle: f32,
 }
 
 /// Which perception debug sub-layers are drawn. Both on by default; toggled
@@ -170,11 +174,13 @@ pub fn draw_detections(
     }
 }
 
-/// Draws each agent's sensing region: a range circle, plus an extruded FOV
-/// prism around its current facing when the FOV is limited. The prism follows
-/// the rendered facing (which tracks travel direction), so a stationary agent
-/// — which senses 360° — shows just the ring. Skipped when range is
-/// effectively unlimited (see `MAX_ENVELOPE_RANGE`).
+/// Draws each agent's sensing region: a range circle, plus -- when the FOV is
+/// limited -- the sensed volume around its current facing. That volume is a
+/// vertically-unbounded wedge prism by default, or an honest frustum when the
+/// sensor has a finite vertical FOV. It follows the rendered facing (which
+/// tracks travel direction), so a stationary agent -- which senses 360° --
+/// shows just the ring. Skipped when range is effectively unlimited (see
+/// `MAX_ENVELOPE_RANGE`).
 pub fn draw_sensor_envelope(
     toggles: Res<OverlayToggles>,
     mut gizmos: Gizmos,
@@ -202,14 +208,27 @@ pub fn draw_sensor_envelope(
         if heading == Vec3::ZERO {
             continue; // stationary: senses 360°, ring only
         }
-        draw_fov_prism(
-            &mut gizmos,
-            center,
-            heading,
-            env.range,
-            env.fov_half_angle,
-            color,
-        );
+        if env.vertical_fov_half_angle < std::f32::consts::PI {
+            // A finite vertical FOV closes the wedge into a frustum.
+            draw_fov_frustum(
+                &mut gizmos,
+                center,
+                heading,
+                env.range,
+                env.fov_half_angle,
+                env.vertical_fov_half_angle,
+                color,
+            );
+        } else {
+            draw_fov_prism(
+                &mut gizmos,
+                center,
+                heading,
+                env.range,
+                env.fov_half_angle,
+                color,
+            );
+        }
     }
 }
 
@@ -252,5 +271,50 @@ fn draw_fov_prism(
     gizmos.line(base, top, color);
     for i in [0, SEGMENTS / 2, SEGMENTS] {
         gizmos.line(floor[i], ceil[i], color);
+    }
+}
+
+/// Draws the FOV as an honest frustum: bounded in azimuth (`hfov_half`) and
+/// elevation (`vfov_half`) out to slant `range`, apex at the sensor. The top
+/// and bottom arcs sit at `+/- vfov_half` elevation and converge back to the
+/// apex, so unlike the wedge prism the volume closes vertically -- matching a
+/// sensor that culls both horizontally and vertically.
+#[allow(clippy::too_many_arguments)]
+fn draw_fov_frustum(
+    gizmos: &mut Gizmos,
+    origin: Vec3,
+    heading: Vec3,
+    range: f32,
+    hfov_half: f32,
+    vfov_half: f32,
+    color: Color,
+) {
+    const SEGMENTS: usize = 16;
+    // A unit direction at azimuth `az` (about +Y from heading) and elevation
+    // `el` (up from the horizontal plane), scaled to `range` from the apex.
+    let point = |az: f32, el: f32| -> Vec3 {
+        let h_dir = Quat::from_rotation_y(az) * heading;
+        origin + (h_dir * el.cos() + Vec3::Y * el.sin()) * range
+    };
+    // The far-cap arc at a given elevation, swept across the azimuth FOV.
+    let arc = |el: f32| -> Vec<Vec3> {
+        (0..=SEGMENTS)
+            .map(|i| {
+                let az = hfov_half * (2.0 * (i as f32 / SEGMENTS as f32) - 1.0);
+                point(az, el)
+            })
+            .collect()
+    };
+    let top = arc(vfov_half);
+    let bottom = arc(-vfov_half);
+    // The four corner rays from the apex.
+    for corner in [top[0], top[SEGMENTS], bottom[0], bottom[SEGMENTS]] {
+        gizmos.line(origin, corner, color);
+    }
+    // The far cap: top and bottom arcs, closed at the sides and middle.
+    gizmos.linestrip(top.iter().copied(), color);
+    gizmos.linestrip(bottom.iter().copied(), color);
+    for i in [0, SEGMENTS / 2, SEGMENTS] {
+        gizmos.line(bottom[i], top[i], color);
     }
 }
