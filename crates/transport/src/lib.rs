@@ -1,3 +1,10 @@
+//! The async *agent* WebSocket server (`:4000`). Accepts JSON `ClientMessage`s
+//! and emits `ServerMessage`s, runs a heartbeat, and bridges async I/O into the
+//! sim's synchronous ECS tick over bounded channels (`TransportHandle`: an
+//! inbound queue the tick drains, plus a send handle). A malformed message gets
+//! an `error` reply and keeps the connection open -- it is never treated as a
+//! disconnect. Depends only on `protocol`.
+
 mod connection;
 mod handle;
 mod types;

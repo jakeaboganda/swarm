@@ -1,3 +1,11 @@
+//! Pluggable, per-entity vehicle movement. Each embodiment is an ECS component
+//! selected by an agent's `embodiment`, dispatched by a generic system. Three
+//! force-based models -- `Holonomic`, `CarLike`, `FullVehicle` -- implement the
+//! `MovementModel::drive` seam (desired velocity -> a force + yaw torque); the
+//! `RaycastVehicle` is the exception, applying its own per-wheel suspension /
+//! drive / grip forces to ride the road's terrain. No networking or scenario
+//! knowledge.
+
 mod carlike;
 mod fullvehicle;
 mod holonomic;

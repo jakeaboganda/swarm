@@ -8,21 +8,26 @@ facts and rules needed to work here day-to-day.
 
 ## What this is
 
-A playground world for agentic swarms: a simple 3D physics simulation that
-external agent processes (which may be LLM-driven, and therefore slow and
-occasionally unreliable) connect to and control entities within. It's a dev
-toy — an evolving project, not a fixed-spec deliverable.
+A playground for agentic driving: a 3D physics simulation that external agent
+processes (which may be LLM-driven, and therefore slow and occasionally
+unreliable) connect to and drive vehicles within — in a flat, walled **arena**,
+or on a real **road network** (a hand-authored road or a loaded OpenDRIVE map).
+It's a dev toy — an evolving project, not a fixed-spec deliverable. It grew from
+a bare arena swarm into an agent-facing driving sandbox; both worlds coexist,
+selected per scenario.
 
 ## Architecture summary
 
 - **Language: Rust. Engine: Bevy + `bevy_rapier3d`.** The **simulation is
   headless** (ECS + physics, no window/rendering); rendering lives in
   separate **viewer** processes that subscribe to a visualization stream.
-- **Two independent pathways meet at the server:** agents connect over
-  **WebSocket + JSON** (`transport`) to *control* entities; viewers connect
-  over a separate **WebSocket + MessagePack** stream (`viz`) to *observe*.
-  Viewers are passive and lifecycle-independent — connecting or dropping one
-  never affects the sim.
+- **Three independent pathways meet at the server**, each on its own port:
+  agents connect over **WebSocket + JSON** (`transport`, `:4000`) to *control*
+  entities; viewers connect over a separate **WebSocket + MessagePack** stream
+  (`viz`, `:4001`) to *observe*; and agents receive their **simulated
+  perception** over a third stream (`perception`, JSON, `:4002`). Viewers are
+  passive and lifecycle-independent — connecting or dropping one never affects
+  the sim.
 - **Agents are external processes**, connecting over **WebSocket + JSON**.
 - **Simulation is continuous real-time** (~60Hz Bevy/Rapier tick),
   independent of agent think-time. Each agent has a current action that
@@ -50,16 +55,19 @@ toy — an evolving project, not a fixed-spec deliverable.
   physics freezes in place (for inspection), remaining agents are
   notified, and the process keeps running until manually killed.
 - **Physics is ground-constrained**: gravity on, **roll and pitch locked**
-  (no tipping/rolling). `Holonomic` and `CarLike` also lock yaw and steer via
-  horizontal forces only; the invariant is relaxed to allow **yaw as a
-  physical DOF for an embodiment that opts in** — the single-track
-  `FullVehicle`, whose heading is real physics (tire-slip lateral forces + a
-  yaw torque) rather than a cosmetic facing (see `DECISIONS.md`,
-  "Higher-fidelity vehicle dynamics"). Movement model is a **pluggable,
-  per-entity** component/trait selected by each agent's `embodiment`
-  (`Holonomic`, `CarLike`, and `FullVehicle` ship). Models implement
+  (no tipping/rolling) by default. `Holonomic` and `CarLike` also lock yaw and
+  steer via horizontal forces only. The invariant relaxes for embodiments that
+  opt in: `FullVehicle` unlocks **yaw** as a physical DOF (its heading is real
+  physics — tire-slip lateral forces + a yaw torque — not a cosmetic facing);
+  `RaycastVehicle` unlocks **roll and pitch** too, so it leans on banking and
+  follows the road's grade (see `DECISIONS.md`, "Higher-fidelity vehicle
+  dynamics"). Movement model is a **pluggable, per-entity** component/trait
+  selected by each agent's `embodiment` (`Holonomic`, `CarLike`, `FullVehicle`,
+  `RaycastVehicle` ship). Force-based models implement
   `drive(&mut self, desired, body, dt) -> Actuation` (a force plus a yaw
-  torque), carrying state that evolves over time (a car's steering angle).
+  torque), carrying state that evolves over time (a car's steering angle); the
+  raycast vehicle is the exception — it applies its own per-wheel suspension /
+  drive / grip forces directly (it doesn't fit the `drive` seam).
 - **Sensors are first-class, world-equipped devices.** Each agent's roster
   slot declares `sensors: Vec<SensorDef>` — named devices, each `ground_truth`
   or `simulated` (with a `spec`: range, FOV half-angle, position/velocity
@@ -83,18 +91,35 @@ toy — an evolving project, not a fixed-spec deliverable.
   reflex-only fail-safes — never streamed (an agent never *sees* ground
   truth). The **viz** debug layer separately carries a *human-only*
   perception overlay (see below); no agent consumes sensor data from viz.
+- **The world is arena or road**, chosen by the scenario's optional `map`
+  field. No `map` builds the flat, walled arena. A `map` builds a **road world**
+  from an internal, format-agnostic road-network model (`map::RoadNetwork`):
+  `"demo"` is the built-in hand-authored road; a path ending in `.xodr` is baked
+  from a real **OpenDRIVE** file by the `map-opendrive` importer. The road is
+  one static trimesh collider the raycast vehicle drives on. Curves are baked to
+  polylines at load, so consumers only ever sample points.
+- **Roads are a known prior; traffic is perceived.** In a road world the static
+  map is **delivered to the agent at join** (the `joined` message's `map`: lane
+  centerlines, widths, and the connectivity graph) — perfect and free. Dynamic
+  obstacles are still perceived through the impaired `:4002` pathway. An agent
+  lays a lane-following path from the delivered map, or asks the server to
+  **route**: `request_route{from,to,speed}` runs `map`'s Dijkstra router over the
+  connectivity graph (lane successors through junctions + lane-change neighbors)
+  and returns a plan with the agent's speed stamped on. The plan (and its speed)
+  stays the agent's — the server only does the mechanical pathfinding.
 
 ## Crate layout
 
-Cargo workspace, eight crates:
+Cargo workspace, ten crates:
 
 - **`protocol`** — shared `serde` types for the *agent* pathway: WebSocket
-  messages (`join`, plan submission, reflex-rule registration,
-  `get_state`/snapshot, `reflex_fired`/`scenario_ended`/`error` events), and
-  the scenario JSON schema (world/walls + agent roster + per-agent
+  messages (`join`, plan submission, reflex-rule registration, `request_route`;
+  `get_state`/snapshot, `joined` — which carries the delivered `map` in a road
+  world — `reflex_fired`/`route`/`scenario_ended`/`error` events), and the
+  scenario JSON schema (arena + optional `map` + agent roster + per-agent
   `SensorDef`s + `seed`). Depends on nothing else in the workspace.
 - **`movement`** — the pluggable embodiment trait +
-  `Holonomic`/`CarLike`/`FullVehicle` implementations. No
+  `Holonomic`/`CarLike`/`FullVehicle`/`RaycastVehicle` implementations. No
   networking/scenario knowledge.
 - **`sensors`** — sensor readings (`time_to_collision`/`distance_to`/`speed`),
   the perception-impairment pipeline (`perceive`: range/FOV cull + seeded
@@ -114,11 +139,24 @@ Cargo workspace, eight crates:
   (`Hello`, per-device `PerceptionFrame`) and a per-agent-routed push server
   (each agent receives only its own perception, unlike viz's identical
   broadcast). Independent of `protocol`/`viz`.
-- **`server`** — the headless simulation binary: loads the scenario, runs
-  Rapier physics, dispatches movement per entity, computes per-device
-  perceived worlds, resolves reflex-vs-plan arbitration each tick, manages
-  scenario lifecycle, and drives the viz + perception broadcasts. Owns the
-  tokio runtime; Bevy runs on the main thread.
+- **`map`** — the format-agnostic **road-network model** (`RoadNetwork`): lanes
+  (baked centerline polylines, width, travel direction), the drive-direction
+  connectivity graph (`successors`/`predecessors`/`neighbors`), a surface-mesh
+  tessellator, and the router (`route(from, to)` → a sampled path over the
+  graph). Also the built-in hand-authored `demo_road`. Pure geometry; no
+  networking, no OpenDRIVE knowledge.
+- **`map-opendrive`** — the pure-Rust **OpenDRIVE (`.xodr`) importer** that
+  bakes a real map into `map::RoadNetwork` at load: line/arc/spiral/paramPoly3/
+  poly3 geometry, elevation, per-lane widths, lane offsets, multiple lane
+  sections, and road/lane/junction connectivity. Depends on `map` + `roxmltree`;
+  geometry cross-checked against the reference C++ libOpenDRIVE.
+- **`server`** — the headless simulation binary: loads the scenario, builds the
+  world (flat **arena**, or a **road** world — the road's trimesh collider +
+  raycast-vehicle agents, from `demo_road` or an imported `.xodr`), runs Rapier
+  physics, dispatches movement per entity, computes per-device perceived worlds,
+  resolves reflex-vs-plan arbitration each tick, answers `request_route`, manages
+  scenario lifecycle, and drives the viz + perception broadcasts. Owns the tokio
+  runtime; Bevy runs on the main thread.
 - **`viewer`** — the reference 3D visualizer binary: a Bevy app that
   subscribes to the `viz` stream and renders the scene + debug overlays
   (plans, trails, and the perception overlay). One of potentially many
@@ -130,8 +168,9 @@ Cargo workspace, eight crates:
   `-D warnings`. Anything clippy flags must be fixed or explicitly
   `#[allow]`'d with a comment explaining why.
 - **Error handling**: `Result`-based throughout. Library crates
-  (`protocol`, `movement`, `sensors`, `transport`, `viz`, `perception`) define
-  their own error enums via `thiserror` where they surface errors; the
+  (`protocol`, `movement`, `sensors`, `transport`, `viz`, `perception`, `map`,
+  `map-opendrive`) define their own error enums via `thiserror` where they
+  surface errors (e.g. `map-opendrive`'s `ImportError`); the
   `server` and `viewer` binaries may use `anyhow` for top-level error
   bubbling. Avoid `unwrap`/`expect` outside tests, except
   for genuinely infallible cases — and those get a short comment saying
@@ -147,16 +186,20 @@ Cargo workspace, eight crates:
 - **Testing**: required for the pure/deterministic logic crates —
   `protocol`/`viz`/`perception` (serialization round-trips), `movement`
   (seek-controller math), `sensors` (predicate evaluation, perception
-  culling/noise, hysteresis, priority/tiebreak, device resolution). Networking
-  crates (`transport`, `viz` broadcaster, `perception` server) also carry
-  integration tests over a real socket. Not required for `server`/`viewer`
-  (ECS wiring, scenario timing, rendering) — that code is better verified by
-  running the app than by unit tests.
+  culling/noise, hysteresis, priority/tiebreak, device resolution), `map`
+  (geometry sampling, nearest-lane, routing/lane-changes), and `map-opendrive`
+  (geometry per primitive, elevation/widths/laneOffset, multi-section,
+  connectivity, plus real-`.xodr` smoke tests). Networking crates (`transport`,
+  `viz` broadcaster, `perception` server) also carry integration tests over a
+  real socket. Not required for `server`/`viewer` (ECS wiring, scenario timing,
+  rendering) — that code is better verified by running the app than by unit
+  tests.
 - **Dependencies**: free to add anything already implied by this file
   (`bevy`, `bevy_rapier3d`, `tokio`, `tokio-tungstenite`, `serde`/
-  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`) without asking. Anything
-  outside that set — a new crate not implied by an existing decision — gets
-  flagged before adding, even if minor.
+  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree` — the
+  last for the OpenDRIVE importer) without asking. Anything outside that set —
+  a new crate not implied by an existing decision — gets flagged before adding,
+  even if minor.
 - **Commit messages**: must follow [Conventional Commits](https://www.conventionalcommits.org/)
   (`type(scope): summary`, e.g. `feat(sensors): add hysteresis to
   time_to_collision`).
