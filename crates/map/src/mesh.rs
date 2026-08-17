@@ -71,6 +71,7 @@ mod tests {
                 width: 4.0,
                 successors: Vec::new(),
                 predecessors: Vec::new(),
+                neighbors: Vec::new(),
             }],
         };
         let mesh = net.surface_mesh();

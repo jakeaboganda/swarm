@@ -39,6 +39,9 @@ pub struct Lane {
     pub successors: Vec<LaneId>,
     /// Lanes that drive into this lane -- the reverse of `successors`.
     pub predecessors: Vec<LaneId>,
+    /// Adjacent same-section, same-direction lanes you can change into (lateral
+    /// lane-change edges). Empty if there's no neighbor to change to.
+    pub neighbors: Vec<LaneId>,
 }
 
 /// The "compiled map": everything a consumer needs, baked and format-agnostic.
@@ -95,6 +98,7 @@ mod tests {
             width: 3.5,
             successors: Vec::new(),
             predecessors: Vec::new(),
+            neighbors: Vec::new(),
         }
     }
 

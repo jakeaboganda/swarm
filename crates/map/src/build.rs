@@ -30,6 +30,7 @@ pub fn demo_road() -> RoadNetwork {
                 width: LANE_WIDTH,
                 successors: Vec::new(),
                 predecessors: Vec::new(),
+                neighbors: Vec::new(),
             },
             Lane {
                 id: LaneId(1),
@@ -39,6 +40,7 @@ pub fn demo_road() -> RoadNetwork {
                 width: LANE_WIDTH,
                 successors: Vec::new(),
                 predecessors: Vec::new(),
+                neighbors: Vec::new(),
             },
         ],
     }

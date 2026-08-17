@@ -463,6 +463,9 @@ fn emit_section(
         } else {
             Direction::Forward
         };
+        // Lanes emitted on this side, center-outward, as (id, index in `out`) --
+        // consecutive ones are lateral neighbors (lane-change edges).
+        let mut emitted: Vec<(LaneId, usize)> = Vec::new();
         for (i, lane) in side.iter().enumerate() {
             let points = sample_lane(
                 geoms,
@@ -490,6 +493,7 @@ fn emit_section(
                 succ_link: lane.succ_link,
                 pred_link: lane.pred_link,
             });
+            emitted.push((id, out.len()));
             out.push(Lane {
                 id,
                 kind: LaneKind::Driving,
@@ -499,7 +503,19 @@ fn emit_section(
                 // Filled by links::resolve once all lanes are registered.
                 successors: Vec::new(),
                 predecessors: Vec::new(),
+                neighbors: Vec::new(),
             });
+        }
+        // Consecutive same-side lanes are each other's lane-change neighbors.
+        for k in 0..emitted.len() {
+            let mut nbrs = Vec::new();
+            if k > 0 {
+                nbrs.push(emitted[k - 1].0);
+            }
+            if k + 1 < emitted.len() {
+                nbrs.push(emitted[k + 1].0);
+            }
+            out[emitted[k].1].neighbors = nbrs;
         }
     }
 }

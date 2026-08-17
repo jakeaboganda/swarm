@@ -18,6 +18,7 @@ mod build;
 mod geometry;
 mod mesh;
 mod network;
+mod route;
 
 pub use build::demo_road;
 pub use geometry::{Polyline, Pose, Projection};
