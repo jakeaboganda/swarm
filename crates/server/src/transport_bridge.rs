@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{DefaultRapierContext, RapierConfiguration, Velocity};
-use protocol::messages::{AgentId, ClientMessage, EntityState, ServerMessage, StateSnapshot};
+use protocol::messages::{
+    AgentId, ClientMessage, EntityState, ServerMessage, StateSnapshot, Waypoint,
+};
 use protocol::Vec3 as WireVec3;
 use transport::{ConnectionEvent, TransportHandle};
 
@@ -243,6 +245,30 @@ pub fn drain_transport(
                         entities,
                     }),
                 );
+            }
+            ClientMessage::RequestRoute { from, to, speed } => {
+                // Route over the loaded map, stamping the agent's cruise speed
+                // onto every waypoint (the plan owns speed). Empty if no map or
+                // no path -- the agent decides what to do with the reply.
+                let waypoints = map_world
+                    .0
+                    .as_ref()
+                    .and_then(|net| {
+                        net.route(
+                            Vec3::new(from.x, from.y, from.z),
+                            Vec3::new(to.x, to.y, to.z),
+                        )
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| Waypoint {
+                        position: to_wire(p),
+                        speed,
+                    })
+                    .collect();
+                transport
+                    .0
+                    .send(connection, ServerMessage::Route { waypoints });
             }
         }
     }

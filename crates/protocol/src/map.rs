@@ -32,6 +32,15 @@ pub struct LaneData {
     pub direction: LaneDirection,
     pub width: f32,
     pub centerline: Vec<Vec3>,
+    /// Lane ids reachable by driving off this lane's exit end, the lanes that
+    /// drive into it, and adjacent lane-change neighbors -- the connectivity
+    /// graph, so an agent can route itself. Empty when the map has no topology.
+    #[serde(default)]
+    pub successors: Vec<u64>,
+    #[serde(default)]
+    pub predecessors: Vec<u64>,
+    #[serde(default)]
+    pub neighbors: Vec<u64>,
 }
 
 /// The road handed to an agent at join: its lanes. Static and perfect -- the
@@ -56,6 +65,9 @@ mod tests {
                     direction: LaneDirection::Forward,
                     width: 3.5,
                     centerline: vec![Vec3::new(0.0, 0.0, 1.75), Vec3::new(10.0, 0.4, 1.75)],
+                    successors: vec![2, 3],
+                    predecessors: vec![],
+                    neighbors: vec![1],
                 },
                 LaneData {
                     id: 1,
@@ -63,6 +75,9 @@ mod tests {
                     direction: LaneDirection::Backward,
                     width: 3.5,
                     centerline: vec![Vec3::new(0.0, 0.0, -1.75), Vec3::new(10.0, 0.4, -1.75)],
+                    successors: vec![],
+                    predecessors: vec![4],
+                    neighbors: vec![0],
                 },
             ],
         };

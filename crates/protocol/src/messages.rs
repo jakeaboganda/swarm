@@ -57,10 +57,24 @@ pub struct ReflexRule {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    Join { name: String },
-    SubmitPlan { waypoints: Vec<Waypoint> },
-    RegisterReflexes { rules: Vec<ReflexRule> },
+    Join {
+        name: String,
+    },
+    SubmitPlan {
+        waypoints: Vec<Waypoint>,
+    },
+    RegisterReflexes {
+        rules: Vec<ReflexRule>,
+    },
     GetState,
+    /// Ask the server to route between two world positions at `speed`. The
+    /// reply is a `Route` of waypoints (the server snaps to lanes, pathfinds,
+    /// and stamps `speed`) -- the agent still owns whether to submit it.
+    RequestRoute {
+        from: Vec3,
+        to: Vec3,
+        speed: f32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +117,11 @@ pub enum ServerMessage {
     Error {
         message: String,
     },
+    /// A computed route as a plan the agent can submit (or ignore). Empty
+    /// `waypoints` means no route was found.
+    Route {
+        waypoints: Vec<Waypoint>,
+    },
 }
 
 #[cfg(test)]
@@ -140,6 +159,11 @@ mod tests {
             }],
         });
         round_trip(&ClientMessage::GetState);
+        round_trip(&ClientMessage::RequestRoute {
+            from: Vec3::ZERO,
+            to: Vec3::new(50.0, 0.0, -20.0),
+            speed: 6.0,
+        });
     }
 
     #[test]
@@ -159,6 +183,9 @@ mod tests {
                     direction: crate::map::LaneDirection::Forward,
                     width: 3.5,
                     centerline: vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)],
+                    successors: vec![1],
+                    predecessors: vec![],
+                    neighbors: vec![],
                 }],
             }),
         });
@@ -181,6 +208,12 @@ mod tests {
         });
         round_trip(&ServerMessage::Error {
             message: "bad json".into(),
+        });
+        round_trip(&ServerMessage::Route {
+            waypoints: vec![Waypoint {
+                position: Vec3::new(1.0, 0.0, 2.0),
+                speed: 6.0,
+            }],
         });
     }
 

@@ -92,6 +92,9 @@ pub fn to_map_data(net: &map::RoadNetwork) -> MapData {
                 },
                 width: lane.width,
                 centerline: lane.center.points().iter().map(to_wire_vec).collect(),
+                successors: lane.successors.iter().map(|l| l.0 as u64).collect(),
+                predecessors: lane.predecessors.iter().map(|l| l.0 as u64).collect(),
+                neighbors: lane.neighbors.iter().map(|l| l.0 as u64).collect(),
             })
             .collect(),
     }
