@@ -1,0 +1,7 @@
+{
+  "arena": { "width": 600.0, "depth": 600.0 },
+  "map": "maps/town07.xodr",
+  "roster": [
+    { "name": "car", "embodiment": "raycast_vehicle" }
+  ]
+}
