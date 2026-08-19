@@ -29,10 +29,26 @@ selected per scenario.
   passive and lifecycle-independent — connecting or dropping one never affects
   the sim.
 - **Agents are external processes**, connecting over **WebSocket + JSON**.
-- **Simulation is continuous real-time** (~60Hz Bevy/Rapier tick),
+- **Simulation is continuous real-time** (64Hz Bevy/Rapier tick),
   independent of agent think-time. Each agent has a current action that
   stays in effect ("sticky") until replaced — the world never waits on a
   slow agent.
+- **The scenario owns time.** A scenario's optional `time` block sets its
+  run **duration** (in sim-seconds; omitted = unbounded, ends only on
+  disconnect) and its **pace** — `realtime` (one sim-second per wall-second,
+  for live viewing) or `afap` (ticks at CPU speed for headless batch runs;
+  same sim-time, reached sooner in wall-clock). The physics tick rate
+  (64Hz) is a fixed engine invariant, not scenario-owned. The `SIM_TIME`
+  env var still overrides pace ad-hoc. The server ends the scenario at the
+  duration deadline (same freeze-and-notify as a disconnect-end).
+- **Agents may run on a server-driven step clock** instead of polling. An
+  agent `Subscribe`s and the server pushes a `Tick { tick, dt, plan_version }`
+  pulse carrying the sim-seconds elapsed since that agent's last pulse; the
+  agent `Ack { tick }`s to release the next. It's **one-in-flight and never
+  blocks the sim** — a fast agent approaches the 64Hz ceiling, a slow one
+  gets fewer pulses with a larger `dt` (which is authoritative; the rate is
+  best-effort). An agent that never subscribes just keeps polling `get_state`
+  as before.
 - **Agents control entities via two layers:**
   - A **plan**: an ordered path of waypoints, each `{position, speed}`.
     The server continuously steers the entity toward the current waypoint
@@ -113,11 +129,12 @@ selected per scenario.
 Cargo workspace, ten crates:
 
 - **`protocol`** — shared `serde` types for the *agent* pathway: WebSocket
-  messages (`join`, plan submission, reflex-rule registration, `request_route`;
-  `get_state`/snapshot, `joined` — which carries the delivered `map` in a road
-  world — `reflex_fired`/`route`/`scenario_ended`/`error` events), and the
-  scenario JSON schema (arena + optional `map` + agent roster + per-agent
-  `SensorDef`s + `seed`). Depends on nothing else in the workspace.
+  messages (`join`, plan submission, reflex-rule registration, `request_route`,
+  `subscribe`/`ack` for the step clock; `get_state`/snapshot, `joined` — which
+  carries the delivered `map` in a road world — `reflex_fired`/`route`/`tick`/
+  `scenario_ended`/`error` events), and the scenario JSON schema (arena +
+  optional `map` + agent roster + per-agent `SensorDef`s + `seed` + optional
+  `time` block). Depends on nothing else in the workspace.
 - **`movement`** — the pluggable embodiment trait +
   `Holonomic`/`CarLike`/`FullVehicle`/`RaycastVehicle` implementations. No
   networking/scenario knowledge.

@@ -6,5 +6,6 @@
   "roster": [
     { "name": "car-1", "embodiment": "holonomic" },
     { "name": "car-2", "embodiment": "holonomic" }
-  ]
+  ],
+  "time": { "duration": 20.0 }
 }

@@ -31,6 +31,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from stepper import run_clock
+
 URL = "ws://127.0.0.1:4000"
 CRUISE = 6.0
 
@@ -65,16 +67,6 @@ def farthest_reachable(lanes, start_id, spawn):
         return lane["centerline"][len(lane["centerline"]) // 2]
 
     return max(reachable, key=lambda l: d2(mid(l), spawn)), len(reachable)
-
-
-async def reader(ws, world):
-    async for raw in ws:
-        msg = json.loads(raw)
-        if msg.get("type") == "state":
-            for e in msg["entities"]:
-                world[e["agent_id"]] = e["position"]
-        elif msg.get("type") == "scenario_ended":
-            return
 
 
 async def main():
@@ -122,17 +114,24 @@ async def main():
     print(f"server route: {len(route)} waypoints -- driving it across town")
 
     world = {}
-    r = asyncio.create_task(reader(ws, world))
     await ws.send(json.dumps({"type": "submit_plan", "waypoints": route}))
-    for _ in range(60):
+
+    # Server-owned clock: report progress on each step pulse; the scenario's
+    # duration ends the drive.
+    async def report(_sim_time):
         await ws.send(json.dumps({"type": "get_state"}))
-        await asyncio.sleep(0.5)
+
+    async def on_message(msg):
+        if msg.get("type") != "state":
+            return
+        for e in msg["entities"]:
+            world[e["agent_id"]] = e["position"]
         p = world.get("car")
         if p:
             remaining = d2(p, dest) ** 0.5
             print(f"car x={p['x']:7.1f} z={p['z']:7.1f}   {remaining:6.0f} m to go")
 
-    r.cancel()
+    await run_clock(ws, on_step=report, on_message=on_message, report_dt=0.5)
     await ws.close()
 
 

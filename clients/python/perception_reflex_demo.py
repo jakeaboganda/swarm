@@ -29,6 +29,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from stepper import run_clock
+
 URL = "ws://127.0.0.1:4000"
 LANE = {"gt-chaser": 8.0, "gt-target": 8.0, "sim-chaser": -8.0, "sim-target": -8.0}
 TARGET_X = 16.0  # where each target parks
@@ -37,6 +39,7 @@ END_X = 26.0  # aim past the target so it's the reflex that stops the chase
 LANE_SPEED = 6.0
 CHASE_SPEED = 9.0
 TTC_THRESHOLD = 1.2
+LINEUP_SECONDS = 4.5  # sim-time to let targets park + chasers line up before the charge
 
 world = {}  # agent_id -> (x, z)
 fires = {"gt-chaser": 0, "sim-chaser": 0}
@@ -70,23 +73,19 @@ def brake_reflex(device):
     )
 
 
-async def reader(ws, name):
-    async for raw in ws:
-        msg = json.loads(raw)
-        kind = msg.get("type")
-        if kind == "state":
-            for e in msg["entities"]:
-                world[e["agent_id"]] = (e["position"]["x"], e["position"]["z"])
-        elif kind == "reflex_fired" and name in fires:
-            fires[name] += 1
-        elif kind == "scenario_ended":
-            return
-
-
-async def poll(ws):
-    while True:
-        await ws.send(json.dumps({"type": "get_state"}))
-        await asyncio.sleep(0.2)
+async def side_reader(ws, name):
+    """A non-clock connection: count this agent's reflex fires and stay alive
+    until the scenario ends."""
+    try:
+        async for raw in ws:
+            msg = json.loads(raw)
+            kind = msg.get("type")
+            if kind == "reflex_fired" and name in fires:
+                fires[name] += 1
+            elif kind == "scenario_ended":
+                return
+    except websockets.ConnectionClosed:
+        return
 
 
 async def join(name):
@@ -118,7 +117,9 @@ def summary():
 async def main():
     names = ["gt-target", "sim-target", "gt-chaser", "sim-chaser"]
     ws = {n: await join(n) for n in names}
-    tasks = [asyncio.create_task(reader(ws[n], n)) for n in names]
+    # gt-chaser drives the clock (below); the others just count their own fires.
+    side = [n for n in names if n != "gt-chaser"]
+    tasks = [asyncio.create_task(side_reader(ws[n], n)) for n in side]
 
     # Targets roll out to their parking spots and idle there.
     for t in ("gt-target", "sim-target"):
@@ -128,18 +129,34 @@ async def main():
     # spawn clustered, so an armed stop_and_hold would trip on a neighbor).
     for c in ("gt-chaser", "sim-chaser"):
         await ws[c].send(plan([wp(START_X, LANE[c], LANE_SPEED)]))
-        tasks.append(asyncio.create_task(poll(ws[c])))
 
     print("targets parking, chasers lining up...")
-    await asyncio.sleep(4.5)
 
-    # Now arm the reflex and charge straight at the parked target.
-    print("charge!")
-    for c in ("gt-chaser", "sim-chaser"):
-        device = "ground_truth" if c == "gt-chaser" else "radar"
-        await ws[c].send(brake_reflex(device))
-        await ws[c].send(plan([wp(END_X, LANE[c], CHASE_SPEED)]))
-    await asyncio.sleep(8.0)
+    # The server owns the clock. gt-chaser's step pulses drive the phase
+    # transition (line up, then charge at LINEUP_SECONDS of sim-time) and the
+    # world-state updates; the scenario's duration ends the run.
+    charged = False
+
+    async def on_step(sim_time):
+        nonlocal charged
+        await ws["gt-chaser"].send(json.dumps({"type": "get_state"}))
+        if sim_time >= LINEUP_SECONDS and not charged:
+            charged = True
+            print("charge!")
+            for c in ("gt-chaser", "sim-chaser"):
+                device = "ground_truth" if c == "gt-chaser" else "radar"
+                await ws[c].send(brake_reflex(device))
+                await ws[c].send(plan([wp(END_X, LANE[c], CHASE_SPEED)]))
+
+    async def on_message(msg):
+        kind = msg.get("type")
+        if kind == "state":
+            for e in msg["entities"]:
+                world[e["agent_id"]] = (e["position"]["x"], e["position"]["z"])
+        elif kind == "reflex_fired":
+            fires["gt-chaser"] += 1
+
+    await run_clock(ws["gt-chaser"], on_step=on_step, on_message=on_message, report_dt=0.3)
 
     for t in tasks:
         t.cancel()

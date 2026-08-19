@@ -2,6 +2,10 @@
 crossing plans plus a time-to-collision brake reflex, and prints their
 positions as physics runs.
 
+Time is server-owned: each agent subscribes to the step clock and reports on
+its pulses, and the run ends when the scenario's `time.duration` elapses (no
+client-side countdown).
+
 Prerequisites: a running server (`cargo run --bin server -- scenario.json`)
 with a two-slot roster (`car-1`, `car-2`), and `pip install websockets`.
 
@@ -17,6 +21,8 @@ try:
 except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
+
+from stepper import run_clock
 
 SERVER_URL = "ws://127.0.0.1:4000"
 
@@ -34,14 +40,17 @@ async def agent(name, waypoints):
              "threshold": 2.0, "action": "brake", "priority": 10}
         ]}))
 
-        # Let physics run, then pull state a few times.
-        for _ in range(3):
-            await asyncio.sleep(0.6)
+        # On each ~0.6s step pulse, ask for state; print it when it arrives.
+        async def report(_sim_time):
             await ws.send(json.dumps({"type": "get_state"}))
-            snap = json.loads(await ws.recv())
-            if snap.get("type") == "state":
-                me = next((e for e in snap["entities"] if e["agent_id"] == name), None)
-                print(f"[{name}] tick={snap['tick']} pos={me['position'] if me else '?'}")
+
+        async def on_message(msg):
+            if msg.get("type") == "state":
+                me = next((e for e in msg["entities"] if e["agent_id"] == name), None)
+                print(f"[{name}] tick={msg['tick']} pos={me['position'] if me else '?'}")
+
+        reason = await run_clock(ws, on_step=report, on_message=on_message, report_dt=0.6)
+        print(f"[{name}] ended: {reason}")
         return name
 
 

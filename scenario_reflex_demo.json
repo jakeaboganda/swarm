@@ -25,5 +25,6 @@
       ]
     },
     { "name": "sim-target", "embodiment": "holonomic" }
-  ]
+  ],
+  "time": { "duration": 15.0 }
 }

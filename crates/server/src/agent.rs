@@ -49,6 +49,12 @@ impl AgentRegistry {
         self.by_connection.get(&connection).copied()
     }
 
+    /// Every live `(connection, entity)` pair, for systems that push to each
+    /// connected agent (e.g. step pulses).
+    pub fn connections(&self) -> impl Iterator<Item = (ConnectionId, Entity)> + '_ {
+        self.by_connection.iter().map(|(c, e)| (*c, *e))
+    }
+
     pub fn by_name(&self, name: &str) -> Option<Entity> {
         self.by_name.get(name).copied()
     }

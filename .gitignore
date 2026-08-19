@@ -2,3 +2,4 @@ DECISIONS.md
 PERSONAL_NOTES.md
 /target
 .claude/settings.local.json
+*.pyc

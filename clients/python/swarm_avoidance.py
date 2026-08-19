@@ -31,6 +31,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from stepper import run_clock
+
 SERVER_URL = "ws://127.0.0.1:4000"
 DEFAULT_SCENARIO = "scenario_swarm.json"
 SPAWN_SPACING = 3.0  # server spreads roster slots this far apart along X
@@ -64,6 +66,7 @@ def generate_scenario(n):
         "roster": [
             {"name": f"agent-{i:02d}", "embodiment": "holonomic"} for i in range(n)
         ],
+        "time": {"duration": 30.0},
     }
 
 
@@ -119,29 +122,6 @@ def steer(name, world, arena, goal):
     return px + vx / speed * LOOKAHEAD, pz + vz / speed * LOOKAHEAD, speed
 
 
-async def read_loop(ws, world, stats, stop, name):
-    try:
-        async for raw in ws:
-            msg = json.loads(raw)
-            kind = msg.get("type")
-            if kind == "state":
-                for e in msg["entities"]:
-                    p, v = e["position"], e["velocity"]
-                    world[e["agent_id"]] = {"pos": (p["x"], p["z"]), "vel": (v["x"], v["z"])}
-            elif kind == "reflex_fired":
-                stats["brakes"] += 1
-            elif kind == "error":
-                # e.g. joining a name that isn't in the loaded scenario's
-                # roster — surface it instead of hanging silently.
-                print(f"[{name}] server error: {msg.get('message')}")
-            elif kind == "scenario_ended":
-                print(f"[{name}] scenario ended: {msg.get('reason')}")
-                stop.set()
-                return
-    except websockets.ConnectionClosed:
-        stop.set()
-
-
 async def run_agent(name, angle, arena, world, stats, stop):
     r = circle_radius(arena)
     goal = {"xz": (r * math.cos(angle), r * math.sin(angle))}
@@ -152,19 +132,42 @@ async def run_agent(name, angle, arena, world, stats, stop):
              "operator": "less_than",
              "threshold": TTC_BRAKE, "action": "brake", "priority": 10}
         ]}))
-        reader = asyncio.create_task(read_loop(ws, world, stats, stop, name))
+
+        # The server owns the clock: replan on each step pulse (throttled to
+        # ~CONTROL_HZ), reading the world the state replies build up. The
+        # scenario's duration ends the run.
+        async def on_step(_sim_time):
+            await ws.send(json.dumps({"type": "get_state"}))
+            cmd = steer(name, world, arena, goal)
+            if cmd is not None:
+                x, z, speed = cmd
+                await ws.send(json.dumps({"type": "submit_plan", "waypoints": [
+                    {"position": {"x": x, "y": 0.0, "z": z}, "speed": speed}
+                ]}))
+
+        async def on_message(msg):
+            kind = msg.get("type")
+            if kind == "state":
+                for e in msg["entities"]:
+                    p, v = e["position"], e["velocity"]
+                    world[e["agent_id"]] = {"pos": (p["x"], p["z"]), "vel": (v["x"], v["z"])}
+            elif kind == "reflex_fired":
+                stats["brakes"] += 1
+            elif kind == "error":
+                # e.g. joining a name that isn't in the loaded scenario's
+                # roster.. surface it instead of hanging silently.
+                print(f"[{name}] server error: {msg.get('message')}")
+
         try:
-            while not stop.is_set():
-                await ws.send(json.dumps({"type": "get_state"}))
-                cmd = steer(name, world, arena, goal)
-                if cmd is not None:
-                    x, z, speed = cmd
-                    await ws.send(json.dumps({"type": "submit_plan", "waypoints": [
-                        {"position": {"x": x, "y": 0.0, "z": z}, "speed": speed}
-                    ]}))
-                await asyncio.sleep(1.0 / CONTROL_HZ)
+            reason = await run_clock(
+                ws, on_step=on_step, on_message=on_message, report_dt=1.0 / CONTROL_HZ
+            )
+            if reason is not None:
+                print(f"[{name}] scenario ended: {reason}")
+        except websockets.ConnectionClosed:
+            pass
         finally:
-            reader.cancel()
+            stop.set()
 
 
 async def report(world, stats, names, stop):

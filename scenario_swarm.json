@@ -100,5 +100,8 @@
       "name": "agent-23",
       "embodiment": "holonomic"
     }
-  ]
+  ],
+  "time": {
+    "duration": 30.0
+  }
 }

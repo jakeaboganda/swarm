@@ -126,6 +126,34 @@ pub struct ArenaConfig {
     pub depth: f32,
 }
 
+/// How fast sim-time advances relative to wall-clock. A property of the whole
+/// run (all agents share one physics world), not per-agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pace {
+    /// One sim-second per real second -- required for live viewing.
+    #[default]
+    Realtime,
+    /// "As fast as possible": ticks run at CPU speed, wall-clock decoupled.
+    /// Sim-time (and thus `duration`) is unchanged -- the deadline just
+    /// arrives sooner in wall-clock. For headless batch runs.
+    Afap,
+}
+
+/// The scenario's ownership of time: how long it runs and how fast time flows.
+/// Omitted entirely (or field-by-field) falls back to the defaults: realtime
+/// pace, unbounded duration (ends only when an agent disconnects).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct TimeConfig {
+    /// Run length in *sim*-seconds. `None` = unbounded. Pace-independent: afap
+    /// just reaches it sooner in wall-clock. The server converts it to a tick
+    /// deadline at the fixed physics rate.
+    #[serde(default)]
+    pub duration: Option<f64>,
+    #[serde(default)]
+    pub pace: Pace,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScenarioConfig {
     pub arena: ArenaConfig,
@@ -139,6 +167,10 @@ pub struct ScenarioConfig {
     /// exists today; loading a real OpenDRIVE file by path arrives at P5.
     #[serde(default)]
     pub map: Option<String>,
+    /// The scenario's time policy (duration + pace). Omitted = realtime,
+    /// unbounded.
+    #[serde(default)]
+    pub time: TimeConfig,
 }
 
 #[cfg(test)]
@@ -195,6 +227,10 @@ mod tests {
             ],
             seed: 42,
             map: Some("demo".into()),
+            time: TimeConfig {
+                duration: Some(30.0),
+                pace: Pace::Afap,
+            },
         };
         let json = serde_json::to_string_pretty(&config).expect("serialize");
         let back: ScenarioConfig = serde_json::from_str(&json).expect("deserialize");
@@ -212,6 +248,32 @@ mod tests {
         let config: ScenarioConfig = serde_json::from_str(json).expect("deserialize");
         assert_eq!(config.seed, 0);
         assert!(config.roster[0].sensors.is_empty());
+    }
+
+    #[test]
+    fn omitted_time_defaults_to_realtime_unbounded() {
+        // No `time` block: realtime pace, no duration limit -- today's behavior.
+        let json = r#"{
+            "arena": { "width": 50.0, "depth": 50.0 },
+            "roster": [{ "name": "car-1", "embodiment": "holonomic" }]
+        }"#;
+        let config: ScenarioConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.time, TimeConfig::default());
+        assert_eq!(config.time.pace, Pace::Realtime);
+        assert_eq!(config.time.duration, None);
+    }
+
+    #[test]
+    fn partial_time_block_fills_defaults() {
+        // Only `duration` given: pace defaults to realtime.
+        let json = r#"{
+            "arena": { "width": 50.0, "depth": 50.0 },
+            "roster": [{ "name": "car-1", "embodiment": "holonomic" }],
+            "time": { "duration": 12.5 }
+        }"#;
+        let config: ScenarioConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.time.duration, Some(12.5));
+        assert_eq!(config.time.pace, Pace::Realtime);
     }
 
     #[test]

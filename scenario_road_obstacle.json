@@ -21,5 +21,6 @@
       ]
     },
     { "name": "obstacle", "embodiment": "holonomic", "color": [0.9, 0.1, 0.1], "scale": 3.0 }
-  ]
+  ],
+  "time": { "duration": 15.0 }
 }

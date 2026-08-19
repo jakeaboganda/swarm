@@ -38,6 +38,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from stepper import run_clock
+
 URL = "ws://127.0.0.1:4000"
 FLEET = [f"car-{i}" for i in range(8)]
 # Each car cruises at a slightly different speed, so a faster car catches a
@@ -45,7 +47,6 @@ FLEET = [f"car-{i}" for i in range(8)]
 # forward-collision reflex, instead of a fleet gliding at one uniform pace.
 CRUISE = [4.5, 5.5, 6.5, 5.0, 7.5, 6.0, 8.0, 5.5]
 TTC_THRESHOLD = 2.5  # brake when perceived time-to-collision drops below this, s
-RUN_SECONDS = 45
 
 
 def d2(a, b):
@@ -147,33 +148,6 @@ async def plan_route(car):
             return None
 
 
-async def reader(car):
-    """Drain everything the server pushes after we start driving."""
-    try:
-        async for raw in car.ws:
-            msg = json.loads(raw)
-            kind = msg.get("type")
-            if kind == "state":
-                for e in msg["entities"]:
-                    if e["agent_id"] == car.name:
-                        car.pos = e["position"]
-            elif kind == "reflex_fired":
-                car.fires += 1
-            elif kind == "scenario_ended":
-                return
-    except websockets.ConnectionClosed:
-        return
-
-
-async def poll(car):
-    try:
-        while True:
-            await car.ws.send(json.dumps({"type": "get_state"}))
-            await asyncio.sleep(0.5)
-    except websockets.ConnectionClosed:
-        return
-
-
 async def drive(car):
     route = await plan_route(car)
     if not route:
@@ -183,6 +157,27 @@ async def drive(car):
     await car.ws.send(json.dumps(brake_reflex()))
     await car.ws.send(json.dumps({"type": "submit_plan", "waypoints": route}))
     car.status = "driving"
+
+
+async def run(car):
+    """Drive this car on the server-owned clock: ask for state each ~0.5s pulse,
+    track its position and brake fires, and return when the scenario ends."""
+    async def report(_sim_time):
+        await car.ws.send(json.dumps({"type": "get_state"}))
+
+    async def on_message(msg):
+        kind = msg.get("type")
+        if kind == "state":
+            for e in msg["entities"]:
+                if e["agent_id"] == car.name:
+                    car.pos = e["position"]
+        elif kind == "reflex_fired":
+            car.fires += 1
+
+    try:
+        await run_clock(car.ws, on_step=report, on_message=on_message, report_dt=0.5)
+    except websockets.ConnectionClosed:
+        return
 
 
 def report(cars):
@@ -214,18 +209,13 @@ async def main():
         return
     print(f"Town07 loaded, {len(FLEET)} cars joined. Routing each across town...")
 
-    # Route + arm + submit each car, then let readers/pollers run the fleet.
+    # Route + arm + submit each car, then run them all on the server clock
+    # until the scenario's duration ends the run.
     await asyncio.gather(*(drive(c) for c in cars))
     routed = sum(1 for c in cars if c.status == "driving")
     print(f"{routed}/{len(FLEET)} cars found a route and are driving.\n")
 
-    tasks = []
-    for c in cars:
-        if c.status == "driving":
-            tasks += [asyncio.create_task(reader(c)), asyncio.create_task(poll(c))]
-
-    for _ in range(RUN_SECONDS):
-        await asyncio.sleep(1.0)
+    await asyncio.gather(*(run(c) for c in cars if c.status == "driving"))
     report(cars)
 
     total_fires = sum(c.fires for c in cars)
@@ -233,8 +223,6 @@ async def main():
         f"\n{routed} cars drove their routes; {total_fires} total brake-reflex fires "
         "across the fleet (cars perceiving and yielding to each other)."
     )
-    for t in tasks:
-        t.cancel()
     for c in cars:
         await c.ws.close()
 

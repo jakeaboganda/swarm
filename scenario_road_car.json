@@ -3,5 +3,6 @@
   "map": "demo",
   "roster": [
     { "name": "car", "embodiment": "raycast_vehicle" }
-  ]
+  ],
+  "time": { "duration": 20.0 }
 }

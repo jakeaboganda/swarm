@@ -12,8 +12,10 @@ use crate::agent::{
     AgentName, AgentRegistry, AwaitingReconnect, Connection, PendingRoster, Plan, Reflexes,
 };
 use crate::events::ReflexFired;
+use crate::pulse::PulseStates;
 use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
+use crate::time_budget::{reached, Deadline, TICK_HZ};
 use crate::world::{agent_spawn_transform, spawn_agent, to_map_data, MapWorld};
 
 /// How long a mid-scenario agent has to reconnect (re-`Join` by name)
@@ -68,6 +70,7 @@ pub fn drain_transport(
     mut next_state: ResMut<NextState<ScenarioState>>,
     end_reason: Res<EndReason>,
     tick: Res<Tick>,
+    mut pulse_states: ResMut<PulseStates>,
     viz_res: Res<crate::viz_broadcast::Viz>,
     map_world: Res<MapWorld>,
     mut query: Query<(&Transform, &Velocity, &mut Plan, &mut Reflexes, &AgentName)>,
@@ -77,6 +80,9 @@ pub fn drain_transport(
     let map_payload = map_world.0.as_ref().map(to_map_data);
     while let Ok(event) = transport.0.events.try_recv() {
         if let ConnectionEvent::Disconnected(connection) = event {
+            // Drop any step-callback state for the gone connection; a reconnect
+            // re-subscribes fresh.
+            pulse_states.0.remove(&connection);
             let Some(entity) = registry.remove_connection(connection) else {
                 continue;
             };
@@ -270,6 +276,61 @@ pub fn drain_transport(
                     .0
                     .send(connection, ServerMessage::Route { waypoints });
             }
+            ClientMessage::Subscribe => {
+                // Opt into step pulses. Anchored to the current tick so the
+                // first pulse's dt starts from now, not tick 0.
+                pulse_states
+                    .0
+                    .entry(connection)
+                    .or_default()
+                    .subscribe(tick.0);
+            }
+            ClientMessage::Ack { tick: acked } => {
+                if let Some(state) = pulse_states.0.get_mut(&connection) {
+                    state.ack(acked);
+                }
+            }
+        }
+    }
+}
+
+/// Ends the scenario once the run reaches its `time.duration` deadline (if it
+/// has one). Runs only while `Running`; the deadline is in ticks, so afap
+/// reaches it sooner in wall-clock but at the same sim-time.
+pub fn enforce_duration(
+    tick: Res<Tick>,
+    deadline: Res<Deadline>,
+    mut next_state: ResMut<NextState<ScenarioState>>,
+    mut end_reason: ResMut<EndReason>,
+) {
+    if reached(tick.0, deadline.0) {
+        end_reason.0 = Some("duration reached".into());
+        next_state.set(ScenarioState::Ended);
+    }
+}
+
+/// Pushes a step pulse to each subscribed agent that isn't awaiting an ack. The
+/// sim never waits: a slow agent simply gets fewer pulses, each with a larger
+/// `dt`. `plan_version` reflects the plan currently driving the agent's entity.
+pub fn send_pulses(
+    transport: Res<Transport>,
+    mut pulse_states: ResMut<PulseStates>,
+    tick: Res<Tick>,
+    registry: Res<AgentRegistry>,
+    query: Query<&Plan>,
+) {
+    for (connection, entity) in registry.connections() {
+        let state = pulse_states.0.entry(connection).or_default();
+        if let Some(dt) = state.poll(tick.0, TICK_HZ) {
+            let plan_version = query.get(entity).map(|p| p.version).unwrap_or(0);
+            transport.0.send(
+                connection,
+                ServerMessage::Tick {
+                    tick: tick.0,
+                    dt,
+                    plan_version,
+                },
+            );
         }
     }
 }

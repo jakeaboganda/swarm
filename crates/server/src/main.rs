@@ -2,8 +2,10 @@ mod agent;
 mod arbitration;
 mod events;
 mod perception_router;
+mod pulse;
 mod scenario;
 mod scenario_state;
+mod time_budget;
 mod transport_bridge;
 mod viz_broadcast;
 mod world;
@@ -21,18 +23,15 @@ use perception_router::{
     drain_perception_events, route_perception, PerceivedWorlds, Perception, PerceptionAgents,
     PerceptionOverlay, PerceptionSeed,
 };
+use pulse::PulseStates;
 use scenario::{ArenaBounds, Roster};
 use scenario_state::{EndReason, ScenarioState, Tick};
+use time_budget::{Deadline, TICK_HZ};
 use transport_bridge::{
-    activate_physics, deactivate_physics, drain_transport, expire_reconnects, forward_reflex_fired,
-    notify_scenario_ended, Transport,
+    activate_physics, deactivate_physics, drain_transport, enforce_duration, expire_reconnects,
+    forward_reflex_fired, notify_scenario_ended, send_pulses, Transport,
 };
 use viz_broadcast::{broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz};
-
-/// Physics/sim tick rate. Pinned here (not left to Bevy's default) because
-/// it's the `tick_rate` advertised to viewers, which key their playback
-/// clock to it — a silent default change would desync every viewer.
-const TICK_HZ: f64 = 64.0;
 
 fn main() -> anyhow::Result<()> {
     let scenario_path = std::env::args()
@@ -86,16 +85,25 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Time model (env `SIM_TIME`):
+    // Pace (the scenario's `time.pace`, overridable by env `SIM_TIME`):
     //   realtime (default) — the fixed step is paced to wall-clock, so one
     //     sim-second is one real second. Required for live viewing.
     //   afap — "as fast as possible": the run-loop spins without sleeping and
     //     virtual time advances one fixed step per iteration, decoupled from
     //     wall-clock, so the sim runs at CPU speed (headless batch runs). A
     //     realtime viewer can't keep pace with this.
-    let afap = std::env::var("SIM_TIME")
-        .map(|v| v.eq_ignore_ascii_case("afap"))
-        .unwrap_or(false);
+    // The scenario owns pace; `SIM_TIME` stays an ad-hoc override (set it to
+    // force a pace without editing the file).
+    let afap = match std::env::var("SIM_TIME") {
+        Ok(v) => v.eq_ignore_ascii_case("afap"),
+        Err(_) => matches!(scenario_config.time.pace, protocol::scenario::Pace::Afap),
+    };
+    // Run length: the scenario's `time.duration` (sim-seconds) as a tick
+    // deadline, `None` if unbounded. Enforced by `enforce_duration`.
+    let deadline = Deadline(time_budget::deadline_tick(
+        scenario_config.time.duration,
+        TICK_HZ,
+    ));
     let fixed_dt = Duration::from_secs_f64(1.0 / TICK_HZ);
     // realtime: drive Update at ~120 Hz (Fixed paces itself under it).
     // afap: no sleep — go as fast as the CPU allows.
@@ -128,6 +136,8 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(AwaitingReconnect::default())
         .insert_resource(EndReason::default())
         .insert_resource(Tick::default())
+        .insert_resource(deadline)
+        .insert_resource(PulseStates::default())
         .insert_resource(Transport(transport_handle))
         .insert_resource(Viz(viz_handle))
         .insert_resource(Perception(perception_handle))
@@ -160,6 +170,15 @@ fn main() -> anyhow::Result<()> {
             (arbitration::arbitrate, forward_reflex_fired)
                 .chain()
                 .before(movement::MovementSet::ApplyForce)
+                .run_if(in_state(ScenarioState::Running)),
+        )
+        // After arbitration (so `tick` and each plan's version are current for
+        // this step): end the run if it's hit its duration, and push a step
+        // pulse to each subscribed agent that isn't awaiting an ack.
+        .add_systems(
+            FixedUpdate,
+            (enforce_duration, send_pulses)
+                .after(arbitration::arbitrate)
                 .run_if(in_state(ScenarioState::Running)),
         )
         // Viz broadcast. `broadcast_spawns` runs before `drain_viz_events`

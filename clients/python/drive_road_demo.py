@@ -24,6 +24,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from stepper import run_clock
+
 URL = "ws://127.0.0.1:4000"
 CRUISE = 6.0  # target speed along the lane, m/s
 pos = {}
@@ -52,16 +54,6 @@ def forward_driving_lane(map_data):
     return None
 
 
-async def reader(ws):
-    async for raw in ws:
-        msg = json.loads(raw)
-        if msg.get("type") == "state":
-            for e in msg["entities"]:
-                pos[e["agent_id"]] = e["position"]
-        elif msg.get("type") == "scenario_ended":
-            return
-
-
 async def main():
     ws = await websockets.connect(URL)
     await ws.send(json.dumps({"type": "join", "name": "car"}))
@@ -87,12 +79,18 @@ async def main():
         f"to x={end['x']:.1f},z={end['z']:.1f}"
     )
 
-    r = asyncio.create_task(reader(ws))
     await ws.send(json.dumps({"type": "submit_plan", "waypoints": plan}))
 
-    for _ in range(40):
+    # The server owns the clock: each step pulse, ask for state; report on the
+    # reply. The run ends when the scenario's duration elapses.
+    async def report(_sim_time):
         await ws.send(json.dumps({"type": "get_state"}))
-        await asyncio.sleep(0.4)
+
+    async def on_message(msg):
+        if msg.get("type") != "state":
+            return
+        for e in msg["entities"]:
+            pos[e["agent_id"]] = e["position"]
         p = pos.get("car")
         if p:
             # Lateral error off the lane end direction isn't computed here; just
@@ -104,7 +102,7 @@ async def main():
                 f"   lane-offset={off:4.1f} m"
             )
 
-    r.cancel()
+    await run_clock(ws, on_step=report, on_message=on_message, report_dt=0.4)
     await ws.close()
 
 

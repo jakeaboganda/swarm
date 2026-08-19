@@ -32,7 +32,10 @@ plans, enforcing reflexes, running the physics).
 
 The world runs as a **scenario**: a fixed roster of vehicles declared up
 front. The simulation waits for every declared agent to connect, runs, and
-ends if any of them drops (after a short reconnect grace window).
+ends if any of them drops (after a short reconnect grace window). The scenario
+also **owns time**. An optional `time` block sets the run's duration (in
+sim-seconds) and pace (`realtime` or `afap`), so the server ends the run on
+its own clock rather than leaving it to each client's loop.
 
 Agents are external processes speaking **WebSocket + JSON**, so you can write
 one in any language. Three pathways meet at the server, each on its own port:
@@ -166,11 +169,18 @@ An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:
 
 // -> ask for a world snapshot whenever you want to (re)plan
 { "type": "get_state" }
+
+// -> or let the server drive your clock: subscribe, and it pushes a `tick`
+//    pulse each step with the sim-time elapsed since your last one. Ack to
+//    release the next; the sim never waits on you.
+{ "type": "subscribe" }
+{ "type": "ack", "tick": 1920 }
 ```
 
 The server pushes back `joined`, `state` snapshots, `reflex_fired` events
-(when a reflex overrides your plan), `route` replies, `scenario_ended`, and
-`error`. The exact shapes live in [`crates/protocol`](crates/protocol/).
+(when a reflex overrides your plan), `route` replies, `tick` step pulses (if
+you subscribed), `scenario_ended`, and `error`. The exact shapes live in
+[`crates/protocol`](crates/protocol/).
 Routing is your choice, not a mandate: the server does the pathfinding as a
 convenience, but the returned plan — and its speed — is yours to submit,
 edit, or ignore.

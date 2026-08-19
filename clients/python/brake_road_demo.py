@@ -29,6 +29,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from stepper import run_clock
+
 URL = "ws://127.0.0.1:4000"
 CRUISE = 6.0  # car target speed along the lane, m/s
 TTC_THRESHOLD = 2.0  # brake when perceived time-to-collision drops below this, s
@@ -75,24 +77,15 @@ def brake_reflex():
     }
 
 
-async def reader(ws, name):
-    global fires
-    async for raw in ws:
-        msg = json.loads(raw)
-        kind = msg.get("type")
-        if kind == "state":
-            for e in msg["entities"]:
-                world[e["agent_id"]] = e["position"]
-        elif kind == "reflex_fired" and name == "car":
-            fires += 1
-        elif kind == "scenario_ended":
-            return
-
-
-async def poll(ws):
-    while True:
-        await ws.send(json.dumps({"type": "get_state"}))
-        await asyncio.sleep(0.2)
+async def drain(ws):
+    """Keep a secondary connection (the obstacle) responsive until the scenario
+    ends, so it doesn't drop and end the run early."""
+    try:
+        async for raw in ws:
+            if json.loads(raw).get("type") == "scenario_ended":
+                return
+    except websockets.ConnectionClosed:
+        return
 
 
 async def join(name):
@@ -129,9 +122,9 @@ async def main():
         print(f"NOTE: no obstacle ({obs_joined.get('message', obs_joined)}); "
               f"car will just drive the lane.\n{WRONG_SCENARIO}")
 
-    tasks = [asyncio.create_task(reader(car_ws, "car")), asyncio.create_task(poll(car_ws))]
+    obstacle_task = None
     if have_obstacle:
-        tasks.append(asyncio.create_task(reader(obs_ws, "obstacle")))
+        obstacle_task = asyncio.create_task(drain(obs_ws))
         # The obstacle spawns already parked in the lane (server-placed
         # downroad). Hold it there with a station-keep plan on its own spawn
         # point, so it doesn't creep down the graded, frictionless surface.
@@ -146,15 +139,28 @@ async def main():
     await car_ws.send(json.dumps({"type": "submit_plan", "waypoints": plan}))
     print(f"car charging down lane {lane['id']} (radar TTC < {TTC_THRESHOLD}s -> stop)")
 
-    for _ in range(30):
-        await asyncio.sleep(0.4)
+    # Server-owned clock: on each pulse, ask for state; count reflex fires from
+    # the pushed events. The scenario's duration ends the run.
+    async def report(_sim_time):
+        await car_ws.send(json.dumps({"type": "get_state"}))
         car, obs = world.get("car"), world.get("obstacle")
         if not car:
-            continue
+            return
         line = f"car x={car['x']:6.1f} y={car['y']:5.2f} z={car['z']:5.2f}"
         if obs:
             line += f"   obstacle x={obs['x']:5.1f}   gap={math.sqrt(dist2(car, obs)):5.1f}"
         print(f"{line}   fires={fires}")
+
+    async def on_message(msg):
+        global fires
+        kind = msg.get("type")
+        if kind == "state":
+            for e in msg["entities"]:
+                world[e["agent_id"]] = e["position"]
+        elif kind == "reflex_fired":
+            fires += 1
+
+    await run_clock(car_ws, on_step=report, on_message=on_message, report_dt=0.4)
 
     car, obs = world.get("car"), world.get("obstacle")
     print("\n=== result ===")
@@ -167,8 +173,8 @@ async def main():
     elif car:
         print(f"car drove to x={car['x']:.1f} (no obstacle in the scenario).")
 
-    for t in tasks:
-        t.cancel()
+    if obstacle_task:
+        obstacle_task.cancel()
     for w in (car_ws, obs_ws):
         await w.close()
 

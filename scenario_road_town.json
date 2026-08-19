@@ -3,5 +3,6 @@
   "map": "maps/town07.xodr",
   "roster": [
     { "name": "car", "embodiment": "raycast_vehicle" }
-  ]
+  ],
+  "time": { "duration": 35.0 }
 }

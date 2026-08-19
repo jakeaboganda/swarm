@@ -4,7 +4,7 @@ use crate::map::MapData;
 use crate::Vec3;
 
 /// Identifies an agent. Equal to the `name` it registered under in the
-/// scenario roster — roster names are already unique, so there's no need
+/// scenario roster: roster names are already unique, so there's no need
 /// for a separate generated id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(pub String);
@@ -75,6 +75,18 @@ pub enum ClientMessage {
         to: Vec3,
         speed: f32,
     },
+    /// Opt into the server-driven step callback: after this, the server pushes
+    /// a `Tick` pulse whenever the agent isn't already awaiting an `Ack`. The
+    /// sim never waits on the agent -- a slow one just receives fewer, larger-
+    /// `dt` pulses. Idempotent; an agent that never subscribes is never pulsed
+    /// (and keeps polling `GetState` as before).
+    Subscribe,
+    /// Acknowledge the pulse for `tick`, releasing the next one. Only the
+    /// currently-outstanding pulse's tick advances the loop; a stale or
+    /// mismatched `tick` is ignored.
+    Ack {
+        tick: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,6 +134,17 @@ pub enum ServerMessage {
     Route {
         waypoints: Vec<Waypoint>,
     },
+    /// A server-driven step pulse (only to subscribed agents). `dt` is the
+    /// sim-time in seconds since this agent's previous pulse -- authoritative,
+    /// since the rate is best-effort (a fast agent approaches the physics tick
+    /// rate, a slow one gets less). The agent should `Ack { tick }` to release
+    /// the next pulse; the sim does not wait for it. `plan_version` is the
+    /// version currently driving the agent's entity.
+    Tick {
+        tick: u64,
+        dt: f32,
+        plan_version: u64,
+    },
 }
 
 #[cfg(test)]
@@ -164,6 +187,8 @@ mod tests {
             to: Vec3::new(50.0, 0.0, -20.0),
             speed: 6.0,
         });
+        round_trip(&ClientMessage::Subscribe);
+        round_trip(&ClientMessage::Ack { tick: 128 });
     }
 
     #[test]
@@ -214,6 +239,11 @@ mod tests {
                 position: Vec3::new(1.0, 0.0, 2.0),
                 speed: 6.0,
             }],
+        });
+        round_trip(&ServerMessage::Tick {
+            tick: 96,
+            dt: 0.015625,
+            plan_version: 4,
         });
     }
 

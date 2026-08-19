@@ -3,5 +3,6 @@
   "map": "maps/e6mini.xodr",
   "roster": [
     { "name": "car", "embodiment": "raycast_vehicle" }
-  ]
+  ],
+  "time": { "duration": 20.0 }
 }

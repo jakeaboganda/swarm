@@ -61,6 +61,7 @@ fn main() {
         ],
         seed: 0,
         map: None,
+        time: Default::default(),
     };
 
     for (label, json) in [
