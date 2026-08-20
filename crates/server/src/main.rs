@@ -29,7 +29,8 @@ use scenario_state::{EndReason, ScenarioState, Tick};
 use time_budget::{Deadline, TICK_HZ};
 use transport_bridge::{
     activate_physics, deactivate_physics, despawn_off_road, drain_transport, enforce_duration,
-    expire_reconnects, forward_reflex_fired, notify_scenario_ended, send_pulses, Transport,
+    expire_reconnects, floor_for, forward_reflex_fired, notify_scenario_ended, send_pulses,
+    Transport,
 };
 use viz_broadcast::{broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz};
 
@@ -104,6 +105,9 @@ fn main() -> anyhow::Result<()> {
         scenario_config.time.duration,
         TICK_HZ,
     ));
+    // The off-map fall floor, relative to this map's own elevation (so a road
+    // that dips below zero isn't mistaken for freefall).
+    let floor = floor_for(map_world.as_ref());
     let fixed_dt = Duration::from_secs_f64(1.0 / TICK_HZ);
     // realtime: drive Update at ~120 Hz (Fixed paces itself under it).
     // afap: no sleep — go as fast as the CPU allows.
@@ -137,6 +141,7 @@ fn main() -> anyhow::Result<()> {
         .insert_resource(EndReason::default())
         .insert_resource(Tick::default())
         .insert_resource(deadline)
+        .insert_resource(floor)
         .insert_resource(PulseStates::default())
         .insert_resource(Transport(transport_handle))
         .insert_resource(Viz(viz_handle))

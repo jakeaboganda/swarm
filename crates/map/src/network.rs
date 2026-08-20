@@ -63,6 +63,18 @@ impl RoadNetwork {
         self.lanes.iter().filter(|l| l.kind == LaneKind::Driving)
     }
 
+    /// The lowest point of any lane centerline (Y-up, metres) -- how far down
+    /// the road legitimately reaches. `None` if the network has no lanes. Used
+    /// to set an off-map fall floor relative to the terrain, so a map that dips
+    /// well below zero (a valley, an underpass) isn't mistaken for freefall.
+    pub fn min_elevation(&self) -> Option<f32> {
+        self.lanes
+            .iter()
+            .flat_map(|l| l.center.points())
+            .map(|p| p.y)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
     /// The lanes reachable by driving off `id`'s exit end (its `successors`).
     pub fn successors(&self, id: LaneId) -> impl Iterator<Item = &Lane> {
         self.lane(id)
@@ -118,6 +130,19 @@ mod tests {
     #[test]
     fn nearest_lane_is_none_when_empty() {
         assert!(RoadNetwork::default().nearest_lane(Vec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn min_elevation_is_the_lowest_centerline_point() {
+        // A network that dips to y=-40 (a deep valley) reports -40, not 0.
+        let net = RoadNetwork {
+            lanes: vec![
+                lane(0, &[[0.0, 5.0, 0.0], [10.0, 2.0, 0.0]]),
+                lane(1, &[[0.0, -40.0, 0.0], [10.0, -12.0, 0.0]]),
+            ],
+        };
+        assert_eq!(net.min_elevation(), Some(-40.0));
+        assert_eq!(RoadNetwork::default().min_elevation(), None);
     }
 
     #[test]

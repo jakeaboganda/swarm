@@ -28,10 +28,21 @@ const RECONNECT_GRACE: Duration = Duration::from_secs(8);
 /// second line of defense.
 const MAX_INBOUND_PER_DRAIN: usize = 512;
 
-/// A vehicle whose Y falls below this has left the drivable surface (drove off
-/// an edge, or spawned over a gap) and is falling out of the world -- nothing
-/// legitimately drives this far under the road. `despawn_off_road` removes it.
-const FLOOR_Y: f32 = -5.0;
+/// How far below the lowest road surface a vehicle must fall to count as "off
+/// the map". I guess ten meters is enough.
+const FALL_MARGIN: f32 = 10.0;
+
+/// The Y below which a vehicle has left the map and should be despawned.
+/// Computed once from the loaded map's elevation (`floor_for`).
+#[derive(Resource, Clone, Copy)]
+pub struct Floor(pub f32);
+
+/// The off-map fall floor for a world: `FALL_MARGIN` below the lowest lane in
+/// the road network, or below the arena ground (y=0) when there's no map.
+pub fn floor_for(map: Option<&map::RoadNetwork>) -> Floor {
+    let lowest = map.and_then(|net| net.min_elevation()).unwrap_or(0.0);
+    Floor(lowest - FALL_MARGIN)
+}
 
 #[derive(Resource)]
 pub struct Transport(pub TransportHandle);
@@ -350,12 +361,13 @@ pub fn despawn_off_road(
     mut commands: Commands,
     mut registry: ResMut<AgentRegistry>,
     mut pulse_states: ResMut<PulseStates>,
+    floor: Res<Floor>,
     transport: Res<Transport>,
     viz_res: Res<crate::viz_broadcast::Viz>,
     query: Query<(Entity, &Transform, &AgentName, &Connection)>,
 ) {
     for (entity, transform, name, connection) in &query {
-        if transform.translation.y >= FLOOR_Y {
+        if transform.translation.y >= floor.0 {
             continue;
         }
         transport.0.send(
