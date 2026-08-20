@@ -10,9 +10,9 @@
       "name": "car-0",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.90,
-        0.12,
-        0.12
+        0.95,
+        0.237,
+        0.237
       ],
       "sensors": [
         {
@@ -34,8 +34,8 @@
       "embodiment": "raycast_vehicle",
       "color": [
         0.95,
-        0.52,
-        0.10
+        0.451,
+        0.237
       ],
       "sensors": [
         {
@@ -56,9 +56,9 @@
       "name": "car-2",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.92,
-        0.86,
-        0.12
+        0.95,
+        0.665,
+        0.237
       ],
       "sensors": [
         {
@@ -79,9 +79,9 @@
       "name": "car-3",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.20,
-        0.80,
-        0.25
+        0.95,
+        0.879,
+        0.237
       ],
       "sensors": [
         {
@@ -102,9 +102,9 @@
       "name": "car-4",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.10,
-        0.78,
-        0.70
+        0.807,
+        0.95,
+        0.237
       ],
       "sensors": [
         {
@@ -125,9 +125,9 @@
       "name": "car-5",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.22,
-        0.42,
-        0.95
+        0.594,
+        0.95,
+        0.237
       ],
       "sensors": [
         {
@@ -148,9 +148,9 @@
       "name": "car-6",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.62,
-        0.30,
-        0.92
+        0.38,
+        0.95,
+        0.237
       ],
       "sensors": [
         {
@@ -171,9 +171,285 @@
       "name": "car-7",
       "embodiment": "raycast_vehicle",
       "color": [
-        0.92,
-        0.22,
-        0.70
+        0.237,
+        0.95,
+        0.309
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-8",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.237,
+        0.95,
+        0.523
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-9",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.237,
+        0.95,
+        0.736
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-10",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.237,
+        0.95,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-11",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.237,
+        0.736,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-12",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.237,
+        0.523,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-13",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.237,
+        0.309,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-14",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.38,
+        0.237,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-15",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.594,
+        0.237,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-16",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.808,
+        0.237,
+        0.95
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-17",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.95,
+        0.237,
+        0.879
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-18",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.95,
+        0.237,
+        0.665
+      ],
+      "sensors": [
+        {
+          "name": "radar",
+          "source": "simulated",
+          "spec": {
+            "range": 40.0,
+            "fov_half_angle": 0.6,
+            "vertical_fov_half_angle": 0.35,
+            "position_noise": 0.2,
+            "velocity_noise": 0.1,
+            "latency_ticks": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "car-19",
+      "embodiment": "raycast_vehicle",
+      "color": [
+        0.95,
+        0.237,
+        0.451
       ],
       "sensors": [
         {
@@ -191,5 +467,7 @@
       ]
     }
   ],
-  "time": { "duration": 45.0 }
+  "time": {
+    "duration": 45.0
+  }
 }

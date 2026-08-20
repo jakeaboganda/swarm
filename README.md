@@ -124,7 +124,7 @@ scripts/run.sh scenario_reflex_demo.json clients/python/perception_reflex_demo.p
 # Ask the server to route across CARLA's Town07 (234 roads, 31 junctions)
 scripts/run.sh scenario_road_town.json clients/python/route_town_demo.py
 
-# A whole fleet: 8 cars route across Town07 at once, each with a radar and a
+# A whole fleet: 20 cars route across Town07 at once, each with a radar and a
 # forward-collision reflex, braking to yield when a faster car closes on a
 # slower one sharing a corridor
 scripts/run.sh scenario_road_fleet.json clients/python/fleet_town_demo.py
@@ -267,6 +267,6 @@ resolves road/lane links and junction connections into a **connectivity graph**
 plan. The graph is delivered to the agent at join, so an agent can route itself;
 the server also offers a `request_route` service that returns a ready plan.
 `route_town_demo.py` routes one car across Town07's junctions;
-`fleet_town_demo.py` routes a whole fleet of 8 at once — the server fans them
+`fleet_town_demo.py` routes a whole fleet of 20 at once — the server fans them
 out across the map's forward lanes, and each perceives the others through an
 impaired radar and brakes to yield when it closes on slower traffic.

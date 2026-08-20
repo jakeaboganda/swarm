@@ -1,7 +1,7 @@
-"""A fleet of 8 cars routing across a real town, each perceiving the others.
+"""A fleet of 20 cars routing across a real town, each perceiving the others.
 
 The multi-agent showcase on CARLA's Town07 (234 roads, 31 junctions). One
-process opens 8 WebSocket connections -- one per car -- and drives them all in
+process opens 20 WebSocket connections -- one per car -- and drives them all in
 parallel. Each car:
 
   1. spawns in its own forward lane (the server fans the fleet out across the
@@ -24,7 +24,7 @@ Run the server first (or use scripts/run.sh):
     python3 clients/python/fleet_town_demo.py
 then watch it in the viewer (F to chase-cam a car through the junctions).
 
-Needs the scenario_road_fleet.json roster (8 cars). `pip install websockets`.
+Needs the scenario_road_fleet.json roster (20 cars). `pip install websockets`.
 """
 
 import asyncio
@@ -41,11 +41,12 @@ except ImportError:
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
-FLEET = [f"car-{i}" for i in range(8)]
+FLEET = [f"car-{i}" for i in range(20)]
 # Each car cruises at a slightly different speed, so a faster car catches a
 # slower one sharing a corridor -- real in-lane closing that trips the
 # forward-collision reflex, instead of a fleet gliding at one uniform pace.
-CRUISE = [4.5, 5.5, 6.5, 5.0, 7.5, 6.0, 8.0, 5.5]
+# Fewer entries than cars is fine: the Car ctor wraps this list by index.
+CRUISE = [4.5, 5.5, 6.5, 5.0, 7.5, 6.0, 8.0, 5.5, 4.0, 7.0]
 TTC_THRESHOLD = 2.5  # brake when perceived time-to-collision drops below this, s
 
 
@@ -196,12 +197,12 @@ def report(cars):
 async def main():
     cars = [Car(name) for name in FLEET]
 
-    # All 8 must connect before the scenario runs (fixed-roster). Join them
+    # All 20 must connect before the scenario runs (fixed-roster). Join them
     # concurrently; if any slot is refused, the scenario is the wrong one.
     try:
         await asyncio.gather(*(join(c) for c in cars))
     except Exception as e:
-        print(f"{e}\nRun the fleet scenario (8 cars):")
+        print(f"{e}\nRun the fleet scenario (20 cars):")
         print("    scripts/run.sh scenario_road_fleet.json clients/python/fleet_town_demo.py")
         for c in cars:
             if c.ws:

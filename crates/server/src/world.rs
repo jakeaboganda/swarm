@@ -112,15 +112,34 @@ fn forward_lane(map: Option<&map::RoadNetwork>) -> Option<&map::Lane> {
     })
 }
 
-/// Every forward driving lane, in network order, for spreading a fleet of cars
-/// across the map.
+/// A car needs a lane at least this long to spawn safely at `CAR_START_S`.
+/// Shorter lanes (junction connectors are often only a few metres) clamp the
+/// spawn to the lane's end -- which can hang over a seam between road pieces in
+/// the trimesh, so the raycast vehicle finds no surface and falls through.
+/// Requiring headroom past the spawn station keeps cars on solid road.
+const MIN_SPAWN_LANE_LEN: f32 = CAR_START_S + 6.0;
+
+/// Forward driving lanes long enough to spawn a car on, in network order, for
+/// spreading a fleet across the map. Falls back to *all* forward lanes if none
+/// clear the length bar (a tiny map), so a car still spawns somewhere.
 fn forward_lanes(map: Option<&map::RoadNetwork>) -> Vec<&map::Lane> {
-    map.map(|net| {
-        net.driving_lanes()
-            .filter(|l| l.direction == map::Direction::Forward)
-            .collect()
-    })
-    .unwrap_or_default()
+    let all: Vec<&map::Lane> = map
+        .map(|net| {
+            net.driving_lanes()
+                .filter(|l| l.direction == map::Direction::Forward)
+                .collect()
+        })
+        .unwrap_or_default();
+    let safe: Vec<&map::Lane> = all
+        .iter()
+        .copied()
+        .filter(|l| l.center.length() >= MIN_SPAWN_LANE_LEN)
+        .collect();
+    if safe.is_empty() {
+        all
+    } else {
+        safe
+    }
 }
 
 /// Which forward lane (by position in `forward_lanes`) a car with spawn `index`
