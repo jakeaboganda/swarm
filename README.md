@@ -8,9 +8,12 @@ streams the world to separate **viewer** processes — so you can watch it in a
 3D window, run it on a server with no display, or attach several viewers at
 once.
 
-It's a dev toy — an evolving sandbox for experimenting with how independent
-agents (scripted or LLM-driven) behave in a shared physical space, not a
-finished product.
+It's an evolving sandbox for experimenting with how independent agents, scripted or
+LLM-driven (soon), behave in a shared physical space. Not a finished product.
+
+A swarm fleet example:
+
+![swarm fleet town demo](docs/assets/swarm_fleet_demo.gif)
 
 ## The idea
 
