@@ -28,6 +28,11 @@ const RECONNECT_GRACE: Duration = Duration::from_secs(8);
 /// second line of defense.
 const MAX_INBOUND_PER_DRAIN: usize = 512;
 
+/// A vehicle whose Y falls below this has left the drivable surface (drove off
+/// an edge, or spawned over a gap) and is falling out of the world -- nothing
+/// legitimately drives this far under the road. `despawn_off_road` removes it.
+const FLOOR_Y: f32 = -5.0;
+
 #[derive(Resource)]
 pub struct Transport(pub TransportHandle);
 
@@ -332,6 +337,42 @@ pub fn send_pulses(
                 },
             );
         }
+    }
+}
+
+/// Removes any vehicle that has fallen below the world floor -- it lost its
+/// road (drove off an edge, or a bad spawn) and would otherwise fall forever.
+/// Despawns the entity, drops it from the registry and pulse state, tells
+/// viewers it's gone, and notifies its agent with `OffRoad`. The agent stays
+/// connected (so this never trips the disconnect-ends-the-scenario path); the
+/// run continues for everyone else.
+pub fn despawn_off_road(
+    mut commands: Commands,
+    mut registry: ResMut<AgentRegistry>,
+    mut pulse_states: ResMut<PulseStates>,
+    transport: Res<Transport>,
+    viz_res: Res<crate::viz_broadcast::Viz>,
+    query: Query<(Entity, &Transform, &AgentName, &Connection)>,
+) {
+    for (entity, transform, name, connection) in &query {
+        if transform.translation.y >= FLOOR_Y {
+            continue;
+        }
+        transport.0.send(
+            connection.0,
+            ServerMessage::OffRoad {
+                agent_id: AgentId(name.0.clone()),
+            },
+        );
+        viz_res.0.broadcast_reliable(&viz::ServerToViewer::Event(
+            viz::SceneEvent::EntityDespawned {
+                id: viz::EntityId(name.0.clone()),
+            },
+        ));
+        registry.remove_connection(connection.0);
+        registry.remove_name(&name.0);
+        pulse_states.0.remove(&connection.0);
+        commands.entity(entity).despawn();
     }
 }
 

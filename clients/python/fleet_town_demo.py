@@ -176,7 +176,9 @@ async def run(car):
             car.fires += 1
 
     try:
-        await run_clock(car.ws, on_step=report, on_message=on_message, report_dt=0.5)
+        reason = await run_clock(car.ws, on_step=report, on_message=on_message, report_dt=0.5)
+        if reason == "off_road":
+            car.status = "off road"
     except websockets.ConnectionClosed:
         return
 

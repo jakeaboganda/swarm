@@ -28,8 +28,8 @@ use scenario::{ArenaBounds, Roster};
 use scenario_state::{EndReason, ScenarioState, Tick};
 use time_budget::{Deadline, TICK_HZ};
 use transport_bridge::{
-    activate_physics, deactivate_physics, drain_transport, enforce_duration, expire_reconnects,
-    forward_reflex_fired, notify_scenario_ended, send_pulses, Transport,
+    activate_physics, deactivate_physics, despawn_off_road, drain_transport, enforce_duration,
+    expire_reconnects, forward_reflex_fired, notify_scenario_ended, send_pulses, Transport,
 };
 use viz_broadcast::{broadcast_frames, broadcast_spawns, broadcast_state, drain_viz_events, Viz};
 
@@ -195,6 +195,12 @@ fn main() -> anyhow::Result<()> {
             broadcast_frames
                 .after(drain_viz_events)
                 .run_if(in_state(ScenarioState::Running)),
+        )
+        // Remove any vehicle that has fallen off the road (Transform reflects
+        // the latest physics writeback by Update); runs only while Running.
+        .add_systems(
+            Update,
+            despawn_off_road.run_if(in_state(ScenarioState::Running)),
         )
         // Register agents connecting on the perception port, in all states.
         .add_systems(Update, drain_perception_events)

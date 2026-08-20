@@ -33,7 +33,8 @@ async def run_clock(ws, *, on_step=None, on_message=None, report_dt=0.5):
     requesting state). Any other server message is passed to `on_message(msg)`
     -- including the `state` replies your `on_step` triggers. Returns the
     `scenario_ended` reason string (the server ends the run at its
-    `time.duration`).
+    `time.duration`), or `"off_road"` if this agent's vehicle left the road and
+    the server removed it (no more pulses will come).
     """
     await ws.send(json.dumps({"type": "subscribe"}))
     sim_time = 0.0
@@ -50,6 +51,9 @@ async def run_clock(ws, *, on_step=None, on_message=None, report_dt=0.5):
                 await on_step(sim_time)
         elif kind == "scenario_ended":
             return msg.get("reason")
+        elif kind == "off_road":
+            # Our vehicle is gone; no further pulses arrive. Stop cleanly.
+            return "off_road"
         elif on_message is not None:
             await on_message(msg)
     return None

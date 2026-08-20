@@ -126,6 +126,13 @@ pub enum ServerMessage {
     ScenarioEnded {
         reason: String,
     },
+    /// This agent's vehicle left the drivable surface (drove off an edge, or a
+    /// bad spawn) and fell out of the world, so the server removed it. The
+    /// agent stays connected but no longer has an entity; the scenario runs on
+    /// for everyone else.
+    OffRoad {
+        agent_id: AgentId,
+    },
     Error {
         message: String,
     },
@@ -230,6 +237,9 @@ mod tests {
         });
         round_trip(&ServerMessage::ScenarioEnded {
             reason: "car-2 disconnected".into(),
+        });
+        round_trip(&ServerMessage::OffRoad {
+            agent_id: AgentId("car-8".into()),
         });
         round_trip(&ServerMessage::Error {
             message: "bad json".into(),
