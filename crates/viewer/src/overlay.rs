@@ -7,6 +7,9 @@ use crate::scene::EntityMap;
 
 /// Height above the ground at which path/trail gizmos are drawn.
 const VIZ_HEIGHT: f32 = 0.6;
+/// Radius of the filled sphere marking each plan waypoint. Small -- a dot on
+/// the path, not a bubble over it.
+const WAYPOINT_RADIUS: f32 = 0.1;
 /// Longest motion trail kept per entity.
 const TRAIL_MAX: usize = 240;
 /// A sensing range beyond this is treated as "effectively unlimited" and its
@@ -92,8 +95,104 @@ pub fn record_trails(mut query: Query<(&Transform, &mut Trail)>) {
     }
 }
 
-/// Draws each entity's remaining plan from its current position, turning
-/// red while a reflex is overriding it.
+/// Marks each plan waypoint. The wireframe sphere is replaced by a filled mesh
+/// (`sync_waypoint_markers`); this tags those pooled marker entities.
+#[derive(Component)]
+pub struct WaypointMarker;
+
+/// Reusable filled-sphere markers for plan waypoints, plus their shared mesh
+/// and the two flat-colour materials (blue normally, red while a reflex is
+/// overriding the plan). Pooled so the plan changing every tick doesn't churn
+/// entities: we grow the pool as needed and hide the unused tail.
+#[derive(Resource)]
+pub struct WaypointMarkers {
+    mesh: Handle<Mesh>,
+    normal: Handle<StandardMaterial>,
+    reflex: Handle<StandardMaterial>,
+    pool: Vec<Entity>,
+}
+
+/// Creates the shared waypoint-marker mesh + materials once at startup.
+pub fn setup_waypoint_markers(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let flat = |color: Color| StandardMaterial {
+        base_color: color,
+        // Unlit: a flat, readable marker colour regardless of scene lighting,
+        // matching the old gizmo look but filled.
+        unlit: true,
+        ..default()
+    };
+    commands.insert_resource(WaypointMarkers {
+        mesh: meshes.add(Sphere::new(WAYPOINT_RADIUS)),
+        normal: materials.add(flat(Color::srgb(0.2, 0.8, 1.0))),
+        reflex: materials.add(flat(Color::srgb(1.0, 0.2, 0.1))),
+        pool: Vec::new(),
+    });
+}
+
+/// Positions a filled sphere at every current plan waypoint, colouring it red
+/// where a reflex is overriding that plan. Reuses the marker pool, growing it
+/// when there are more waypoints than markers and hiding the leftovers.
+pub fn sync_waypoint_markers(
+    mut commands: Commands,
+    mut markers: ResMut<WaypointMarkers>,
+    plans: Query<&DebugData>,
+    mut marker_q: Query<
+        (
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+        ),
+        With<WaypointMarker>,
+    >,
+) {
+    let mut points: Vec<(Vec3, bool)> = Vec::new();
+    for debug in &plans {
+        for waypoint in &debug.plan {
+            points.push((lift(*waypoint), debug.reflex_active));
+        }
+    }
+    // Grow the pool to cover this frame (a newly spawned marker is positioned
+    // next frame, once its Commands have applied -- fine, the pool is stable).
+    while markers.pool.len() < points.len() {
+        let mesh = markers.mesh.clone();
+        let material = markers.normal.clone();
+        let entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                Transform::default(),
+                Visibility::Hidden,
+                WaypointMarker,
+            ))
+            .id();
+        markers.pool.push(entity);
+    }
+    for (i, &entity) in markers.pool.iter().enumerate() {
+        let Ok((mut transform, mut material, mut visibility)) = marker_q.get_mut(entity) else {
+            continue;
+        };
+        match points.get(i) {
+            Some(&(position, reflex)) => {
+                transform.translation = position;
+                material.0 = if reflex {
+                    markers.reflex.clone()
+                } else {
+                    markers.normal.clone()
+                };
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Draws the line of each entity's remaining plan from its current position,
+/// turning red while a reflex is overriding it. The waypoint dots themselves
+/// are filled meshes drawn by `sync_waypoint_markers`.
 pub fn draw_plans(mut gizmos: Gizmos, query: Query<(&Transform, &DebugData)>) {
     for (transform, debug) in &query {
         if debug.plan.is_empty() {
@@ -108,7 +207,6 @@ pub fn draw_plans(mut gizmos: Gizmos, query: Query<(&Transform, &DebugData)>) {
         for waypoint in &debug.plan {
             let point = lift(*waypoint);
             gizmos.line(prev, point, color);
-            gizmos.sphere(Isometry3d::from_translation(point), 0.35, color);
             prev = point;
         }
     }

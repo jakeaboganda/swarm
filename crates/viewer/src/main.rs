@@ -62,7 +62,14 @@ async fn main() {
         .insert_resource(Diag::new(std::env::var("VIZ_DIAG").is_ok()))
         .insert_resource(overlay::OverlayToggles::default())
         .insert_resource(follow::FollowCam::default())
-        .add_systems(Startup, (scene::setup_camera, follow::setup_follow_label))
+        .add_systems(
+            Startup,
+            (
+                scene::setup_camera,
+                follow::setup_follow_label,
+                overlay::setup_waypoint_markers,
+            ),
+        )
         // Apply the stream, then advance the sim-time render clock to pose
         // entities; the cameras and overlays read the posed transforms, so run
         // after. follow_camera drives the camera in follow mode; frame_camera
@@ -91,6 +98,7 @@ async fn main() {
             (
                 overlay::record_trails,
                 overlay::draw_plans,
+                overlay::sync_waypoint_markers,
                 overlay::draw_trails,
                 overlay::draw_detections,
                 overlay::draw_sensor_envelope,
