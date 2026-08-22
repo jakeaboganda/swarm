@@ -1,5 +1,6 @@
 DECISIONS.md
 PERSONAL_NOTES.md
+TEST_PLAN.md
 /target
 .claude/settings.local.json
 *.pyc
