@@ -125,12 +125,16 @@ fn driver(v: &FullVehicle, desired: DesiredVelocity, body: BodyState, dt: f32) -
     let drive_force = ((target_speed - forward_speed) * v.gain).clamp(-ceiling, ceiling);
 
     // Steering wheel: aim at the heading error, clamped to lock and slewed at
-    // the steer rate. No target direction while braking/stopped → straighten.
+    // the steer rate. With no direction demanded -- the plan ran out, or a
+    // reflex called for a stop -- the wheel is *held*, not centred. Centring is
+    // a steering input nobody asked for, and braking is proportional, so the
+    // car still has metres of stopping distance to cover: mid-corner it would
+    // spend every one of them leaving the bend tangentially.
     let target_steer = if target_speed > 1e-3 {
         let error = signed_angle_xz(body.heading, target / target_speed);
         (v.steer_gain * error).clamp(-v.max_steer, v.max_steer)
     } else {
-        0.0
+        v.steer
     };
     let steer = step_toward(v.steer, target_steer, v.steer_rate * dt);
 
@@ -318,6 +322,35 @@ mod tests {
         );
         assert!(controls.steer.abs() <= v.steer_rate * dt + 1e-6);
         assert!(controls.steer > 0.0);
+    }
+
+    #[test]
+    fn a_stop_command_holds_the_wheel_rather_than_centring_it() {
+        // A zero desired velocity says "no direction demanded" -- the plan ran
+        // out, or a reflex called for a stop. It does not say "steer straight".
+        // Centring is an active steering input nobody asked for, and mid-corner
+        // it is the wrong one: braking is proportional, so the car has metres
+        // of stopping distance left, and it spends all of them leaving the bend
+        // tangentially.
+        let v = FullVehicle {
+            steer: 0.2,
+            ..Default::default()
+        };
+        for urgent in [false, true] {
+            let controls = driver(
+                &v,
+                DesiredVelocity {
+                    value: Vec3::ZERO,
+                    urgent,
+                },
+                body(Vec3::new(6.0, 0.0, 0.0), 0.0),
+                1.0 / 60.0,
+            );
+            assert_eq!(
+                controls.steer, v.steer,
+                "urgent={urgent}: the wheel moved with nothing commanding it to"
+            );
+        }
     }
 
     #[test]

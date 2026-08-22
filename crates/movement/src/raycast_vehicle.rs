@@ -180,11 +180,17 @@ pub(crate) fn driver(
         (0.0, (-error * vehicle.gain).min(vehicle.max_engine_torque))
     };
 
+    // Steering: aim at the heading error, clamped to lock and slewed at the
+    // steer rate. With no direction demanded -- the plan ran out, or a reflex
+    // called for a stop -- the wheel is *held*, not centred. Centring is a
+    // steering input nobody asked for, and braking is proportional, so the car
+    // still has metres of stopping distance to cover: mid-corner it would
+    // spend every one of them leaving the bend tangentially.
     let target_steer = if target_speed > 1e-3 {
         let error = signed_angle_xz(heading, target / target_speed);
         (vehicle.steer_gain * error).clamp(-vehicle.max_steer, vehicle.max_steer)
     } else {
-        0.0
+        vehicle.steer
     };
     let steer = step_toward(vehicle.steer, target_steer, vehicle.steer_rate * dt);
 
@@ -656,5 +662,33 @@ mod tests {
         );
         assert!(c.steer.abs() > 0.0);
         assert!(c.steer.abs() <= v.steer_rate / 60.0 + 1e-6);
+    }
+
+    #[test]
+    fn a_stop_command_holds_the_wheel_rather_than_centring_it() {
+        // A zero desired velocity says "no direction demanded" -- the plan ran
+        // out, or a reflex called for a stop. It does not say "steer straight".
+        // Centring is an active steering input nobody asked for, and mid-corner
+        // it is the wrong one: braking is proportional, so the car has metres
+        // of stopping distance left, and it spends all of them leaving the bend
+        // tangentially.
+        let mut v = vehicle();
+        v.steer = 0.2;
+        for urgent in [false, true] {
+            let c = driver(
+                &v,
+                DesiredVelocity {
+                    value: Vec3::ZERO,
+                    urgent,
+                },
+                Vec3::X,
+                6.0,
+                1.0 / 60.0,
+            );
+            assert_eq!(
+                c.steer, v.steer,
+                "urgent={urgent}: the wheel moved with nothing commanding it to"
+            );
+        }
     }
 }
