@@ -270,6 +270,19 @@ impl Sim {
             .collect()
     }
 
+    /// How many of `name`'s waypoints it has still to reach. The plan itself
+    /// is never consumed, so this is strictly less than `plan_waypoints` once
+    /// the body has driven past any of them.
+    pub fn plan_remaining(&mut self, name: &str) -> usize {
+        let entity = self.entity_of(name).expect("agent has an entity");
+        self.app
+            .world()
+            .get::<Plan>(entity)
+            .expect("entity has a plan")
+            .remaining()
+            .count()
+    }
+
     pub fn position_of(&self, name: &str) -> Vec3 {
         let entity = self.entity_of(name).expect("agent has an entity");
         self.app

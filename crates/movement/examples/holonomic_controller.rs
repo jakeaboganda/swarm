@@ -12,6 +12,7 @@ fn main() {
     let desired = DesiredVelocity {
         value: Vec3::new(5.0, 0.0, 0.0),
         urgent: false,
+        lookahead: 0.0,
     };
 
     let mass = 1.0;

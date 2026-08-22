@@ -155,10 +155,12 @@ pub fn broadcast_frames(
             id: entity.id.clone(),
             transform: to_transform(transform),
         });
+        // What is *left* of the plan. The tracker does not consume waypoints
+        // (the agent's path stays as it submitted it), so the ones already
+        // driven past are skipped here rather than removed there.
         let plan_points = plan
             .map(|p| {
-                p.waypoints
-                    .iter()
+                p.remaining()
                     .map(|w| viz::Vec3::new(w.position.x, w.position.y, w.position.z))
                     .collect()
             })

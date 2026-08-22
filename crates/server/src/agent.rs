@@ -6,6 +6,8 @@ use protocol::messages::Waypoint;
 use sensors::ActiveRule;
 use transport::ConnectionId;
 
+use crate::tracker::Progress;
+
 #[derive(Component, Debug, Clone)]
 pub struct AgentName(pub String);
 
@@ -15,13 +17,51 @@ pub struct AgentName(pub String);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Connection(pub ConnectionId);
 
-/// The deliberative layer: a path of waypoints, advanced as each is
-/// reached. `version` increments on every `SubmitPlan`, so agents can tell
+/// The deliberative layer: a path of waypoints, tracked as the body drives
+/// along it. `version` increments on every `SubmitPlan`, so agents can tell
 /// whether a `reflex_fired` event refers to their current plan.
+///
+/// The waypoints are **never consumed**: they stay exactly as the agent
+/// submitted them until the path is driven (or a `stop_and_hold` drops it), so
+/// an agent that re-plans freely never finds its own path and the server's
+/// idea of it drifting apart.
 #[derive(Component, Debug, Default)]
 pub struct Plan {
     pub waypoints: VecDeque<Waypoint>,
     pub version: u64,
+    /// How far along `waypoints` the body has got, stamped with the version it
+    /// was measured on. This is the only state tracking carries, and it is the
+    /// one place re-planning and tracking interact: a new plan is a new path,
+    /// and an arc length measured on the old one means nothing on it, so the
+    /// stamp is checked on every read and stale progress is discarded.
+    progress: Option<(u64, Progress)>,
+}
+
+impl Plan {
+    /// Progress along the *current* plan, or `None` if it has not been tracked
+    /// yet -- which is what a fresh plan looks like, and is the caller's cue to
+    /// re-acquire progress by searching the whole path.
+    pub fn progress(&self) -> Option<Progress> {
+        self.progress
+            .filter(|(version, _)| *version == self.version)
+            .map(|(_, progress)| progress)
+    }
+
+    pub fn set_progress(&mut self, progress: Progress) {
+        self.progress = Some((self.version, progress));
+    }
+
+    pub fn clear_progress(&mut self) {
+        self.progress = None;
+    }
+
+    /// The waypoints the body has still to reach. The plan keeps the ones it
+    /// has already driven past -- they are the agent's, not the server's, to
+    /// remove -- so anything reporting what is *left* asks for it here.
+    pub fn remaining(&self) -> impl Iterator<Item = &Waypoint> {
+        let driven = self.progress().map(|p| p.next_vertex).unwrap_or(0);
+        self.waypoints.iter().skip(driven)
+    }
 }
 
 /// The reactive layer: server-evaluated reflex rules for this entity.

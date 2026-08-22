@@ -146,6 +146,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::new(5.0, 0.0, 0.0),
                 urgent: false,
+                lookahead: 0.0,
             },
             BodyState {
                 velocity: Vec3::ZERO,
@@ -174,6 +175,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::ZERO,
                 urgent: false,
+                lookahead: 0.0,
             },
             BodyState {
                 velocity: Vec3::new(0.0, 0.0, 3.0),

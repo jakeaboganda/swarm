@@ -270,6 +270,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::ZERO,
                 urgent: false,
+                lookahead: 0.0,
             },
             fast,
             1.0 / 60.0,
@@ -279,6 +280,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::ZERO,
                 urgent: true,
+                lookahead: 0.0,
             },
             fast,
             1.0 / 60.0,
@@ -296,6 +298,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::new(0.0, 0.0, -5.0),
                 urgent: false,
+                lookahead: 0.0,
             },
             body(Vec3::new(3.0, 0.0, 0.0), 0.0),
             1.0 / 60.0,
@@ -316,6 +319,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::new(0.0, 0.0, -5.0),
                 urgent: false,
+                lookahead: 0.0,
             },
             body(Vec3::new(3.0, 0.0, 0.0), 0.0),
             dt,
@@ -342,6 +346,7 @@ mod tests {
                 DesiredVelocity {
                     value: Vec3::ZERO,
                     urgent,
+                    lookahead: 0.0,
                 },
                 body(Vec3::new(6.0, 0.0, 0.0), 0.0),
                 1.0 / 60.0,
@@ -359,6 +364,7 @@ mod tests {
         let desired = DesiredVelocity {
             value: Vec3::new(0.0, 0.0, -5.0),
             urgent: false,
+            lookahead: 0.0,
         };
         let b = body(Vec3::new(3.0, 0.0, 0.0), 0.0);
         v.drive(desired, b, 1.0 / 60.0);

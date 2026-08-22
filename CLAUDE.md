@@ -51,9 +51,14 @@ selected per scenario.
   as before.
 - **Agents control entities via two layers:**
   - A **plan**: an ordered path of waypoints, each `{position, speed}`.
-    The server continuously steers the entity toward the current waypoint
-    at its target speed, advancing to the next once within arrival
-    tolerance.
+    The server *tracks* it: each tick it measures how far along the path the
+    body has got, aims at a point interpolated a speed-scaled lookahead
+    **ahead of that**, and steers there at the speed the plan asked for. The
+    waypoints are **never consumed** -- they stay exactly as submitted until
+    the path is driven or a reflex drops it -- so an agent that re-plans
+    freely never finds its own path and the server's idea of it drifting
+    apart. Deciding *where* and *how fast* is the agent's; the server only
+    executes.
   - **Reflexes**: declarative, agent-registered rules
     (`sensor` `measure` `operator` `threshold` → `action`) evaluated
     entirely server-side, every tick. `sensor` names a **device** to read —
@@ -171,8 +176,10 @@ Cargo workspace, ten crates:
   world (flat **arena**, or a **road** world — the road's trimesh collider +
   raycast-vehicle agents, from `demo_road` or an imported `.xodr`), runs Rapier
   physics, dispatches movement per entity, computes per-device perceived worlds,
-  resolves reflex-vs-plan arbitration each tick, answers `request_route`, manages
-  scenario lifecycle, and drives the viz + perception broadcasts. Owns the tokio
+  resolves reflex-vs-plan arbitration each tick, tracks each agent's plan
+  (`tracker`: projected progress + a speed-scaled pure-pursuit aim point),
+  answers `request_route`, manages scenario lifecycle, and drives the viz +
+  perception broadcasts. Owns the tokio
   runtime; Bevy runs on the main thread. Split lib + bin: `app::build_app`
   assembles the whole system graph, and the binary is process concerns only
   (argument parsing, the runtime, binding the three servers) — so a test can

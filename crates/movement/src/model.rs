@@ -6,6 +6,9 @@ use bevy::prelude::*;
 /// arbitration — reflex actions and plan waypoint-seeking both just supply a
 /// value here, so movement models don't need to know which one is active.
 ///
+/// `lookahead` carries the geometry behind `value`'s direction, for models
+/// that steer rather than translate -- see the field.
+///
 /// `urgent` is set when a reflex (`brake`/`stop_and_hold`) is driving this
 /// value rather than ordinary plan-following — movement models use it to
 /// apply a higher force ceiling than cruising uses, since "brake as fast as
@@ -14,6 +17,15 @@ use bevy::prelude::*;
 pub struct DesiredVelocity {
     pub value: Vec3,
     pub urgent: bool,
+    /// Distance to the aim point `value`'s direction points at, in metres --
+    /// pure pursuit's lookahead. A model with a steered front axle needs it:
+    /// the steer angle that reaches a point is set by how far away that point
+    /// is, not only by the angle to it, and a direction alone cannot say.
+    ///
+    /// Zero means no aim point: nothing is asking for a direction (a reflex
+    /// stop, or an empty plan). The path tracker sets it whenever it sets a
+    /// non-zero `value`, so the two always arrive together.
+    pub lookahead: f32,
 }
 
 /// Read-back physical state of the body this tick, supplied to `drive`.

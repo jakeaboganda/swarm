@@ -15,6 +15,7 @@ pub mod pulse;
 pub mod scenario;
 pub mod scenario_state;
 pub mod time_budget;
+pub mod tracker;
 pub mod transport_bridge;
 pub mod viz_broadcast;
 pub mod world;

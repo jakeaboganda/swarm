@@ -50,8 +50,6 @@ pub struct RaycastVehicle {
     pub gain: f32,
     /// Steering lock (max |steer|), radians.
     pub max_steer: f32,
-    /// Proportional gain from heading error to target steer angle.
-    pub steer_gain: f32,
     /// Max steering-angle change, radians per second.
     pub steer_rate: f32,
     pub tire: TireParams,
@@ -84,7 +82,6 @@ impl Default for RaycastVehicle {
             max_brake_torque: 5_000.0,
             gain: 200.0,
             max_steer: 0.55,
-            steer_gain: 1.2,
             steer_rate: 3.0,
             tire: TireParams::default(),
             steer: 0.0,
@@ -151,8 +148,7 @@ pub fn wheel_offset(index: usize, vehicle: &RaycastVehicle) -> Vec3 {
 
 /// Driver: `DesiredVelocity` -> `VehicleControls`, i.e. the pedals + wheel. A
 /// proportional speed controller split across throttle and brake, and a
-/// rate-limited proportional steering law, the same shape as `FullVehicle`'s
-/// driver.
+/// rate-limited **pure pursuit** steering law.
 pub(crate) fn driver(
     vehicle: &RaycastVehicle,
     desired: DesiredVelocity,
@@ -180,15 +176,14 @@ pub(crate) fn driver(
         (0.0, (-error * vehicle.gain).min(vehicle.max_engine_torque))
     };
 
-    // Steering: aim at the heading error, clamped to lock and slewed at the
-    // steer rate. With no direction demanded -- the plan ran out, or a reflex
-    // called for a stop -- the wheel is *held*, not centred. Centring is a
-    // steering input nobody asked for, and braking is proportional, so the car
-    // still has metres of stopping distance to cover: mid-corner it would
-    // spend every one of them leaving the bend tangentially.
-    let target_steer = if target_speed > 1e-3 {
-        let error = signed_angle_xz(heading, target / target_speed);
-        (vehicle.steer_gain * error).clamp(-vehicle.max_steer, vehicle.max_steer)
+    // Steering: pure pursuit, slewed at the steer rate. With no aim point --
+    // the plan ran out, or a reflex called for a stop -- the wheel is *held*,
+    // not centred. Centring is a steering input nobody asked for, and braking
+    // is proportional, so the car still has metres of stopping distance to
+    // cover: mid-corner it would spend every one of them leaving the bend
+    // tangentially.
+    let target_steer = if target_speed > 1e-3 && desired.lookahead > 1e-3 {
+        pursue(vehicle, heading, target / target_speed * desired.lookahead)
     } else {
         vehicle.steer
     };
@@ -199,6 +194,40 @@ pub(crate) fn driver(
         engine_torque,
         brake_torque,
     }
+}
+
+/// Pure pursuit: the steer angle whose arc reaches the aim point.
+///
+/// `aim` is the aim point relative to the chassis centre, in the ground plane.
+/// The geometry is exact rather than a tuned gain: a chord of length `L`
+/// subtending `alpha` from the rear axle lies on a circle of curvature
+/// `2 sin(alpha) / L`, and the bicycle model puts the front wheel at
+/// `tan(steer) = wheelbase * curvature`. On a constant-radius bend with the
+/// car on the path, that returns `atan(wheelbase / radius)` -- the exact steer
+/// the corner needs -- for *every* lookahead.
+///
+/// Pursuit is defined from the rear axle, so the aim point is re-referenced
+/// there first; measuring from the chassis centre instead would bias every
+/// corner by roughly half a wheelbase's worth of curvature.
+pub(crate) fn pursue(vehicle: &RaycastVehicle, heading: Vec3, aim: Vec3) -> f32 {
+    let from_rear_axle = Vec3::new(aim.x, 0.0, aim.z) + heading * vehicle.half_wheelbase;
+    let distance = from_rear_axle.length();
+    if distance <= 1e-3 || !distance.is_finite() {
+        return vehicle.steer;
+    }
+    let alpha = signed_angle_xz(heading, from_rear_axle / distance);
+    // Behind the rear axle the pursuit circle degenerates -- sin(alpha) shrinks
+    // back toward zero and the geometry unwinds the wheel toward straight,
+    // which is the opposite of what an aim point over your shoulder calls for.
+    // The tightest circle available is the honest answer.
+    if alpha.abs() > std::f32::consts::FRAC_PI_2 {
+        return vehicle.max_steer * alpha.signum();
+    }
+    let wheelbase = 2.0 * vehicle.half_wheelbase;
+    let curvature = 2.0 * alpha.sin() / distance;
+    (wheelbase * curvature)
+        .atan()
+        .clamp(-vehicle.max_steer, vehicle.max_steer)
 }
 
 /// Spring-damper suspension force along the suspension axis (never negative,
@@ -563,6 +592,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::new(5.0, 0.0, 0.0),
                 urgent: false,
+                lookahead: 0.0,
             },
             Vec3::X,
             0.0,
@@ -581,6 +611,7 @@ mod tests {
             DesiredVelocity {
                 value: Vec3::ZERO,
                 urgent: true,
+                lookahead: 0.0,
             },
             Vec3::X,
             10.0,
@@ -601,6 +632,7 @@ mod tests {
                 DesiredVelocity {
                     value: Vec3::ZERO,
                     urgent,
+                    lookahead: 0.0,
                 },
                 Vec3::X,
                 speed,
@@ -646,22 +678,83 @@ mod tests {
     }
 
     #[test]
-    fn driver_steers_toward_a_sideways_target() {
+    fn driver_steers_toward_a_sideways_aim_point() {
         let v = vehicle();
-        // Heading +X, want to go toward +X rotated left (-Z) -> nonzero steer,
-        // rate-limited within one tick.
+        // Heading +X, aim point 6 m away toward +X rotated left (-Z) ->
+        // nonzero steer to the left, rate-limited within one tick.
         let c = driver(
             &v,
             DesiredVelocity {
                 value: Vec3::new(3.0, 0.0, -3.0),
                 urgent: false,
+                lookahead: 6.0,
             },
             Vec3::X,
             3.0,
             1.0 / 60.0,
         );
-        assert!(c.steer.abs() > 0.0);
+        assert!(c.steer > 0.0, "steered {} away from the aim point", c.steer);
         assert!(c.steer.abs() <= v.steer_rate / 60.0 + 1e-6);
+    }
+
+    #[test]
+    fn a_direction_with_no_aim_point_leaves_the_wheel_alone() {
+        // `lookahead` is the geometry the steering law is made of. Without it
+        // there is nothing to steer *to* -- only a direction, which says
+        // nothing about how hard to turn -- so the wheel holds rather than
+        // guessing.
+        let mut v = vehicle();
+        v.steer = 0.2;
+        let c = driver(
+            &v,
+            DesiredVelocity {
+                value: Vec3::new(3.0, 0.0, -3.0),
+                urgent: false,
+                lookahead: 0.0,
+            },
+            Vec3::X,
+            3.0,
+            1.0 / 60.0,
+        );
+        assert_eq!(c.steer, v.steer);
+    }
+
+    #[test]
+    fn the_steer_is_the_arc_that_reaches_the_aim_point() {
+        // The point of the geometric law: on a constant-radius bend with the
+        // car on the path, it returns exactly the steer the corner needs --
+        // atan(wheelbase / radius) -- and returns it for *every* lookahead.
+        // A proportional law cannot: its answer is whatever the gain times the
+        // heading error happens to be, which moves as the aim point moves.
+        let v = vehicle();
+        let radius = 60.0f32;
+        let wheelbase = 2.0 * v.half_wheelbase;
+        let needed = (wheelbase / radius).atan();
+        for lookahead in [3.0f32, 6.0, 12.0] {
+            // Heading +X with the rear axle at the origin, on a left-hand bend
+            // centred at (0, 0, -radius). The aim point is the point of that
+            // circle a chord `lookahead` away.
+            let theta = 2.0 * (lookahead / (2.0 * radius)).asin();
+            let from_rear = Vec3::new(radius * theta.sin(), 0.0, radius * (theta.cos() - 1.0));
+            let steer = pursue(&v, Vec3::X, from_rear - Vec3::X * v.half_wheelbase);
+            assert!(
+                (steer - needed).abs() < 1e-3,
+                "lookahead {lookahead} m on a {radius} m bend asked for {steer} rad,                  not the {needed} rad the corner needs"
+            );
+        }
+    }
+
+    #[test]
+    fn an_aim_point_behind_the_car_asks_for_full_lock() {
+        // sin(alpha) shrinks back toward zero past 90 degrees, so the raw
+        // geometry would unwind the wheel toward straight for an aim point
+        // over the driver's shoulder. The tightest circle available is the
+        // honest answer.
+        let v = vehicle();
+        let behind_left = Vec3::new(-8.0, 0.0, -1.0);
+        assert_eq!(pursue(&v, Vec3::X, behind_left), v.max_steer);
+        let behind_right = Vec3::new(-8.0, 0.0, 1.0);
+        assert_eq!(pursue(&v, Vec3::X, behind_right), -v.max_steer);
     }
 
     #[test]
@@ -680,6 +773,7 @@ mod tests {
                 DesiredVelocity {
                     value: Vec3::ZERO,
                     urgent,
+                    lookahead: 0.0,
                 },
                 Vec3::X,
                 6.0,
