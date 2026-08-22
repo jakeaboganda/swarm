@@ -26,10 +26,40 @@ const CAR_RADIUS: f32 = 1.0;
 #[derive(Component, Clone, Copy)]
 pub struct Radius(pub f32);
 
+/// A car's chassis half-extents (metres): 1.6 wide, 0.8 tall, 2.8 long.
+pub const CAR_HALF_EXTENTS: Vec3 = Vec3::new(0.8, 0.4, 1.4);
+/// Chassis mass (kg). Set explicitly rather than through a density, because
+/// the tire model works in real units and every constant in it is chosen
+/// against a real car's numbers.
+pub const CAR_MASS: f32 = 1300.0;
+
 /// A car's chassis center rides this far above the lane surface at spawn, so it
 /// settles gently onto its suspension instead of launching off over-compressed
-/// springs (matched to the raycast vehicle's rest geometry).
-const CAR_RIDE_HEIGHT: f32 = 1.2;
+/// springs. Derived from the vehicle's own rig rather than restated as a
+/// constant, so the two cannot drift apart.
+pub fn car_ride_height() -> f32 {
+    RaycastVehicle::default().rest_ride_height()
+}
+
+/// The chassis's principal moments of inertia, as a uniform box of `CAR_MASS`.
+///
+/// A real car's mass sits nearer its extremities than a solid box's does, so
+/// this under-states pitch and yaw inertia and the body is livelier than a
+/// real one. It is at least derived rather than felt; refining it is tuning
+/// work, not a structural change.
+fn car_inertia() -> Vec3 {
+    let (w, h, d) = (
+        CAR_HALF_EXTENTS.x * 2.0,
+        CAR_HALF_EXTENTS.y * 2.0,
+        CAR_HALF_EXTENTS.z * 2.0,
+    );
+    let factor = CAR_MASS / 12.0;
+    Vec3::new(
+        factor * (h * h + d * d), // pitch, about the lateral axis
+        factor * (w * w + d * d), // yaw
+        factor * (w * w + h * h), // roll, about the longitudinal axis
+    )
+}
 /// A car spawns this far along its lane (arc length), so all four wheels clear
 /// the road's start edge rather than hanging off into space.
 const CAR_START_S: f32 = 10.0;
@@ -188,11 +218,11 @@ pub fn agent_spawn_transform(
         } else {
             Vec3::X
         };
-        return Transform::from_translation(pose.position + Vec3::Y * CAR_RIDE_HEIGHT)
+        return Transform::from_translation(pose.position + Vec3::Y * car_ride_height())
             .looking_to(heading, Vec3::Y);
     }
     // No lane to place onto: keep the car above ground and facing +X.
-    Transform::from_translation(Vec3::new(base.x, CAR_RIDE_HEIGHT, base.z))
+    Transform::from_translation(Vec3::new(base.x, car_ride_height(), base.z))
         .looking_to(Vec3::X, Vec3::Y)
 }
 
@@ -352,9 +382,13 @@ pub fn spawn_agent(
     let (viz_shape, collider) = if is_car {
         (
             viz::Shape::Cuboid {
-                half_extents: viz::Vec3::new(0.8, 0.4, 1.4),
+                half_extents: viz::Vec3::new(
+                    CAR_HALF_EXTENTS.x,
+                    CAR_HALF_EXTENTS.y,
+                    CAR_HALF_EXTENTS.z,
+                ),
             },
-            Collider::cuboid(0.8, 0.4, 1.4),
+            Collider::cuboid(CAR_HALF_EXTENTS.x, CAR_HALF_EXTENTS.y, CAR_HALF_EXTENTS.z),
         )
     } else {
         // A scaled capsule is the obvious-obstacle case; the raycast chassis
@@ -443,19 +477,29 @@ pub fn spawn_agent(
         )),
         Embodiment::RaycastVehicle => entity.insert((
             RaycastVehicle::default(),
+            movement::Wheels::default(),
             // Full 3D rotation: real roll and pitch on terrain and banking,
             // yaw from tire forces. Overrides the shared `ROTATION_LOCKED`.
             LockedAxes::empty(),
             PhysicalYaw,
-            // A denser chassis (~14 kg) with the box's own inertia, so wheel
-            // torques don't spin the light body and make the tire grip react
-            // violently to its own rotation.
-            ColliderMassProperties::Density(4.0),
-            // A car coasts (little linear drag); some angular damping keeps it
-            // from spinning up under tire torques. Tuned by feel.
+            // Real mass, and a centre of mass set below the box's middle. Both
+            // matter now that tire forces act at the contact patch: the mass
+            // sets how much the body pitches and rolls under them, and the low
+            // centre is what keeps the car sliding at the limit instead of
+            // tipping over. The rig's own `center_of_mass` is the single
+            // source, so the physics and the vehicle model agree.
+            ColliderMassProperties::MassProperties(MassProperties {
+                local_center_of_mass: RaycastVehicle::default().center_of_mass,
+                mass: CAR_MASS,
+                principal_inertia_local_frame: Quat::IDENTITY,
+                principal_inertia: car_inertia(),
+            }),
+            // A car coasts: aerodynamic drag on a real one is worth well under
+            // 0.1/s, and the tires now supply the forces that used to need
+            // damping to stay civil.
             Damping {
-                linear_damping: 0.2,
-                angular_damping: 0.5,
+                linear_damping: 0.05,
+                angular_damping: 0.05,
             },
             // The chassis floats on suspension and rarely touches the ground;
             // give it grip for the times it bottoms out. Wheels grip via forces

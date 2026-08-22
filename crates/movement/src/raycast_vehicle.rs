@@ -4,12 +4,19 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::{ExternalForce, QueryFilter, ReadRapierContext, Velocity};
 
 use crate::model::DesiredVelocity;
+use crate::tire::{step_wheel, TireParams, WheelInput, WheelSpec};
+use crate::wheel::Wheels;
 
 /// A hand-rolled raycast vehicle: four wheels ray-cast to the ground, with
-/// spring-damper suspension, engine/brake, and lateral tire grip applied to the
-/// chassis as forces. Roll and pitch are real physics (the chassis is a free
-/// dynamic body that leans on banking and pitches on grade). This is the 3D,
-/// terrain-following cousin of `FullVehicle`'s bicycle plant.
+/// spring-damper suspension, per-wheel tire forces from slip, and engine/brake
+/// torque applied to the wheels rather than to the body. Roll and pitch are
+/// real physics (the chassis is a free dynamic body that leans on banking and
+/// pitches on grade). This is the 3D, terrain-following cousin of
+/// `FullVehicle`'s bicycle plant.
+///
+/// Every force scales with the load its wheel is carrying, so weight transfer
+/// -- squat, dive, and the outside wheel gripping harder mid-corner -- emerges
+/// from the suspension rather than being modelled anywhere.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RaycastVehicle {
     /// Front/rear wheel offset from the chassis center, along forward.
@@ -19,6 +26,13 @@ pub struct RaycastVehicle {
     /// Wheel attach height relative to center (negative = below).
     pub wheel_y: f32,
     pub wheel_radius: f32,
+    /// Rotational inertia of one wheel about its axle (kg.m^2).
+    pub wheel_inertia: f32,
+    /// Centre of mass in chassis-local coordinates. Below the geometric centre:
+    /// it is the dominant term in both the rollover threshold and how much the
+    /// body pitches under drive, so it is set explicitly rather than inherited
+    /// from the collider's shape.
+    pub center_of_mass: Vec3,
     /// Suspension length at full extension.
     pub suspension_rest: f32,
     /// Spring force per meter of compression.
@@ -27,11 +41,12 @@ pub struct RaycastVehicle {
     pub suspension_damping: f32,
     /// Clamp on a single wheel's suspension force.
     pub max_suspension_force: f32,
-    /// Drive/brake force ceiling for ordinary driving.
-    pub max_engine_force: f32,
-    /// Higher ceiling when a reflex is braking (urgent).
-    pub max_brake_force: f32,
-    /// Proportional gain from forward-speed error to drive force.
+    /// Total drive torque ceiling for ordinary driving (N.m), split across the
+    /// wheels.
+    pub max_engine_torque: f32,
+    /// Higher total ceiling when a reflex is braking (urgent).
+    pub max_brake_torque: f32,
+    /// Proportional gain from forward-speed error to torque.
     pub gain: f32,
     /// Steering lock (max |steer|), radians.
     pub max_steer: f32,
@@ -39,10 +54,7 @@ pub struct RaycastVehicle {
     pub steer_gain: f32,
     /// Max steering-angle change, radians per second.
     pub steer_rate: f32,
-    /// Lateral grip: force per (m/s) of sideways slip at a wheel.
-    pub grip: f32,
-    /// Clamp on a single wheel's lateral grip force.
-    pub max_lateral: f32,
+    pub tire: TireParams,
     /// Current steering angle, the evolving actuator state.
     pub steer: f32,
 }
@@ -53,34 +65,66 @@ impl Default for RaycastVehicle {
             half_wheelbase: 1.3,
             half_track: 0.8,
             wheel_y: -0.35,
-            wheel_radius: 0.35,
-            suspension_rest: 0.5,
-            // Sized to hold a ~14 kg chassis (Density 4.0 at spawn) at a small
-            // ride-height compression, near-critically damped.
-            suspension_stiffness: 500.0,
-            suspension_damping: 45.0,
-            max_suspension_force: 2500.0,
-            max_engine_force: 120.0,
-            max_brake_force: 320.0,
-            gain: 20.0,
+            wheel_radius: 0.32,
+            // A road wheel and tire, ~1.2 kg.m^2.
+            wheel_inertia: 1.2,
+            // ~0.5 m above the ground once settled, against a 1.6 m track:
+            // a rollover threshold near 1.5 g, comfortably above what the
+            // tires can generate, so the car slides at the limit rather than
+            // tipping over.
+            center_of_mass: Vec3::new(0.0, -0.31, 0.0),
+            suspension_rest: 0.20,
+            // Sized for a ~1300 kg chassis: about a third of the travel
+            // compressed at rest, damped to roughly 40% of critical.
+            suspension_stiffness: 55_000.0,
+            suspension_damping: 3_500.0,
+            max_suspension_force: 15_000.0,
+            // ~0.35 g of drive and ~1 g of braking at the contact patch.
+            max_engine_torque: 1_500.0,
+            max_brake_torque: 5_000.0,
+            gain: 200.0,
             max_steer: 0.55,
             steer_gain: 1.2,
             steer_rate: 3.0,
-            // Moderate grip: strong enough to corner, not so strong it reacts
-            // violently to the chassis's own spin.
-            grip: 22.0,
-            max_lateral: 45.0,
+            tire: TireParams::default(),
             steer: 0.0,
         }
     }
 }
 
-/// Actuator commands from the driver: a steering angle and a signed
-/// longitudinal drive force (positive accelerates, negative brakes).
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl RaycastVehicle {
+    /// The fixed per-wheel properties the tire model needs.
+    pub fn wheel_spec(&self) -> WheelSpec {
+        WheelSpec {
+            radius: self.wheel_radius,
+            inertia: self.wheel_inertia,
+            tire: self.tire,
+        }
+    }
+
+    /// Height of the chassis centre above the ground with the suspension at
+    /// full extension and the wheels just touching -- where a car is spawned,
+    /// so it settles down into its static compression rather than starting
+    /// buried or dropping from a height.
+    pub fn rest_ride_height(&self) -> f32 {
+        -self.wheel_y + self.suspension_rest + self.wheel_radius
+    }
+}
+
+/// Actuator commands from the driver: a steering angle plus separate throttle
+/// and brake.
+///
+/// They are separate because brake torque opposes *wheel rotation* and clamps
+/// to zero rather than through it. A single signed torque going negative would
+/// drive the wheels backwards instead of locking them, and lockup is the whole
+/// point of simulating wheels.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct VehicleControls {
     pub steer: f32,
-    pub drive_force: f32,
+    /// Total drive torque, never negative.
+    pub engine_torque: f32,
+    /// Total brake torque, never negative.
+    pub brake_torque: f32,
 }
 
 /// Wheel layout: (forward sign, right sign, steered). All wheels drive; the
@@ -106,8 +150,9 @@ pub fn wheel_offset(index: usize, vehicle: &RaycastVehicle) -> Vec3 {
 }
 
 /// Driver: `DesiredVelocity` -> `VehicleControls`, i.e. the pedals + wheel. A
-/// proportional speed controller for the drive force and a rate-limited
-/// proportional steering law, the same shape as `FullVehicle`'s driver.
+/// proportional speed controller split across throttle and brake, and a
+/// rate-limited proportional steering law, the same shape as `FullVehicle`'s
+/// driver.
 pub(crate) fn driver(
     vehicle: &RaycastVehicle,
     desired: DesiredVelocity,
@@ -118,12 +163,22 @@ pub(crate) fn driver(
     let target = Vec3::new(desired.value.x, 0.0, desired.value.z);
     let target_speed = target.length();
 
-    let ceiling = if desired.urgent {
-        vehicle.max_brake_force
+    // Going too slow is throttle; too fast is brake. They are never both on.
+    let error = target_speed - forward_speed;
+    let (engine_torque, brake_torque) = if error >= 0.0 {
+        ((error * vehicle.gain).min(vehicle.max_engine_torque), 0.0)
+    } else if desired.urgent {
+        // A reflex stop is an emergency stop: full pressure at once, not a
+        // proportional amount. Braking in proportion to the speed error eases
+        // off exactly when the situation calls for everything the tires have
+        // -- and below roughly a quarter of this ceiling the brake cannot
+        // overcome the tire's own torque, so the wheels never lock at all.
+        (0.0, vehicle.max_brake_torque)
     } else {
-        vehicle.max_engine_force
+        // Ordinary slowing stays proportional, and capped by the cruise
+        // ceiling rather than the emergency one.
+        (0.0, (-error * vehicle.gain).min(vehicle.max_engine_torque))
     };
-    let drive_force = ((target_speed - forward_speed) * vehicle.gain).clamp(-ceiling, ceiling);
 
     let target_steer = if target_speed > 1e-3 {
         let error = signed_angle_xz(heading, target / target_speed);
@@ -133,7 +188,11 @@ pub(crate) fn driver(
     };
     let steer = step_toward(vehicle.steer, target_steer, vehicle.steer_rate * dt);
 
-    VehicleControls { steer, drive_force }
+    VehicleControls {
+        steer,
+        engine_torque,
+        brake_torque,
+    }
 }
 
 /// Spring-damper suspension force along the suspension axis (never negative,
@@ -174,15 +233,17 @@ fn horizontal(v: Vec3) -> Vec3 {
 }
 
 /// Drives every `RaycastVehicle`: run the driver, then per wheel cast a ray to
-/// the ground and apply suspension + drive + lateral-grip forces to the
-/// chassis (overwriting `ExternalForce`). Runs before the physics step. Reads
-/// the physics context (immutably) to raycast against the world's colliders.
+/// the ground, step its spin against the tire, and apply suspension + tire
+/// forces to the chassis (overwriting `ExternalForce`). Runs before the physics
+/// step. Reads the physics context (immutably) to raycast against the world's
+/// colliders.
 pub fn drive_raycast_vehicles(
     time: Res<Time>,
     rapier: ReadRapierContext,
     mut query: Query<(
         Entity,
         &mut RaycastVehicle,
+        &mut Wheels,
         &DesiredVelocity,
         &Velocity,
         &Transform,
@@ -194,115 +255,164 @@ pub fn drive_raycast_vehicles(
         return;
     };
 
-    for (entity, mut vehicle, desired, velocity, transform, mut force) in &mut query {
+    for (entity, mut vehicle, mut wheels, desired, velocity, transform, mut force) in &mut query {
         let center = transform.translation;
+        let rotation = transform.rotation;
         let up = *transform.up();
         let right = *transform.right();
         let forward = *transform.forward();
-        // Horizontal heading for the driver and drive direction; the full
-        // (possibly tilted) body axes place the wheels.
+        // Horizontal heading for the driver; the full (possibly tilted) body
+        // axes place the wheels and orient their forces.
         let heading = horizontal(forward);
+        // Rapier applies `ExternalForce::torque` about the centre of mass, so
+        // every arm below is measured from there, not from the collider origin.
+        let com = center + rotation * vehicle.center_of_mass;
 
         let forward_speed = velocity.linear.dot(heading);
         let controls = driver(&vehicle, *desired, heading, forward_speed, dt);
         vehicle.steer = controls.steer;
-        let per_wheel_drive = controls.drive_force * 0.25;
         let steer_rot = Quat::from_axis_angle(up, vehicle.steer);
         let filter = QueryFilter::default().exclude_rigid_body(entity);
         let max_reach = vehicle.suspension_rest + vehicle.wheel_radius;
+        let spec = vehicle.wheel_spec();
+        let per_wheel = 0.25;
 
         let mut total_force = Vec3::ZERO;
         let mut total_torque = Vec3::ZERO;
 
-        let debug = std::env::var("VEHICLE_DEBUG").is_ok();
-        const NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
-        let mut wheels_dbg = String::new();
-
-        for (i, (fb, lr, steered)) in WHEELS.into_iter().enumerate() {
-            let attach = center
-                + forward * (vehicle.half_wheelbase * fb)
-                + right * (vehicle.half_track * lr)
-                + up * vehicle.wheel_y;
-            let Some((_, toi)) = context.cast_ray(attach, -up, max_reach, true, filter) else {
-                if debug {
-                    let _ = write!(wheels_dbg, " {}:air", NAMES[i]);
-                }
-                continue; // wheel off the ground: no force
+        for (index, (_, _, steered)) in WHEELS.into_iter().enumerate() {
+            let attach = center + rotation * wheel_offset(index, &vehicle);
+            let steer = if steered { vehicle.steer } else { 0.0 };
+            // The wheel's own axes: rolling direction and axle direction.
+            let roll = if steered {
+                steer_rot * forward
+            } else {
+                forward
             };
-
-            let arm = attach - center;
-            let point_velocity = velocity.linear + velocity.angular.cross(arm);
-
-            // Suspension: spring-damper along the chassis up axis.
-            let compression = (vehicle.suspension_rest - (toi - vehicle.wheel_radius)).max(0.0);
-            let compression_speed = -point_velocity.dot(up);
-            let spring = suspension_force(
-                compression,
-                compression_speed,
-                vehicle.suspension_stiffness,
-                vehicle.suspension_damping,
-                vehicle.max_suspension_force,
-            );
-            apply(&mut total_force, &mut total_torque, up * spring, arm);
-
-            // Longitudinal drive/brake along the heading, applied through the
-            // center of mass (arm 0) so hard acceleration on the light chassis
-            // doesn't pitch it into a wheelie. Weight transfer is a later
-            // refinement.
-            apply(
-                &mut total_force,
-                &mut total_torque,
-                heading * per_wheel_drive,
-                Vec3::ZERO,
-            );
-
-            // Lateral tire grip: cancel sideways slip at the wheel's axle.
             let lateral = if steered { steer_rot * right } else { right };
-            let slip = point_velocity.dot(lateral);
-            let grip = (-vehicle.grip * slip).clamp(-vehicle.max_lateral, vehicle.max_lateral);
-            apply(&mut total_force, &mut total_torque, lateral * grip, arm);
 
-            if debug {
-                let _ = write!(
-                    wheels_dbg,
-                    " {}:c{:.2}/f{:.0}",
-                    NAMES[i], compression, spring
+            let arm_attach = attach - com;
+            let point_velocity = velocity.linear + velocity.angular.cross(arm_attach);
+
+            // Suspension: spring-damper along the chassis up axis. The tire
+            // forces below act at the contact patch, which is what turns drive
+            // and braking into squat and dive.
+            let (contact, compression, load, arm) =
+                match context.cast_ray(attach, -up, max_reach, true, filter) {
+                    Some((_, toi)) => {
+                        let compression =
+                            (vehicle.suspension_rest - (toi - vehicle.wheel_radius)).max(0.0);
+                        let load = suspension_force(
+                            compression,
+                            -point_velocity.dot(up),
+                            vehicle.suspension_stiffness,
+                            vehicle.suspension_damping,
+                            vehicle.max_suspension_force,
+                        );
+                        (true, compression, load, (attach - up * toi) - com)
+                    }
+                    // Airborne: no load, so no grip. The wheel still responds
+                    // to throttle and brake, which is why it spins up in
+                    // mid-air and is stopped by a brake.
+                    None => (false, 0.0, 0.0, arm_attach),
+                };
+
+            let wheel = &mut wheels.0[index];
+            let stepped = step_wheel(
+                &WheelInput {
+                    omega: wheel.omega,
+                    relaxed_slip_ratio: wheel.relaxed_slip_ratio,
+                    relaxed_slip_angle: wheel.relaxed_slip_angle,
+                    load,
+                    forward_speed: point_velocity.dot(roll),
+                    lateral_speed: point_velocity.dot(lateral),
+                    engine_torque: controls.engine_torque * per_wheel,
+                    brake_torque: controls.brake_torque * per_wheel,
+                },
+                &spec,
+                dt,
+            );
+
+            if contact {
+                apply(&mut total_force, &mut total_torque, up * load, arm);
+                apply(
+                    &mut total_force,
+                    &mut total_torque,
+                    roll * stepped.force.longitudinal,
+                    arm,
+                );
+                apply(
+                    &mut total_force,
+                    &mut total_torque,
+                    lateral * stepped.force.lateral,
+                    arm,
                 );
             }
+
+            wheel.omega = stepped.omega;
+            wheel.angle = (wheel.angle + stepped.omega * dt).rem_euclid(std::f32::consts::TAU);
+            wheel.steer = steer;
+            wheel.contact = contact;
+            wheel.compression = compression;
+            wheel.load = load;
+            wheel.slip_ratio = stepped.slip_ratio;
+            wheel.slip_angle = stepped.slip_angle;
+            wheel.relaxed_slip_ratio = stepped.relaxed_slip_ratio;
+            wheel.relaxed_slip_angle = stepped.relaxed_slip_angle;
         }
 
         // Overwrite, not accumulate (ExternalForce persists across ticks).
         force.force = total_force;
         force.torque = total_torque;
 
-        if debug {
-            // Chassis attitude: pitch = nose above horizontal (+ is nose-up),
-            // roll = right side above horizontal.
-            let pitch = transform.forward().y.asin().to_degrees();
-            let roll = right.y.asin().to_degrees();
-            eprintln!(
-                "y={:.2} pitch={:+.1} roll={:+.1} fspeed={:.2} drive={:.0} steer={:+.2} \
-                 F=({:.0},{:.0},{:.0}) T=({:.0},{:.0},{:.0}){}",
-                center.y,
-                pitch,
-                roll,
-                forward_speed,
-                controls.drive_force,
-                vehicle.steer,
-                total_force.x,
-                total_force.y,
-                total_force.z,
-                total_torque.x,
-                total_torque.y,
-                total_torque.z,
-                wheels_dbg,
-            );
+        if std::env::var("VEHICLE_DEBUG").is_ok() {
+            debug_dump(&vehicle, &wheels, transform, &controls, forward_speed);
         }
     }
 }
 
-/// Accumulate a force applied at chassis-relative point `arm` into the running
-/// world-frame force and torque.
+/// Per-tick chassis + wheel state on stderr, behind `VEHICLE_DEBUG`.
+fn debug_dump(
+    vehicle: &RaycastVehicle,
+    wheels: &Wheels,
+    transform: &Transform,
+    controls: &VehicleControls,
+    forward_speed: f32,
+) {
+    const NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
+    let mut per_wheel = String::new();
+    for (name, wheel) in NAMES.iter().zip(wheels.0.iter()) {
+        if wheel.contact {
+            let _ = write!(
+                per_wheel,
+                " {name}:c{:.2}/N{:.0}/k{:+.2}",
+                wheel.compression, wheel.load, wheel.slip_ratio
+            );
+        } else {
+            let _ = write!(per_wheel, " {name}:air");
+        }
+    }
+    // Chassis attitude: pitch = nose above horizontal (+ is nose-up),
+    // roll = right side above horizontal.
+    let pitch = transform.forward().y.asin().to_degrees();
+    let roll = transform.right().y.asin().to_degrees();
+    eprintln!(
+        "y={:.2} pitch={:+.1} roll={:+.1} fspeed={:.2} engine={:.0} brake={:.0} \
+         steer={:+.2} load={:.0}{}",
+        transform.translation.y,
+        pitch,
+        roll,
+        forward_speed,
+        controls.engine_torque,
+        controls.brake_torque,
+        vehicle.steer,
+        wheels.total_load(),
+        per_wheel,
+    );
+}
+
+/// Accumulate a force applied at centre-of-mass-relative point `arm` into the
+/// running world-frame force and torque.
 fn apply(total_force: &mut Vec3, total_torque: &mut Vec3, f: Vec3, arm: Vec3) {
     *total_force += f;
     *total_torque += arm.cross(f);
@@ -363,6 +473,37 @@ mod tests {
     }
 
     #[test]
+    fn the_suspension_holds_the_car_up_at_a_sane_ride_height() {
+        // The spring has to carry a quarter of the car within its travel. Too
+        // soft and it sits on the bump stops; too stiff and it never moves and
+        // the wheels skip instead of following the road.
+        let v = vehicle();
+        let quarter_weight = 1300.0 * 9.81 / 4.0;
+        let compression = quarter_weight / v.suspension_stiffness;
+        assert!(
+            compression > 0.02 && compression < v.suspension_rest * 0.5,
+            "static compression {compression} m against {} m of travel",
+            v.suspension_rest
+        );
+        assert!(v.max_suspension_force > quarter_weight * 2.0, "no headroom");
+    }
+
+    #[test]
+    fn the_rollover_threshold_is_above_what_the_tires_can_generate() {
+        // If it tips before it slides, hard cornering ends with the car on its
+        // roof instead of understeering. This is the geometry check that keeps
+        // that from happening.
+        let v = vehicle();
+        let com_height = v.rest_ride_height() + v.center_of_mass.y;
+        let threshold = v.half_track / com_height;
+        assert!(
+            threshold > v.tire.mu * 1.3,
+            "rollover threshold {threshold} g is too close to the tires' {} g",
+            v.tire.mu
+        );
+    }
+
+    #[test]
     fn wheels_are_placed_at_the_rig_offsets() {
         let v = vehicle();
         // Bevy's forward is -Z, so the front pair sits at negative local Z.
@@ -388,8 +529,8 @@ mod tests {
         );
 
         // Rotated into world space it must reproduce, exactly, the attach
-        // point the drive system builds from the body axes today -- including
-        // on a body that is yawed, pitched and rolled.
+        // point built from the body axes -- including on a body that is
+        // yawed, pitched and rolled.
         let transform = Transform::from_translation(Vec3::new(3.0, 1.0, -2.0)).looking_to(
             Vec3::new(1.0, 0.3, 1.0).normalize(),
             Vec3::new(0.1, 1.0, 0.0),
@@ -410,7 +551,7 @@ mod tests {
     #[test]
     fn driver_accelerates_toward_target_speed() {
         let v = vehicle();
-        // Want 5 m/s forward, currently stopped -> positive drive force.
+        // Want 5 m/s forward, currently stopped -> throttle, no brake.
         let c = driver(
             &v,
             DesiredVelocity {
@@ -421,13 +562,14 @@ mod tests {
             0.0,
             1.0 / 60.0,
         );
-        assert!(c.drive_force > 0.0, "drive {}", c.drive_force);
+        assert!(c.engine_torque > 0.0, "engine {}", c.engine_torque);
+        assert_eq!(c.brake_torque, 0.0);
     }
 
     #[test]
     fn driver_brakes_when_overspeed() {
         let v = vehicle();
-        // Moving 10 m/s but target is stop -> negative (braking) drive force.
+        // Moving 10 m/s but target is stop -> brake, and no throttle at all.
         let c = driver(
             &v,
             DesiredVelocity {
@@ -438,7 +580,63 @@ mod tests {
             10.0,
             1.0 / 60.0,
         );
-        assert!(c.drive_force < 0.0, "drive {}", c.drive_force);
+        assert!(c.brake_torque > 0.0, "brake {}", c.brake_torque);
+        assert_eq!(c.engine_torque, 0.0, "throttle and brake both applied");
+    }
+
+    #[test]
+    fn urgent_selects_the_brake_ceiling_not_the_cruise_one() {
+        // The CLAUDE.md guardrail, at the driver: a reflex stop must not be
+        // limited by the ceiling tuned for ordinary deceleration.
+        let v = vehicle();
+        let overspeed = |urgent, speed| {
+            driver(
+                &v,
+                DesiredVelocity {
+                    value: Vec3::ZERO,
+                    urgent,
+                },
+                Vec3::X,
+                speed,
+                1.0 / 60.0,
+            )
+            .brake_torque
+        };
+        assert!(v.max_brake_torque > v.max_engine_torque);
+        // Far past the target, both saturate at their own ceiling.
+        assert_eq!(overspeed(false, 60.0), v.max_engine_torque);
+        assert_eq!(overspeed(true, 60.0), v.max_brake_torque);
+
+        // The distinction that matters is at a *modest* overspeed, where
+        // proportional braking is still below even the cruise ceiling. An
+        // urgent stop asks for everything regardless; anything less and the
+        // brake cannot beat the tire's own torque and the wheels never lock.
+        let modest = 5.0;
+        assert!(
+            modest * v.gain < v.max_engine_torque,
+            "pick an overspeed where proportional braking has not saturated"
+        );
+        assert!(
+            overspeed(false, modest) < v.max_engine_torque,
+            "ordinary braking should still be proportional here"
+        );
+        assert_eq!(overspeed(true, modest), v.max_brake_torque);
+    }
+
+    #[test]
+    fn an_urgent_stop_can_out_torque_the_tire_it_is_braking_against() {
+        // A brake that cannot exceed the tire's own torque never locks a
+        // wheel, it just slows it a little. This pins the ceiling above that
+        // threshold for a car carrying its own weight on grippy tarmac.
+        let v = vehicle();
+        let load_per_wheel = 1300.0 * 9.81 / 4.0;
+        let tire_torque = v.tire.mu * load_per_wheel * v.wheel_radius;
+        let brake_per_wheel = v.max_brake_torque * 0.25;
+        assert!(
+            brake_per_wheel > tire_torque,
+            "brake {brake_per_wheel} N.m cannot overcome the tire's \
+             {tire_torque} N.m, so the wheels will never lock"
+        );
     }
 
     #[test]

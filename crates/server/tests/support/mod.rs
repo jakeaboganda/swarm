@@ -527,3 +527,18 @@ pub fn short_range_sensor(name: &str, range: f32, latency_ticks: u32) -> SensorD
         }),
     }
 }
+
+impl Sim {
+    /// Lifts an agent's body clear of the ground, so its wheels have nothing
+    /// to cast against. Driving off a real jump takes a road built for it;
+    /// this reproduces the airborne state directly.
+    pub fn lift(&mut self, name: &str, height: f32) {
+        let entity = self.entity_of(name).expect("agent has an entity");
+        let mut transform = self
+            .app
+            .world_mut()
+            .get_mut::<Transform>(entity)
+            .expect("entity has a transform");
+        transform.translation.y += height;
+    }
+}
