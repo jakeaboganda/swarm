@@ -31,6 +31,7 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import brake_on_ttc, waypoints
 from stepper import run_clock
 
 SERVER_URL = "ws://127.0.0.1:4000"
@@ -127,11 +128,10 @@ async def run_agent(name, angle, arena, world, stats, stop):
     goal = {"xz": (r * math.cos(angle), r * math.sin(angle))}
     async with websockets.connect(SERVER_URL, ping_interval=None) as ws:
         await ws.send(json.dumps({"type": "join", "name": name}))
-        await ws.send(json.dumps({"type": "register_reflexes", "rules": [
-            {"sensor": "ground_truth", "measure": {"kind": "time_to_collision"},
-             "operator": "less_than",
-             "threshold": TTC_BRAKE, "action": "brake", "priority": 10}
-        ]}))
+        # A brake-only safety net. The steering above is the agent's job.
+        await ws.send(json.dumps({
+            "type": "register_reflexes", "rules": [brake_on_ttc(TTC_BRAKE)]
+        }))
 
         # The server owns the clock: replan on each step pulse (throttled to
         # ~CONTROL_HZ), reading the world the state replies build up. The
@@ -141,9 +141,10 @@ async def run_agent(name, angle, arena, world, stats, stop):
             cmd = steer(name, world, arena, goal)
             if cmd is not None:
                 x, z, speed = cmd
-                await ws.send(json.dumps({"type": "submit_plan", "waypoints": [
-                    {"position": {"x": x, "y": 0.0, "z": z}, "speed": speed}
-                ]}))
+                step = waypoints([{"x": x, "y": 0.0, "z": z}], speed)
+                await ws.send(
+                    json.dumps({"type": "submit_plan", "waypoints": step})
+                )
 
         async def on_message(msg):
             kind = msg.get("type")

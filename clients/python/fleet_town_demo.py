@@ -30,7 +30,6 @@ Needs the scenario_road_fleet.json roster (20 cars). `pip install websockets`.
 import asyncio
 import json
 import sys
-from collections import deque
 
 try:
     import websockets
@@ -38,6 +37,7 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import brake_on_ttc, dist, driving_lanes, nearest_lane, reachable_lanes
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
@@ -50,51 +50,15 @@ CRUISE = [4.5, 5.5, 6.5, 5.0, 7.5, 6.0, 8.0, 5.5, 4.0, 7.0]
 TTC_THRESHOLD = 2.5  # brake when perceived time-to-collision drops below this, s
 
 
-def d2(a, b):
-    return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
-
-
-def nearest_lane(lanes, p):
-    """The lane whose centerline passes closest to point p."""
-    return min(lanes, key=lambda l: min(d2(c, p) for c in l["centerline"]))
-
-
 def mid(lane):
     return lane["centerline"][len(lane["centerline"]) // 2]
 
 
 def farthest_reachable(lanes, start_id, spawn):
-    """BFS the delivered graph from `start_id` over successors + neighbors;
-    return the reachable lane whose middle is farthest from spawn."""
-    by_id = {l["id"]: l for l in lanes}
-    seen = {start_id}
-    q = deque([start_id])
-    while q:
-        lane = by_id.get(q.popleft())
-        if not lane:
-            continue
-        for nxt in lane["successors"] + lane["neighbors"]:
-            if nxt not in seen:
-                seen.add(nxt)
-                q.append(nxt)
-    reachable = [by_id[i] for i in seen if i in by_id]
-    return max(reachable, key=lambda l: d2(mid(l), spawn)), len(reachable)
-
-
-def brake_reflex():
-    return {
-        "type": "register_reflexes",
-        "rules": [
-            {
-                "sensor": "radar",
-                "measure": {"kind": "time_to_collision"},
-                "operator": "less_than",
-                "threshold": TTC_THRESHOLD,
-                "action": "brake",
-                "priority": 10,
-            }
-        ],
-    }
+    """Of the lanes reachable by driving from `start_id`, the one whose middle
+    is farthest from spawn -- a destination across town, not down the road."""
+    reachable = reachable_lanes(lanes, start_id)
+    return max(reachable, key=lambda lane: dist(mid(lane), spawn)), len(reachable)
 
 
 class Car:
@@ -127,7 +91,7 @@ async def plan_route(car):
     if not car.map:
         car.status = "no map"
         return None
-    lanes = [l for l in car.map["lanes"] if l["kind"] == "driving"]
+    lanes = driving_lanes(car.map)
     start = nearest_lane(lanes, car.spawn)
     dest_lane, _ = farthest_reachable(lanes, start["id"], car.spawn)
     car.dest = mid(dest_lane)
@@ -155,7 +119,12 @@ async def drive(car):
         car.status = "no route"
         return
     car.route_len = len(route)
-    await car.ws.send(json.dumps(brake_reflex()))
+    # One safety rule each, read from the car's own `radar` device -- so it
+    # brakes for what it perceives of its neighbours, not for ground truth.
+    await car.ws.send(json.dumps({
+        "type": "register_reflexes",
+        "rules": [brake_on_ttc(TTC_THRESHOLD, sensor="radar")],
+    }))
     await car.ws.send(json.dumps({"type": "submit_plan", "waypoints": route}))
     car.status = "driving"
 
@@ -187,7 +156,7 @@ def report(cars):
     print("\n=== fleet ===")
     for car in cars:
         if car.pos and car.dest:
-            gap = d2(car.pos, car.dest) ** 0.5
+            gap = dist(car.pos, car.dest)
             print(
                 f"  {car.name}: {car.status:8}  {car.route_len:3} wp  "
                 f"{gap:6.0f} m to go   {car.fires} brake fires"

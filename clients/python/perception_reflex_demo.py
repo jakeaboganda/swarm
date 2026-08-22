@@ -29,6 +29,7 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import stop_on_ttc, waypoints
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
@@ -45,30 +46,25 @@ world = {}  # agent_id -> (x, z)
 fires = {"gt-chaser": 0, "sim-chaser": 0}
 
 
-def wp(x, z, speed):
-    return {"position": {"x": float(x), "y": 0.0, "z": float(z)}, "speed": float(speed)}
+def at(x, z):
+    return {"x": float(x), "y": 0.0, "z": float(z)}
 
 
-def plan(waypoints):
-    return json.dumps({"type": "submit_plan", "waypoints": waypoints})
+def plan(x, z, speed):
+    """A one-waypoint plan: drive to (x, z) at `speed`."""
+    return json.dumps(
+        {"type": "submit_plan", "waypoints": waypoints([at(x, z)], speed)}
+    )
 
 
 def brake_reflex(device):
     # stop_and_hold, not brake, so a triggered chaser parks cleanly where it
-    # first "saw" trouble instead of creeping forward as ttc oscillates.
+    # first "saw" trouble instead of creeping forward as ttc oscillates. The
+    # rule is identical for both chasers -- only `device` differs.
     return json.dumps(
         {
             "type": "register_reflexes",
-            "rules": [
-                {
-                    "sensor": device,
-                    "measure": {"kind": "time_to_collision"},
-                    "operator": "less_than",
-                    "threshold": TTC_THRESHOLD,
-                    "action": "stop_and_hold",
-                    "priority": 10,
-                }
-            ],
+            "rules": [stop_on_ttc(TTC_THRESHOLD, sensor=device)],
         }
     )
 
@@ -123,12 +119,12 @@ async def main():
 
     # Targets roll out to their parking spots and idle there.
     for t in ("gt-target", "sim-target"):
-        await ws[t].send(plan([wp(TARGET_X, LANE[t], 5.0)]))
+        await ws[t].send(plan(TARGET_X, LANE[t], 5.0))
 
     # Chasers line up at the far end of their lane (no reflex yet — the agents
     # spawn clustered, so an armed stop_and_hold would trip on a neighbor).
     for c in ("gt-chaser", "sim-chaser"):
-        await ws[c].send(plan([wp(START_X, LANE[c], LANE_SPEED)]))
+        await ws[c].send(plan(START_X, LANE[c], LANE_SPEED))
 
     print("targets parking, chasers lining up...")
 
@@ -146,7 +142,7 @@ async def main():
             for c in ("gt-chaser", "sim-chaser"):
                 device = "ground_truth" if c == "gt-chaser" else "radar"
                 await ws[c].send(brake_reflex(device))
-                await ws[c].send(plan([wp(END_X, LANE[c], CHASE_SPEED)]))
+                await ws[c].send(plan(END_X, LANE[c], CHASE_SPEED))
 
     async def on_message(msg):
         kind = msg.get("type")

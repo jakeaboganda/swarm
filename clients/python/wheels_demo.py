@@ -28,6 +28,14 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import (
+    arc_lengths,
+    nearest_index,
+    pick_driving_lane,
+    project_point,
+    stop_and_hold_above,
+    waypoints,
+)
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
@@ -46,48 +54,7 @@ SCRIPT = [
 
 # Fires the emergency stop the moment the car is moving at all, so the stop
 # happens at the station rather than wherever the car happened to speed up.
-STOP_REFLEX = [
-    {
-        "sensor": "ground_truth",
-        "measure": {"kind": "speed"},
-        "operator": "greater_than",
-        "threshold": 0.5,
-        "action": "stop_and_hold",
-        "priority": 10,
-    }
-]
-
-
-def dist2(a, b):
-    return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
-
-
-def forward_driving_lane(map_data):
-    for lane in map_data["lanes"]:
-        if lane["kind"] == "driving" and lane["direction"] == "forward":
-            return lane
-    return None
-
-
-def arc_lengths(centerline):
-    """Cumulative distance along the centreline, so stations can be addressed
-    by metres travelled rather than by point index."""
-    out = [0.0]
-    for a, b in zip(centerline, centerline[1:]):
-        out.append(out[-1] + math.sqrt(dist2(a, b)))
-    return out
-
-
-def nearest_index(centerline, point):
-    return min(range(len(centerline)), key=lambda i: dist2(centerline[i], point))
-
-
-def plan_from(centerline, index, speed):
-    """The rest of the lane ahead of `index`, at `speed`."""
-    return [
-        {"position": {"x": p["x"], "y": p["y"], "z": p["z"]}, "speed": speed}
-        for p in centerline[index:]
-    ]
+STOP_REFLEX = [stop_and_hold_above(0.5)]
 
 
 async def main():
@@ -100,7 +67,7 @@ async def main():
         print("no map delivered -- is this scenario_wheels.json?")
         await ws.close()
         return
-    lane = forward_driving_lane(map_data)
+    lane = pick_driving_lane(map_data)
     if lane is None:
         print("no forward driving lane in the delivered map")
         await ws.close()
@@ -129,7 +96,10 @@ async def main():
                 state["braking"] = False
             await ws.send(
                 json.dumps(
-                    {"type": "submit_plan", "waypoints": plan_from(center, index, speed)}
+                    {
+                        "type": "submit_plan",
+                        "waypoints": waypoints(center[index:], speed),
+                    }
                 )
             )
 
@@ -148,7 +118,7 @@ async def main():
 
         index = nearest_index(center, state["pos"])
         travelled = lengths[index]
-        off = math.sqrt(dist2(center[index], state["pos"]))
+        _, _, _, off = project_point(center, state["pos"])
         print(
             f"  s={travelled:6.1f} m  speed={state['speed']:5.2f} m/s  "
             f"y={state['pos']['y']:5.2f}  off-lane={off:4.2f} m",

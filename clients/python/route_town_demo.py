@@ -10,7 +10,11 @@ stack on a real map:
   2. It then asks the *server* routing service for the actual plan
      (request_route), which pathfinds the same graph and stamps the requested
      cruise speed onto every waypoint.
-  3. It submits the plan and the path-tracking driver follows it across town.
+  3. It re-times that route for its corners (`shotgun.retime`: a lateral-grip
+     cap per point, then a backward pass so the slowing starts before the
+     bend), submits it, and the path-tracking driver follows it across town.
+     The server returns one flat speed on every waypoint; how fast to actually
+     take each corner is the agent's call.
 
 Run the server first (or use scripts/run.sh):
     cargo run --bin server -- scenario_road_town.json
@@ -23,7 +27,6 @@ then watch it in the viewer (F to chase-cam the car through the junctions).
 import asyncio
 import json
 import sys
-from collections import deque
 
 try:
     import websockets
@@ -31,42 +34,23 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import dist, driving_lanes, nearest_lane, reachable_lanes, retime
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
 CRUISE = 6.0
 
 
-def d2(a, b):
-    return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
-
-
-def nearest_lane(lanes, p):
-    """The lane whose centerline passes closest to point p."""
-    return min(lanes, key=lambda l: min(d2(c, p) for c in l["centerline"]))
+def mid(lane):
+    return lane["centerline"][len(lane["centerline"]) // 2]
 
 
 def farthest_reachable(lanes, start_id, spawn):
-    """BFS the delivered graph from `start_id` over successors + neighbors;
-    return the reachable lane whose middle is farthest from spawn."""
-    by_id = {l["id"]: l for l in lanes}
-    seen = {start_id}
-    q = deque([start_id])
-    while q:
-        lid = q.popleft()
-        lane = by_id.get(lid)
-        if not lane:
-            continue
-        for nxt in lane["successors"] + lane["neighbors"]:
-            if nxt not in seen:
-                seen.add(nxt)
-                q.append(nxt)
-    reachable = [by_id[i] for i in seen if i in by_id]
-
-    def mid(lane):
-        return lane["centerline"][len(lane["centerline"]) // 2]
-
-    return max(reachable, key=lambda l: d2(mid(l), spawn)), len(reachable)
+    """Of the lanes reachable by driving from `start_id`, the one whose middle
+    is farthest from spawn -- so the route is guaranteed to cross junctions
+    rather than run down one road."""
+    reachable = reachable_lanes(lanes, start_id)
+    return max(reachable, key=lambda lane: dist(mid(lane), spawn)), len(reachable)
 
 
 async def main():
@@ -78,14 +62,14 @@ async def main():
         print("no map delivered -- is this the Town07 scenario?")
         await ws.close()
         return
-    lanes = [l for l in map_data["lanes"] if l["kind"] == "driving"]
+    lanes = driving_lanes(map_data)
     spawn = joined["position"]
     print(f"Town07 loaded: {len(lanes)} driving lanes. car at x={spawn['x']:.0f},z={spawn['z']:.0f}")
 
     start = nearest_lane(lanes, spawn)
     dest_lane, reach = farthest_reachable(lanes, start["id"], spawn)
-    dest = dest_lane["centerline"][len(dest_lane["centerline"]) // 2]
-    straight = d2(dest, spawn) ** 0.5
+    dest = mid(dest_lane)
+    straight = dist(dest, spawn)
     print(
         f"{reach} lanes reachable from lane {start['id']}; "
         f"routing to lane {dest_lane['id']} at x={dest['x']:.0f},z={dest['z']:.0f} "
@@ -111,10 +95,17 @@ async def main():
         print("server found no route -- try re-running (spawn/destination vary).")
         await ws.close()
         return
-    print(f"server route: {len(route)} waypoints -- driving it across town")
+    # The server stamps one flat speed on the whole route. Re-time it for the
+    # corners first: the junction turns are far tighter than the straights.
+    plan = retime(route, CRUISE)
+    print(
+        f"server route: {len(route)} waypoints, re-timed to "
+        f"{min(wp['speed'] for wp in plan):.1f}-{CRUISE:.1f} m/s "
+        "-- driving it across town"
+    )
 
     world = {}
-    await ws.send(json.dumps({"type": "submit_plan", "waypoints": route}))
+    await ws.send(json.dumps({"type": "submit_plan", "waypoints": plan}))
 
     # Server-owned clock: report progress on each step pulse; the scenario's
     # duration ends the drive.
@@ -128,7 +119,7 @@ async def main():
             world[e["agent_id"]] = e["position"]
         p = world.get("car")
         if p:
-            remaining = d2(p, dest) ** 0.5
+            remaining = dist(p, dest)
             print(f"car x={p['x']:7.1f} z={p['z']:7.1f}   {remaining:6.0f} m to go")
 
     await run_clock(ws, on_step=report, on_message=on_message, report_dt=0.5)

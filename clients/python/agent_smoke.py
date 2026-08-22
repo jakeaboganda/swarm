@@ -22,6 +22,7 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import brake_on_ttc
 from stepper import run_clock
 
 SERVER_URL = "ws://127.0.0.1:4000"
@@ -34,11 +35,9 @@ async def agent(name, waypoints):
         print(f"[{name}] joined ->", joined.get("type"), joined.get("position"))
 
         await ws.send(json.dumps({"type": "submit_plan", "waypoints": waypoints}))
-        await ws.send(json.dumps({"type": "register_reflexes", "rules": [
-            {"sensor": "ground_truth", "measure": {"kind": "time_to_collision"},
-             "operator": "less_than",
-             "threshold": 2.0, "action": "brake", "priority": 10}
-        ]}))
+        await ws.send(json.dumps({
+            "type": "register_reflexes", "rules": [brake_on_ttc(2.0)]
+        }))
 
         # On each ~0.6s step pulse, ask for state; print it when it arrives.
         async def report(_sim_time):

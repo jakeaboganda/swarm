@@ -20,7 +20,6 @@ Needs the scenario_road_obstacle.json roster. `pip install websockets`.
 
 import asyncio
 import json
-import math
 import sys
 
 try:
@@ -29,6 +28,7 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import dist, lane_plan, pick_driving_lane, stop_on_ttc, waypoints
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
@@ -37,44 +37,6 @@ TTC_THRESHOLD = 2.0  # brake when perceived time-to-collision drops below this, 
 
 world = {}  # agent_id -> position dict
 fires = 0
-
-
-def dist2(a, b):
-    return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
-
-
-def forward_driving_lane(map_data):
-    for lane in map_data["lanes"]:
-        if lane["kind"] == "driving" and lane["direction"] == "forward":
-            return lane
-    return None
-
-
-def wp(p, speed):
-    return {"position": {"x": p["x"], "y": p["y"], "z": p["z"]}, "speed": speed}
-
-
-def lane_plan(lane, start, speed):
-    """Waypoints down the lane centerline from the point nearest `start` on."""
-    center = lane["centerline"]
-    begin = min(range(len(center)), key=lambda i: dist2(center[i], start))
-    return [wp(p, speed) for p in center[begin:]]
-
-
-def brake_reflex():
-    return {
-        "type": "register_reflexes",
-        "rules": [
-            {
-                "sensor": "radar",
-                "measure": {"kind": "time_to_collision"},
-                "operator": "less_than",
-                "threshold": TTC_THRESHOLD,
-                "action": "stop_and_hold",
-                "priority": 10,
-            }
-        ],
-    }
 
 
 async def drain(ws):
@@ -108,7 +70,7 @@ async def main():
         print(f"car join refused: {car_joined.get('message', car_joined)}\n{WRONG_SCENARIO}")
         await car_ws.close()
         return
-    lane = forward_driving_lane(car_joined.get("map") or {})
+    lane = pick_driving_lane(car_joined.get("map"))
     if lane is None:
         print(f"no forward driving lane -- not the automotive scenario?\n{WRONG_SCENARIO}")
         await car_ws.close()
@@ -129,13 +91,19 @@ async def main():
         # downroad). Hold it there with a station-keep plan on its own spawn
         # point, so it doesn't creep down the graded, frictionless surface.
         spot = obs_joined["position"]
-        await obs_ws.send(json.dumps({"type": "submit_plan", "waypoints": [wp(spot, 1.0)]}))
+        await obs_ws.send(
+            json.dumps({"type": "submit_plan", "waypoints": waypoints([spot], 1.0)})
+        )
         print(f"obstacle parked at x={spot['x']:.1f}, z={spot['z']:.1f}")
         await asyncio.sleep(1.5)
 
     # Arm the reflex, then send the car down its lane straight at the obstacle.
     plan = lane_plan(lane, car_joined["position"], CRUISE)
-    await car_ws.send(json.dumps(brake_reflex()))
+    # Read from `radar`, not ground truth: the car stops for what it perceives.
+    await car_ws.send(json.dumps({
+        "type": "register_reflexes",
+        "rules": [stop_on_ttc(TTC_THRESHOLD, sensor="radar")],
+    }))
     await car_ws.send(json.dumps({"type": "submit_plan", "waypoints": plan}))
     print(f"car charging down lane {lane['id']} (radar TTC < {TTC_THRESHOLD}s -> stop)")
 
@@ -148,7 +116,7 @@ async def main():
             return
         line = f"car x={car['x']:6.1f} y={car['y']:5.2f} z={car['z']:5.2f}"
         if obs:
-            line += f"   obstacle x={obs['x']:5.1f}   gap={math.sqrt(dist2(car, obs)):5.1f}"
+            line += f"   obstacle x={obs['x']:5.1f}   gap={dist(car, obs):5.1f}"
         print(f"{line}   fires={fires}")
 
     async def on_message(msg):
@@ -165,7 +133,7 @@ async def main():
     car, obs = world.get("car"), world.get("obstacle")
     print("\n=== result ===")
     if car and obs:
-        gap = math.sqrt(dist2(car, obs))
+        gap = dist(car, obs)
         print(f"car stopped {gap:.1f} m from the obstacle ({fires} reflex fires). "
               "Perceived it via radar and braked in time."
               if fires else

@@ -15,7 +15,6 @@ Needs the scenario_road_car.json roster. `pip install websockets`.
 
 import asyncio
 import json
-import math
 import sys
 
 try:
@@ -24,34 +23,12 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import lane_plan, pick_driving_lane, project_point
 from stepper import run_clock
 
 URL = "ws://127.0.0.1:4000"
 CRUISE = 6.0  # target speed along the lane, m/s
 pos = {}
-
-
-def dist2(a, b):
-    return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
-
-
-def lane_plan(lane, start):
-    """Waypoints down `lane`'s centerline, from the point nearest `start` to the
-    end. Skipping the points behind the car keeps it driving forward, not back
-    to the lane's origin."""
-    center = lane["centerline"]
-    begin = min(range(len(center)), key=lambda i: dist2(center[i], start))
-    return [
-        {"position": {"x": p["x"], "y": p["y"], "z": p["z"]}, "speed": CRUISE}
-        for p in center[begin:]
-    ]
-
-
-def forward_driving_lane(map_data):
-    for lane in map_data["lanes"]:
-        if lane["kind"] == "driving" and lane["direction"] == "forward":
-            return lane
-    return None
 
 
 async def main():
@@ -64,14 +41,14 @@ async def main():
         print("no map delivered -- is this the automotive scenario?")
         await ws.close()
         return
-    lane = forward_driving_lane(map_data)
+    lane = pick_driving_lane(map_data)
     if lane is None:
         print("no forward driving lane in the delivered map")
         await ws.close()
         return
 
     spawn = joined["position"]
-    plan = lane_plan(lane, spawn)
+    plan = lane_plan(lane, spawn, CRUISE)
     end = plan[-1]["position"]
     print(
         f"following lane {lane['id']} ({len(plan)} waypoints) "
@@ -93,10 +70,10 @@ async def main():
             pos[e["agent_id"]] = e["position"]
         p = pos.get("car")
         if p:
-            # Lateral error off the lane end direction isn't computed here; just
-            # show the track so you can eyeball in-lane progress round the curve.
-            near = min(lane["centerline"], key=lambda c: dist2(c, p))
-            off = math.sqrt(dist2(near, p))
+            # How far the car is off the lane centre: the perpendicular
+            # distance to the centreline, so you can eyeball in-lane progress
+            # round the curve.
+            _, _, _, off = project_point(lane["centerline"], p)
             print(
                 f"car  x={p['x']:6.1f}  y={p['y']:5.2f}  z={p['z']:6.2f}"
                 f"   lane-offset={off:4.1f} m"

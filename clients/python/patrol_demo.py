@@ -20,6 +20,8 @@ except ImportError:
     print("SKIP: websockets not installed (pip install websockets)")
     sys.exit(2)
 
+from shotgun import brake_on_ttc, waypoints
+
 SERVER_URL = "ws://127.0.0.1:4000"
 SPEED = 7.0
 LAPS = 4
@@ -36,23 +38,18 @@ def square(radius, start_corner):
         (-radius, -radius),
     ]
     ordered = corners[start_corner:] + corners[:start_corner]
-    return [
-        {"position": {"x": float(x), "y": 0.0, "z": float(z)}, "speed": SPEED}
-        for _ in range(LAPS)
-        for (x, z) in ordered
-    ]
+    loop = [{"x": float(x), "y": 0.0, "z": float(z)} for (x, z) in ordered]
+    return waypoints(loop * LAPS, SPEED)
 
 
-async def agent(name, waypoints):
+async def agent(name, plan):
     async with websockets.connect(SERVER_URL) as ws:
         await ws.send(json.dumps({"type": "join", "name": name}))
         await ws.recv()  # Joined
-        await ws.send(json.dumps({"type": "submit_plan", "waypoints": waypoints}))
-        await ws.send(json.dumps({"type": "register_reflexes", "rules": [
-            {"sensor": "ground_truth", "measure": {"kind": "time_to_collision"},
-             "operator": "less_than",
-             "threshold": 1.5, "action": "brake", "priority": 10}
-        ]}))
+        await ws.send(json.dumps({"type": "submit_plan", "waypoints": plan}))
+        await ws.send(json.dumps({
+            "type": "register_reflexes", "rules": [brake_on_ttc(1.5)]
+        }))
         # Keep the connection open and report anything the server pushes.
         async for raw in ws:
             msg = json.loads(raw)
