@@ -1,5 +1,7 @@
 # swarm
 
+[![gate](https://github.com/jakeaboganda/swarm/actions/workflows/gate.yml/badge.svg)](https://github.com/jakeaboganda/swarm/actions/workflows/gate.yml)
+
 A playground for agentic driving: a small 3D physics world that external
 agent processes connect to and drive vehicles around — in a bounded arena, or
 on real road networks. Built in Rust with [Bevy](https://bevyengine.org) (ECS)
