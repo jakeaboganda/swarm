@@ -17,4 +17,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # The gate imports every Python client to check its `shotgun` helpers
+      # still resolve. A client without `websockets` exits at its own skip
+      # guard *before* that import, so without this the check silently
+      # validates nothing here -- which is the one place it matters most.
+      - run: pip install websockets
       - run: scripts/gate.sh

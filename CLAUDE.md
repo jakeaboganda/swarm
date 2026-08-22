@@ -285,12 +285,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p protocol -p movement -p sensors -p transport \
            -p viz -p perception -p map -p map-opendrive
 cargo test -p server -j 2
+(cd clients/python && python3 -m shotgun.selftest)
+python3 scripts/check_clients.py
 ```
 
 The test step is split because a single `cargo test --workspace` links every
 test binary at once and exhausts the linker on this machine (bevy's debug info
 is enormous); `server` links alone with a reduced job count. CI runs exactly
 `scripts/gate.sh`, so the gate and CI cannot drift apart.
+
+The last two steps are the Python client side: `shotgun`'s self-test (the
+co-driver toolkit's maths), and a check that every client in
+`clients/python/*.py` byte-compiles *and imports* -- importing is what
+resolves `from shotgun import lane_plan`, so a renamed helper fails in the
+gate instead of in front of a running sim.
 
 ## Reference
 
