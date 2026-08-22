@@ -12,6 +12,7 @@ use crate::agent::{
     AgentName, AgentRegistry, AwaitingReconnect, Connection, PendingRoster, Plan, Reflexes,
 };
 use crate::events::ReflexFired;
+use crate::inbound::{sanitize_plan, sanitize_rules};
 use crate::pulse::PulseStates;
 use crate::scenario::Roster;
 use crate::scenario_state::{EndReason, ScenarioState, Tick};
@@ -21,7 +22,19 @@ use crate::world::{agent_spawn_transform, spawn_agent, to_map_data, MapWorld};
 /// How long a mid-scenario agent has to reconnect (re-`Join` by name)
 /// before the scenario ends. Absorbs a transient network blip on a slow,
 /// flaky agent without nuking the run for everyone else.
-const RECONNECT_GRACE: Duration = Duration::from_secs(8);
+pub const RECONNECT_GRACE: Duration = Duration::from_secs(8);
+
+/// The reconnect grace window in force for this run. A resource rather than
+/// the bare constant so a test can shorten it and still exercise the real
+/// expiry path.
+#[derive(Resource, Clone, Copy)]
+pub struct ReconnectGrace(pub Duration);
+
+impl Default for ReconnectGrace {
+    fn default() -> Self {
+        Self(RECONNECT_GRACE)
+    }
+}
 
 /// Cap on inbound messages processed per drain so a burst can't stall the
 /// tick unboundedly. The transport channel is itself bounded, so this is a
@@ -89,6 +102,7 @@ pub fn drain_transport(
     mut pulse_states: ResMut<PulseStates>,
     viz_res: Res<crate::viz_broadcast::Viz>,
     map_world: Res<MapWorld>,
+    grace: Res<ReconnectGrace>,
     mut query: Query<(&Transform, &Velocity, &mut Plan, &mut Reflexes, &AgentName)>,
 ) {
     // The static road prior, delivered with every `Joined`. `None` in the arena
@@ -115,7 +129,7 @@ pub fn drain_transport(
                 // frozen with the rest of the world once the scenario ends,
                 // which matches the freeze-and-inspect end state.
                 ScenarioState::Running => {
-                    awaiting.mark(name, Instant::now() + RECONNECT_GRACE);
+                    awaiting.mark(name, Instant::now() + grace.0);
                 }
                 // Pre-start: reopen the slot so the agent (or another) can
                 // fill it, and remove the orphaned entity.
@@ -148,6 +162,20 @@ pub fn drain_transport(
                         connection,
                         ServerMessage::ScenarioEnded {
                             reason: end_reason.0.clone().unwrap_or_default(),
+                        },
+                    );
+                }
+                // One connection controls one entity. Without this, a single
+                // client could `Join` every slot in turn: each `insert`
+                // overwrites `by_connection`, so the earlier entities are
+                // orphaned -- still driving, still holding a live socket, but
+                // unreachable for `reflex_fired` and for disconnect handling.
+                // A scripted client could start a multi-agent scenario alone.
+                _ if registry.by_connection(connection).is_some() => {
+                    transport.0.send(
+                        connection,
+                        ServerMessage::Error {
+                            message: "this connection already controls an agent".into(),
                         },
                     );
                 }
@@ -235,19 +263,47 @@ pub fn drain_transport(
                     }
                 }
             },
+            // Agent-supplied floats reach Rapier through the plan, so they are
+            // sanitized here rather than trusted: a `NaN` waypoint would
+            // poison `DesiredVelocity` -> `ExternalForce` and surface as a
+            // confidently-mislabelled `OffRoad` (`y >= floor` is false for
+            // `NaN`). A refused payload gets an `error` and leaves the
+            // entity's current plan -- and its version -- untouched.
             ClientMessage::SubmitPlan { waypoints } => {
-                if let Some(entity) = registry.by_connection(connection) {
-                    if let Ok((_, _, mut plan, _, _)) = query.get_mut(entity) {
-                        plan.waypoints = waypoints.into_iter().collect();
-                        plan.version += 1;
+                let Some(entity) = registry.by_connection(connection) else {
+                    continue;
+                };
+                match sanitize_plan(waypoints) {
+                    Ok(waypoints) => {
+                        if let Ok((_, _, mut plan, _, _)) = query.get_mut(entity) {
+                            plan.waypoints = waypoints.into_iter().collect();
+                            plan.version += 1;
+                        }
                     }
+                    Err(err) => transport.0.send(
+                        connection,
+                        ServerMessage::Error {
+                            message: err.to_string(),
+                        },
+                    ),
                 }
             }
             ClientMessage::RegisterReflexes { rules } => {
-                if let Some(entity) = registry.by_connection(connection) {
-                    if let Ok((_, _, _, mut reflexes, _)) = query.get_mut(entity) {
-                        reflexes.0 = rules.into_iter().map(sensors::ActiveRule::new).collect();
+                let Some(entity) = registry.by_connection(connection) else {
+                    continue;
+                };
+                match sanitize_rules(rules) {
+                    Ok(rules) => {
+                        if let Ok((_, _, _, mut reflexes, _)) = query.get_mut(entity) {
+                            reflexes.0 = rules.into_iter().map(sensors::ActiveRule::new).collect();
+                        }
                     }
+                    Err(err) => transport.0.send(
+                        connection,
+                        ServerMessage::Error {
+                            message: err.to_string(),
+                        },
+                    ),
                 }
             }
             ClientMessage::GetState => {

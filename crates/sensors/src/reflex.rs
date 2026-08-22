@@ -168,6 +168,60 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_naming_an_unknown_device_stays_inactive() {
+        // The device a rule names may simply not exist -- a typo, or a sensor
+        // the scenario never equipped. The rule reads nothing and never fires;
+        // it must not fall back to ground truth.
+        let mut rules = vec![ActiveRule::new(ReflexRule {
+            sensor: "no-such-radar".into(),
+            // A predicate that would be wildly true if it read anything.
+            measure: protocol::messages::SensorKind::Speed,
+            operator: Operator::GreaterThan,
+            threshold: -1.0,
+            action: ReflexAction::Brake,
+            priority: 0,
+        })];
+        assert_eq!(evaluate(&mut rules, &ctx_with_speed(10.0)), None);
+        assert!(!rules[0].is_active());
+    }
+
+    #[test]
+    fn an_active_rule_clears_when_its_device_disappears() {
+        let mut rules = vec![ActiveRule::new(rule(
+            Operator::GreaterThan,
+            1.0,
+            ReflexAction::Brake,
+            0,
+        ))];
+        evaluate(&mut rules, &ctx_with_speed(10.0));
+        assert!(rules[0].is_active());
+
+        // Device gone this tick: the rule must not latch on its last reading.
+        assert_eq!(evaluate(&mut rules, &HashMap::new()), None);
+        assert!(!rules[0].is_active());
+    }
+
+    #[test]
+    fn a_nan_threshold_never_activates_a_rule() {
+        // Every comparison against NaN is false, in both directions and with
+        // or without the hysteresis margin -- so a NaN threshold is inert
+        // rather than permanently-on. Pinned because it is relied upon:
+        // agent-supplied thresholds are not filtered for finiteness.
+        for operator in [Operator::LessThan, Operator::GreaterThan] {
+            let mut rules = vec![ActiveRule::new(rule(
+                operator,
+                f32::NAN,
+                ReflexAction::Brake,
+                0,
+            ))];
+            for speed in [0.0, 10.0, f32::MAX] {
+                assert_eq!(evaluate(&mut rules, &ctx_with_speed(speed)), None);
+                assert!(!rules[0].is_active());
+            }
+        }
+    }
+
+    #[test]
     fn time_to_collision_and_walls_are_reachable_through_evaluate() {
         let mut rules = vec![ActiveRule::new(ReflexRule {
             sensor: "s".into(),

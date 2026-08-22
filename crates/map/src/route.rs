@@ -271,6 +271,196 @@ mod tests {
             .is_none());
     }
 
+    /// Two separate two-lane strips, 500 m apart: nothing links them.
+    fn two_components() -> RoadNetwork {
+        RoadNetwork {
+            lanes: vec![
+                lane(
+                    0,
+                    &[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[1],
+                    &[],
+                ),
+                lane(
+                    1,
+                    &[[20.0, 0.0, 0.0], [40.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[],
+                    &[],
+                ),
+                lane(
+                    2,
+                    &[[500.0, 0.0, 0.0], [520.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[3],
+                    &[],
+                ),
+                lane(
+                    3,
+                    &[[520.0, 0.0, 0.0], [540.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[],
+                    &[],
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_route_between_disconnected_components_is_none() {
+        // `None` means "no path", and the agent decides what to do about it.
+        // Anything else -- an empty plan, or a straight line through the void --
+        // would read as a route the vehicle could drive.
+        let net = two_components();
+        assert!(net
+            .route(Vec3::new(2.0, 0.0, 0.0), Vec3::new(538.0, 0.0, 0.0))
+            .is_none());
+        // Unreachable in both directions, not just one.
+        assert!(net
+            .route(Vec3::new(502.0, 0.0, 0.0), Vec3::new(38.0, 0.0, 0.0))
+            .is_none());
+        // And each component still routes within itself, so the graph is sound
+        // and it really is the gap that stopped it.
+        assert!(net
+            .route(Vec3::new(2.0, 0.0, 0.0), Vec3::new(38.0, 0.0, 0.0))
+            .is_some());
+        assert!(net
+            .route(Vec3::new(502.0, 0.0, 0.0), Vec3::new(538.0, 0.0, 0.0))
+            .is_some());
+    }
+
+    #[test]
+    fn a_cyclic_lane_graph_terminates() {
+        // A roundabout is a cycle, and every real map has them. Dijkstra
+        // handles this by construction; the point is that nothing here walks
+        // the graph naively, on the map where a hang costs the whole sim (the
+        // router runs on the sim thread).
+        let net = RoadNetwork {
+            lanes: vec![
+                lane(
+                    0,
+                    &[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[1],
+                    &[],
+                ),
+                lane(
+                    1,
+                    &[[20.0, 0.0, 0.0], [20.0, 0.0, 20.0]],
+                    Direction::Forward,
+                    &[2],
+                    &[],
+                ),
+                lane(
+                    2,
+                    &[[20.0, 0.0, 20.0], [0.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[0],
+                    &[],
+                ),
+                // Hangs off the ring but leads back nowhere.
+                lane(
+                    3,
+                    &[[100.0, 0.0, 0.0], [120.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[0],
+                    &[],
+                ),
+            ],
+        };
+        assert!(net
+            .route(Vec3::new(1.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 18.0))
+            .is_some());
+        // All the way round, back to where it started.
+        assert!(net
+            .route(Vec3::new(1.0, 0.0, 0.0), Vec3::new(19.0, 0.0, 0.0))
+            .is_some());
+        // Into the one-way spur: unreachable, and the cycle must not spin.
+        assert!(net
+            .route(Vec3::new(1.0, 0.0, 0.0), Vec3::new(118.0, 0.0, 0.0))
+            .is_none());
+    }
+
+    #[test]
+    fn routing_the_same_pair_twice_gives_an_identical_path() {
+        // Two equal-cost routes to the same goal. The `total_cmp` + lane-id
+        // tie-break in `State`'s `Ord` is what makes the choice between them
+        // stable; without it the winner would follow heap/hash order and a
+        // replay would diverge from the run it is replaying.
+        let net = RoadNetwork {
+            lanes: vec![
+                lane(
+                    0,
+                    &[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[1, 2],
+                    &[],
+                ),
+                lane(
+                    1,
+                    &[[20.0, 0.0, 0.0], [40.0, 0.0, 5.0]],
+                    Direction::Forward,
+                    &[3],
+                    &[],
+                ),
+                lane(
+                    2,
+                    &[[20.0, 0.0, 0.0], [40.0, 0.0, -5.0]],
+                    Direction::Forward,
+                    &[3],
+                    &[],
+                ),
+                lane(
+                    3,
+                    &[[40.0, 0.0, 0.0], [60.0, 0.0, 0.0]],
+                    Direction::Forward,
+                    &[],
+                    &[],
+                ),
+            ],
+        };
+        let first = net
+            .route(Vec3::new(1.0, 0.0, 0.0), Vec3::new(58.0, 0.0, 0.0))
+            .expect("route");
+        for _ in 0..20 {
+            let again = net
+                .route(Vec3::new(1.0, 0.0, 0.0), Vec3::new(58.0, 0.0, 0.0))
+                .expect("route");
+            assert_eq!(first, again, "the same request produced a different path");
+        }
+    }
+
+    #[test]
+    fn a_route_never_contains_a_non_finite_point() {
+        // Waypoints go straight out to an agent as a plan, and a non-finite
+        // one reaches `ExternalForce` from there.
+        let net = two_components();
+        let route = net
+            .route(Vec3::new(2.0, 0.0, 0.0), Vec3::new(38.0, 0.0, 0.0))
+            .expect("route");
+        assert!(route.iter().all(|p| p.is_finite()));
+
+        // Including from a caller asking about somewhere absurd: the endpoints
+        // snap to the nearest lane, so a far-away request is still answered in
+        // real coordinates.
+        let far = net.route(
+            Vec3::new(1.0e30, 0.0, -1.0e30),
+            Vec3::new(-1.0e30, 0.0, 1.0e30),
+        );
+        assert!(far.is_none_or(|r| r.iter().all(|p| p.is_finite())));
+
+        // The built-in road, sampled end to end.
+        let demo = crate::demo_road();
+        let (first, last) = (
+            demo.lanes[0].center.point_at(0.0),
+            demo.lanes[0].center.point_at(demo.lanes[0].center.length()),
+        );
+        if let Some(route) = demo.route(first, last) {
+            assert!(route.iter().all(|p| p.is_finite()));
+        }
+    }
+
     #[test]
     fn route_changes_lanes_to_reach_the_exit() {
         // Lane A (z=0) is a dead end; its neighbor B (z=-3.5) leads to C. The

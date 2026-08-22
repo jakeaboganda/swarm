@@ -1,0 +1,20 @@
+# CI runs exactly `scripts/gate.sh`, the same script used locally, so the two
+# cannot drift apart. Everything about *how* the gate runs (which crates batch
+# together, the reduced job count for `server`) lives in that script.
+name: gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/gate.sh

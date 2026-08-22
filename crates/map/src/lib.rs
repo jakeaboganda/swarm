@@ -22,5 +22,5 @@ mod route;
 
 pub use build::demo_road;
 pub use geometry::{Polyline, Pose, Projection};
-pub use mesh::Mesh;
+pub use mesh::{Mesh, MeshError};
 pub use network::{Direction, Lane, LaneId, LaneKind, RoadNetwork};

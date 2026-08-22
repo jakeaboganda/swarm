@@ -167,13 +167,16 @@ Cargo workspace, ten crates:
   poly3 geometry, elevation, per-lane widths, lane offsets, multiple lane
   sections, and road/lane/junction connectivity. Depends on `map` + `roxmltree`;
   geometry cross-checked against the reference C++ libOpenDRIVE.
-- **`server`** — the headless simulation binary: loads the scenario, builds the
+- **`server`** — the headless simulation: loads the scenario, builds the
   world (flat **arena**, or a **road** world — the road's trimesh collider +
   raycast-vehicle agents, from `demo_road` or an imported `.xodr`), runs Rapier
   physics, dispatches movement per entity, computes per-device perceived worlds,
   resolves reflex-vs-plan arbitration each tick, answers `request_route`, manages
   scenario lifecycle, and drives the viz + perception broadcasts. Owns the tokio
-  runtime; Bevy runs on the main thread.
+  runtime; Bevy runs on the main thread. Split lib + bin: `app::build_app`
+  assembles the whole system graph, and the binary is process concerns only
+  (argument parsing, the runtime, binding the three servers) — so a test can
+  stand the real sim up on ephemeral ports and step it one tick at a time.
 - **`viewer`** — the reference 3D visualizer binary: a Bevy app that
   subscribes to the `viz` stream and renders the scene + debug overlays
   (plans, trails, and the perception overlay). One of potentially many
@@ -208,9 +211,14 @@ Cargo workspace, ten crates:
   (geometry per primitive, elevation/widths/laneOffset, multi-section,
   connectivity, plus real-`.xodr` smoke tests). Networking crates (`transport`,
   `viz` broadcaster, `perception` server) also carry integration tests over a
-  real socket. Not required for `server`/`viewer` (ECS wiring, scenario timing,
-  rendering) — that code is better verified by running the app than by unit
-  tests.
+  real socket, including the adversarial cases the architecture invites (a
+  silent client, a flooding one, a peer that never finishes its handshake).
+  `server` is not unit-tested for ECS wiring, but its **invariants** are, from
+  the outside: `crates/server/tests/` builds the real app via `build_app` on
+  ephemeral ports and drives it through the real agent pathway — the scenario
+  lifecycle, the control-loop guardrails below, and same-binary determinism.
+  Untrusted agent input is tested at the pure boundary (`inbound`). `viewer`
+  stays excluded (rendering is verified by looking at the screen).
 - **Dependencies**: free to add anything already implied by this file
   (`bevy`, `bevy_rapier3d`, `tokio`, `tokio-tungstenite`, `serde`/
   `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree` — the
@@ -256,13 +264,26 @@ that were already found and fixed on paper:
 
 ## Definition of done
 
-Before considering a change complete, all of the following must pass:
+Before considering a change complete, the gate must pass:
+
+```
+scripts/gate.sh
+```
+
+which is:
 
 ```
 cargo fmt --check
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p protocol -p movement -p sensors -p transport \
+           -p viz -p perception -p map -p map-opendrive
+cargo test -p server -j 2
 ```
+
+The test step is split because a single `cargo test --workspace` links every
+test binary at once and exhausts the linker on this machine (bevy's debug info
+is enormous); `server` links alone with a reduced job count. CI runs exactly
+`scripts/gate.sh`, so the gate and CI cannot drift apart.
 
 ## Reference
 

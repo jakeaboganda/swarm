@@ -64,6 +64,18 @@ fn validate_sensors(slot: &AgentSlot) -> Result<()> {
                 );
             }
             (SensorSource::Simulated, Some(spec)) => {
+                // A latency the ring buffer cannot hold would be delivered
+                // as the oldest frame it does hold -- a scenario asking for
+                // 300 ticks would silently run at 126 and read as if the
+                // request had been honoured.
+                if spec.latency_ticks > crate::perception_router::MAX_LATENCY_TICKS {
+                    bail!(
+                        "agent '{name}' sensor '{}' latency_ticks {} exceeds the maximum of {}",
+                        def.name,
+                        spec.latency_ticks,
+                        crate::perception_router::MAX_LATENCY_TICKS
+                    );
+                }
                 for (field, value) in [
                     ("range", spec.range),
                     ("fov_half_angle", spec.fov_half_angle),
@@ -162,6 +174,27 @@ mod tests {
         };
         c.roster[0].sensors = vec![simulated("radar", spec)];
         assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn a_latency_the_buffer_cannot_hold_is_rejected_not_silently_capped() {
+        use crate::perception_router::MAX_LATENCY_TICKS;
+
+        let with_latency = |ticks: u32| {
+            let mut c = config(&["car-1"]);
+            let spec = SensorSpec {
+                latency_ticks: ticks,
+                ..Default::default()
+            };
+            c.roster[0].sensors = vec![simulated("radar", spec)];
+            c
+        };
+        assert!(validate(&with_latency(0)).is_ok());
+        assert!(validate(&with_latency(MAX_LATENCY_TICKS)).is_ok());
+        // One past the buffer: the scenario would get a different sensor than
+        // it wrote down, with nothing said about it.
+        assert!(validate(&with_latency(MAX_LATENCY_TICKS + 1)).is_err());
+        assert!(validate(&with_latency(300)).is_err());
     }
 
     #[test]

@@ -46,7 +46,7 @@ pub fn load_str(xml: &str) -> Result<RoadNetwork, ImportError> {
     let mut lanes = Vec::new();
     let mut topo = Topology::default();
     for road in root.children().filter(|n| n.has_tag_name("road")) {
-        parse_road(road, &mut lanes, &mut topo)?;
+        parse_road(road, &mut lanes, &mut topo);
     }
     if lanes.is_empty() {
         return Err(ImportError::Malformed("no driving lanes found".into()));
@@ -246,47 +246,62 @@ struct LaneDef {
 
 // --- Parsing ------------------------------------------------------------------
 
+/// A numeric attribute, or `None` if it is absent, unparseable, or non-finite.
+///
+/// The finiteness check is not paranoia: Rust's float parser accepts the
+/// literal `NaN`, and turns an out-of-range exponent (`1e400`) into infinity,
+/// so an XML attribute carries either straight into the baked geometry. One
+/// such value poisons every point derived from it, and a NaN vertex makes the
+/// road's physics trimesh impossible to build.
 fn attr_f64(node: roxmltree::Node, name: &str) -> Option<f64> {
-    node.attribute(name).and_then(|s| s.parse().ok())
+    node.attribute(name)
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
 }
 
-fn req_f64(node: roxmltree::Node, name: &str) -> Result<f64, ImportError> {
-    attr_f64(node, name).ok_or_else(|| {
-        ImportError::Malformed(format!("<{}> missing '{name}'", node.tag_name().name()))
-    })
-}
-
-fn parse_road(
-    road: roxmltree::Node,
-    out: &mut Vec<Lane>,
-    topo: &mut Topology,
-) -> Result<(), ImportError> {
+/// Bakes one `<road>`'s lanes into `out`.
+///
+/// A road the importer cannot interpret -- no length, no `<planView>`, no
+/// supported geometry, no `<lanes>` -- is *skipped*, not fatal: real exports
+/// carry the occasional junk road, and losing a whole city map to one of them
+/// is the worse failure. Individual malformed lanes are already skipped the
+/// same way. `load_str` still errors if the document as a whole yielded no
+/// lanes at all, so a thoroughly broken file is never silently accepted.
+fn parse_road(road: roxmltree::Node, out: &mut Vec<Lane>, topo: &mut Topology) {
     let road_id = road.attribute("id").unwrap_or_default().to_string();
-    let length = req_f64(road, "length")?;
+    let Some(length) = attr_f64(road, "length") else {
+        return;
+    };
 
-    let plan_view = child(road, "planView")
-        .ok_or_else(|| ImportError::Malformed("road missing <planView>".into()))?;
+    let Some(plan_view) = child(road, "planView") else {
+        return;
+    };
     let mut geoms: Vec<GeomRec> = Vec::new();
     for g in plan_view.children().filter(|n| n.has_tag_name("geometry")) {
-        let s = req_f64(g, "s")?;
-        let x = req_f64(g, "x")?;
-        let y = req_f64(g, "y")?;
-        let hdg = req_f64(g, "hdg")?;
-        let length = req_f64(g, "length")?;
+        // A geometry record missing (or carrying a non-finite) pose is skipped
+        // rather than baked: the rest of the road is still usable.
+        let (Some(s), Some(x), Some(y), Some(hdg), Some(length)) = (
+            attr_f64(g, "s"),
+            attr_f64(g, "x"),
+            attr_f64(g, "y"),
+            attr_f64(g, "hdg"),
+            attr_f64(g, "length"),
+        ) else {
+            continue;
+        };
         let geom = if let Some(arc) = child(g, "arc") {
-            Geom::Arc {
-                curvature: req_f64(arc, "curvature")?,
-            }
+            let Some(curvature) = attr_f64(arc, "curvature") else {
+                continue;
+            };
+            Geom::Arc { curvature }
         } else if let Some(sp) = child(g, "spiral") {
+            let (Some(curv_start), Some(curv_end)) =
+                (attr_f64(sp, "curvStart"), attr_f64(sp, "curvEnd"))
+            else {
+                continue;
+            };
             Geom::Baked {
-                samples: bake_spiral(
-                    x,
-                    y,
-                    hdg,
-                    req_f64(sp, "curvStart")?,
-                    req_f64(sp, "curvEnd")?,
-                    length,
-                ),
+                samples: bake_spiral(x, y, hdg, curv_start, curv_end, length),
             }
         } else if let Some(pp) = child(g, "paramPoly3") {
             let coeff = |n: &str| attr_f64(pp, n).unwrap_or(0.0);
@@ -332,14 +347,13 @@ fn parse_road(
         geoms.push(GeomRec { s, x, y, hdg, geom });
     }
     if geoms.is_empty() {
-        return Err(ImportError::Malformed(
-            "road has no supported <geometry>".into(),
-        ));
+        return; // nothing drivable to bake
     }
     geoms.sort_by(|a, b| a.s.total_cmp(&b.s));
 
-    let lanes_node = child(road, "lanes")
-        .ok_or_else(|| ImportError::Malformed("road missing <lanes>".into()))?;
+    let Some(lanes_node) = child(road, "lanes") else {
+        return;
+    };
     let elevations = child(road, "elevationProfile")
         .map(|n| cubics_in(n, "elevation", "s"))
         .unwrap_or_default();
@@ -355,7 +369,7 @@ fn parse_road(
         .filter(|n| n.has_tag_name("laneSection"))
         .collect();
     if sections.is_empty() {
-        return Err(ImportError::Malformed("road has no <laneSection>".into()));
+        return;
     }
     sections.sort_by(|a, b| {
         attr_f64(*a, "s")
@@ -397,7 +411,6 @@ fn parse_road(
             i,
         );
     }
-    Ok(())
 }
 
 /// Append each driving lane of one section as a `Lane` spanning `[s_start,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use futures_util::{SinkExt, StreamExt};
 use protocol::messages::{ClientMessage, ServerMessage};
@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::WebSocketStream;
 
+use crate::handle::Timings;
 use crate::types::{ConnectionEvent, ConnectionId, Inbound};
 
 type OutboundRegistry = Arc<Mutex<HashMap<ConnectionId, mpsc::UnboundedSender<ServerMessage>>>>;
@@ -31,13 +32,19 @@ async fn send_error(
 pub async fn handle_connection(
     stream: TcpStream,
     id: ConnectionId,
-    heartbeat_interval: Duration,
-    heartbeat_timeout: Duration,
+    timings: Timings,
     inbound_tx: mpsc::Sender<Inbound>,
     event_tx: mpsc::UnboundedSender<ConnectionEvent>,
     outbound: OutboundRegistry,
 ) {
-    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+    // Bound the upgrade: a peer that opens TCP and never speaks must not hold
+    // this task open indefinitely.
+    let Ok(Ok(mut ws)) = tokio::time::timeout(
+        timings.handshake_timeout,
+        tokio_tungstenite::accept_async(stream),
+    )
+    .await
+    else {
         return;
     };
 
@@ -51,15 +58,15 @@ pub async fn handle_connection(
     // Delay the first tick by a full interval — `interval` would otherwise
     // fire immediately and ping the client the instant it connects.
     let mut heartbeat = tokio::time::interval_at(
-        tokio::time::Instant::now() + heartbeat_interval,
-        heartbeat_interval,
+        tokio::time::Instant::now() + timings.heartbeat_interval,
+        timings.heartbeat_interval,
     );
     let mut last_pong = Instant::now();
 
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                if last_pong.elapsed() > heartbeat_timeout {
+                if last_pong.elapsed() > timings.heartbeat_timeout {
                     break;
                 }
                 if ws.send(Message::Ping(Bytes::new())).await.is_err() {

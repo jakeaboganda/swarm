@@ -55,8 +55,19 @@ pub struct RoadNetwork {
 impl RoadNetwork {
     /// The lane with this id, by identity (not position), so ids stay valid
     /// however an importer assigns them.
+    ///
+    /// Importers hand out ids sequentially, so the id is almost always its own
+    /// index -- try that first and verify, falling back to a scan when it is
+    /// not. The fallback keeps the by-identity contract; the fast path keeps
+    /// the router off an O(lanes) probe per Dijkstra pop. That probe costs
+    /// about a third of a route across Town07 (673 lanes) today, which is
+    /// tolerable -- but `route` is answered on the sim thread, so the cost
+    /// lands on every agent's tick, and it grows with the square of the map.
     pub fn lane(&self, id: LaneId) -> Option<&Lane> {
-        self.lanes.iter().find(|l| l.id == id)
+        match self.lanes.get(id.0) {
+            Some(lane) if lane.id == id => Some(lane),
+            _ => self.lanes.iter().find(|l| l.id == id),
+        }
     }
 
     pub fn driving_lanes(&self) -> impl Iterator<Item = &Lane> {

@@ -17,10 +17,14 @@ use crate::world::Radius;
 /// Recompute perceived worlds every N physics ticks — ~32 Hz. Latency is
 /// counted in these frames, so this also sets the latency quantum.
 const TICKS_PER_FRAME: u64 = 2;
-/// Cap on a device's latency ring buffer. Bounds faithful latency at
-/// `(MAX_BUFFER - 1) * TICKS_PER_FRAME` ticks; a larger `latency_ticks`
-/// saturates to the oldest held frame rather than erroring.
+/// Cap on a device's latency ring buffer.
 const MAX_BUFFER: usize = 64;
+
+/// The largest `latency_ticks` the ring buffer can deliver faithfully.
+/// Anything beyond it would saturate to the oldest held frame, so a scenario
+/// asking for more is rejected at load (see `scenario::validate_sensors`)
+/// rather than quietly running with a different sensor than it asked for.
+pub const MAX_LATENCY_TICKS: u32 = ((MAX_BUFFER - 1) * TICKS_PER_FRAME as usize) as u32;
 
 /// The perception broadcaster handle, driven from Bevy systems.
 #[derive(Resource)]
@@ -38,6 +42,36 @@ pub struct PerceptionSeed(pub u64);
 /// disconnect evicting the live connection. An entry exists only while > 0.
 #[derive(Resource, Default)]
 pub struct PerceptionAgents(HashMap<String, u32>);
+
+impl PerceptionAgents {
+    /// Applies one pathway event to the count. Kept pure and separate from
+    /// the draining system so the connect/disconnect bookkeeping can be
+    /// driven by tests.
+    pub fn apply(&mut self, event: perception::PerceptionEvent) {
+        match event {
+            perception::PerceptionEvent::AgentConnected { name } => {
+                *self.0.entry(name).or_insert(0) += 1;
+            }
+            perception::PerceptionEvent::AgentDisconnected { name } => {
+                if let Some(count) = self.0.get_mut(&name) {
+                    // Saturating: an unmatched disconnect must not wrap the
+                    // count to u32::MAX and pin the agent as "connected" for
+                    // the rest of the run. The pairs look symmetric today,
+                    // but nothing here enforces that.
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.0.remove(&name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether this agent has a live connection on the perception pathway.
+    pub fn is_listening(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+}
 
 /// One device's perception for one agent: the latency buffer of past perceived
 /// sets and the currently-delivered (delayed) one. Reflex evaluation and the
@@ -94,19 +128,7 @@ pub fn drain_perception_events(
     mut agents: ResMut<PerceptionAgents>,
 ) {
     while let Ok(event) = perception.0.events.try_recv() {
-        match event {
-            perception::PerceptionEvent::AgentConnected { name } => {
-                *agents.0.entry(name).or_insert(0) += 1;
-            }
-            perception::PerceptionEvent::AgentDisconnected { name } => {
-                if let Some(count) = agents.0.get_mut(&name) {
-                    *count -= 1;
-                    if *count == 0 {
-                        agents.0.remove(&name);
-                    }
-                }
-            }
-        }
+        agents.apply(event);
     }
 }
 
@@ -197,7 +219,7 @@ pub fn route_perception(
 
             overlay_blips.extend(delivered.iter().map(detection_to_blip));
 
-            if agents.0.contains_key(&name.0) {
+            if agents.is_listening(&name.0) {
                 let frame = wire_frame(
                     &def.name,
                     tick.0,
@@ -311,4 +333,63 @@ fn to_wire(detection: &Detection) -> perception::Detection {
 
 fn to_wire_vec(v: Vec3) -> perception::Vec3 {
     perception::Vec3::new(v.x, v.y, v.z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perception::PerceptionEvent;
+
+    fn connected(name: &str) -> PerceptionEvent {
+        PerceptionEvent::AgentConnected { name: name.into() }
+    }
+
+    fn disconnected(name: &str) -> PerceptionEvent {
+        PerceptionEvent::AgentDisconnected { name: name.into() }
+    }
+
+    #[test]
+    fn an_agent_is_listening_between_its_connect_and_disconnect() {
+        let mut agents = PerceptionAgents::default();
+        assert!(!agents.is_listening("car-1"));
+        agents.apply(connected("car-1"));
+        assert!(agents.is_listening("car-1"));
+        agents.apply(disconnected("car-1"));
+        assert!(!agents.is_listening("car-1"));
+    }
+
+    #[test]
+    fn a_same_name_reconnect_stays_listening_until_both_connections_go() {
+        // The reason this is a count and not a flag: if the new connection's
+        // `AgentConnected` is observed before the old one's disconnect, a flag
+        // would let the stale disconnect evict the live connection.
+        let mut agents = PerceptionAgents::default();
+        agents.apply(connected("car-1"));
+        agents.apply(connected("car-1"));
+        agents.apply(disconnected("car-1"));
+        assert!(
+            agents.is_listening("car-1"),
+            "the live reconnect was evicted"
+        );
+        agents.apply(disconnected("car-1"));
+        assert!(!agents.is_listening("car-1"));
+    }
+
+    #[test]
+    fn the_agent_count_never_underflows_on_an_unmatched_disconnect() {
+        // A disconnect with no matching connect used to wrap the count to
+        // u32::MAX, which pins the agent as "connected" for the rest of the
+        // run -- the sim keeps pushing frames into a socket that is gone.
+        let mut agents = PerceptionAgents::default();
+        agents.apply(connected("car-1"));
+        agents.apply(disconnected("car-1"));
+        agents.apply(disconnected("car-1"));
+        assert!(!agents.is_listening("car-1"));
+
+        // And it recovers cleanly: a later connect is an ordinary one.
+        agents.apply(connected("car-1"));
+        assert!(agents.is_listening("car-1"));
+        agents.apply(disconnected("car-1"));
+        assert!(!agents.is_listening("car-1"));
+    }
 }

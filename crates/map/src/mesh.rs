@@ -13,6 +13,50 @@ pub struct Mesh {
     pub indices: Vec<u32>,
 }
 
+/// Why a mesh cannot be turned into a physics trimesh.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MeshError {
+    #[error("mesh has no triangles")]
+    Empty,
+    #[error("vertex {0} is not finite")]
+    NonFiniteVertex(usize),
+    #[error("triangle {0} indexes vertex {1}, past the {2} vertices present")]
+    IndexOutOfRange(usize, u32, usize),
+    #[error("triangle {0} is degenerate (it repeats a vertex)")]
+    DegenerateTriangle(usize),
+}
+
+impl Mesh {
+    /// Whether this mesh can back a physics collider.
+    ///
+    /// The collider builder answers the same question, but only by failing at
+    /// spawn time -- deep inside a Bevy startup system, where there is nothing
+    /// to do but panic. Checking here lets an untrusted map be rejected at
+    /// *load*, with the file named, which is what a bad `.xodr` deserves.
+    pub fn validate(&self) -> Result<(), MeshError> {
+        if self.indices.is_empty() {
+            return Err(MeshError::Empty);
+        }
+        if let Some(i) = self.vertices.iter().position(|v| !v.is_finite()) {
+            return Err(MeshError::NonFiniteVertex(i));
+        }
+        for (t, triangle) in self.indices.chunks_exact(3).enumerate() {
+            for &index in triangle {
+                if index as usize >= self.vertices.len() {
+                    return Err(MeshError::IndexOutOfRange(t, index, self.vertices.len()));
+                }
+            }
+            if triangle[0] == triangle[1]
+                || triangle[1] == triangle[2]
+                || triangle[0] == triangle[2]
+            {
+                return Err(MeshError::DegenerateTriangle(t));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RoadNetwork {
     /// Tessellate every driving lane into one surface mesh-- a quad strip per
     /// lane, each rib offset +/-width/2 from the centerline along the per-vertex
@@ -53,7 +97,7 @@ impl RoadNetwork {
 
 #[cfg(test)]
 mod tests {
-    use crate::{demo_road, Direction, Lane, LaneId, LaneKind, Polyline, RoadNetwork};
+    use crate::{demo_road, Direction, Lane, LaneId, LaneKind, Mesh, Polyline, RoadNetwork};
     use glam::Vec3;
 
     #[test]
@@ -83,6 +127,46 @@ mod tests {
         assert!((mesh.vertices[0].z - mesh.vertices[1].z).abs() > 3.9);
         // A flat road faces straight up.
         assert!(mesh.normals[0].abs_diff_eq(Vec3::Y, 1e-5));
+    }
+
+    #[test]
+    fn every_shipped_map_tessellates_into_a_valid_trimesh() {
+        // The built-in road, here; the imported ones are checked in
+        // `map-opendrive`, which is the crate that can load them. This is the
+        // cheapest guard against the startup panic: the server builds one
+        // static trimesh collider from exactly this mesh.
+        demo_road()
+            .surface_mesh()
+            .validate()
+            .expect("the built-in demo road tessellates");
+    }
+
+    #[test]
+    fn validate_rejects_what_a_collider_cannot_build() {
+        use crate::MeshError;
+        assert_eq!(Mesh::default().validate(), Err(MeshError::Empty));
+
+        let sound = Mesh {
+            vertices: vec![Vec3::ZERO, Vec3::X, Vec3::Z],
+            normals: vec![Vec3::Y; 3],
+            indices: vec![0, 1, 2],
+        };
+        assert_eq!(sound.validate(), Ok(()));
+
+        let mut nan = sound.clone();
+        nan.vertices[1].x = f32::NAN;
+        assert_eq!(nan.validate(), Err(MeshError::NonFiniteVertex(1)));
+
+        let mut past_end = sound.clone();
+        past_end.indices = vec![0, 1, 7];
+        assert_eq!(
+            past_end.validate(),
+            Err(MeshError::IndexOutOfRange(0, 7, 3))
+        );
+
+        let mut degenerate = sound.clone();
+        degenerate.indices = vec![0, 1, 1];
+        assert_eq!(degenerate.validate(), Err(MeshError::DegenerateTriangle(0)));
     }
 
     #[test]

@@ -407,6 +407,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_slow_viewer_drops_frames_but_still_receives_reliable_events() {
+        // The stronger form of `reliable_events_survive_frame_backpressure`:
+        // that test proves the event gets through, this one proves the frames
+        // were genuinely *dropped* rather than queued. A viewer that cannot
+        // keep up must cost bounded memory -- the next frame is a complete
+        // snapshot, so losing one is free.
+        let mut handle = spawn_test_server().await;
+        let (mut client, _id) = connect_ready(&mut handle, Hello::default()).await;
+
+        const FLOOD: u64 = 200;
+        for tick in 0..FLOOD {
+            handle.broadcast_frame(&ServerToViewer::Frame(Frame {
+                tick,
+                entities: vec![],
+            }));
+        }
+        handle.broadcast_reliable(&ServerToViewer::Event(SceneEvent::ScenarioState {
+            state: ScenarioState::Running,
+        }));
+
+        // Read everything the viewer can get, until the stream goes quiet.
+        let mut frames = 0;
+        let mut saw_event = false;
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_millis(300), client.next()).await
+        {
+            match message {
+                Message::Binary(bytes) => match decode::<ServerToViewer>(&bytes).expect("decode") {
+                    ServerToViewer::Frame(_) => frames += 1,
+                    ServerToViewer::Event(_) => saw_event = true,
+                    _ => {}
+                },
+                _ => continue,
+            }
+        }
+
+        assert!(saw_event, "the reliable event was dropped with the frames");
+        assert!(
+            frames < FLOOD as usize,
+            "all {FLOOD} frames were queued for a viewer that never read them"
+        );
+        // One in flight on the socket plus a full queue is the ceiling.
+        assert!(
+            frames <= LOSSY_CAPACITY + 2,
+            "{frames} frames buffered, past the {LOSSY_CAPACITY}-deep lossy queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_viewer_that_never_says_hello_is_dropped_at_the_handshake_timeout() {
+        // Slowloris: complete the WebSocket upgrade, then say nothing. The
+        // connection must not register, and must not hold a task forever.
+        let mut handle = spawn_test_server().await;
+        let url = format!("ws://{}", handle.local_addr);
+        let (mut client, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("connect");
+
+        // Never registers, so the sim never hears about it.
+        let event = tokio::time::timeout(HANDSHAKE_TIMEOUT / 2, handle.events.recv()).await;
+        assert!(event.is_err(), "a silent viewer registered");
+
+        // And the server hangs up of its own accord once the window passes.
+        let closed = tokio::time::timeout(HANDSHAKE_TIMEOUT * 2, async {
+            while let Some(Ok(_)) = client.next().await {}
+        })
+        .await;
+        assert!(closed.is_ok(), "the silent viewer was never dropped");
+    }
+
+    #[tokio::test]
+    async fn a_poisoned_registry_still_serves_the_other_viewers() {
+        // A viewer task panicking while holding the lock must not take the sim
+        // thread down with it on the next broadcast -- viewers are passive and
+        // lifecycle-independent, and that is the whole point of the
+        // poison-recovering `lock`.
+        let mut handle = spawn_test_server().await;
+        let (mut client, _id) = connect_ready(&mut handle, Hello::default()).await;
+
+        let registry = handle.registry.clone();
+        std::thread::spawn(move || {
+            let _guard = lock(&registry);
+            panic!("a viewer task died holding the registry lock");
+        })
+        .join()
+        .expect_err("the helper thread panics on purpose");
+        assert!(handle.registry.is_poisoned());
+
+        let frame = ServerToViewer::Frame(Frame {
+            tick: 9,
+            entities: vec![],
+        });
+        handle.broadcast_frame(&frame);
+        assert_eq!(next_message(&mut client).await, frame);
+    }
+
+    #[tokio::test]
+    async fn an_unready_viewer_receives_no_despawn_events() {
+        // The ordering contract: a viewer learns of entities from its
+        // scene-init. A lifecycle event that arrives first would reference an
+        // entity it has never heard of.
+        let mut handle = spawn_test_server().await;
+        let mut client = connect(handle.local_addr, Hello::default()).await;
+        let VizEvent::ViewerConnected { id, .. } = handle.events.recv().await.unwrap() else {
+            panic!("expected ViewerConnected");
+        };
+
+        handle.broadcast_reliable(&ServerToViewer::Event(SceneEvent::EntityDespawned {
+            id: crate::scene::EntityId("car-1".into()),
+        }));
+        let early = tokio::time::timeout(Duration::from_millis(200), client.next()).await;
+        assert!(early.is_err(), "a despawn event leaked before scene-init");
+
+        // After the scene-init the viewer is caught up, and events flow.
+        handle.send_scene_init(id, &scene_init());
+        assert!(matches!(
+            next_message(&mut client).await,
+            ServerToViewer::SceneInit(_)
+        ));
+        let event = ServerToViewer::Event(SceneEvent::EntityDespawned {
+            id: crate::scene::EntityId("car-2".into()),
+        });
+        handle.broadcast_reliable(&event);
+        assert_eq!(next_message(&mut client).await, event);
+    }
+
+    #[tokio::test]
     async fn reliable_events_survive_frame_backpressure() {
         let mut handle = spawn_test_server().await;
         let (mut client, _id) = connect_ready(&mut handle, Hello::default()).await;

@@ -21,6 +21,11 @@ pub struct Config {
     pub addr: SocketAddr,
     pub heartbeat_interval: Duration,
     pub heartbeat_timeout: Duration,
+    /// How long an accepted TCP peer has to complete the WebSocket upgrade
+    /// before it is dropped. Without it, a peer that opens a socket and goes
+    /// silent holds a task for the life of the process -- the slowloris case
+    /// `viz` and `perception` already guard against.
+    pub handshake_timeout: Duration,
 }
 
 impl Default for Config {
@@ -29,11 +34,20 @@ impl Default for Config {
             addr: ([0, 0, 0, 0], 4000).into(),
             heartbeat_interval: Duration::from_secs(2),
             heartbeat_timeout: Duration::from_secs(6),
+            handshake_timeout: Duration::from_secs(5),
         }
     }
 }
 
 type OutboundRegistry = Arc<Mutex<HashMap<ConnectionId, mpsc::UnboundedSender<ServerMessage>>>>;
+
+/// A connection task's timing policy, grouped so it travels as one value.
+#[derive(Clone, Copy)]
+pub(crate) struct Timings {
+    pub heartbeat_interval: Duration,
+    pub heartbeat_timeout: Duration,
+    pub handshake_timeout: Duration,
+}
 
 /// Owns the receiving ends of transport's channels and lets `server` push
 /// messages back out to specific connections. Constructed once by
@@ -73,6 +87,11 @@ pub async fn spawn(config: Config) -> std::io::Result<TransportHandle> {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let outbound: OutboundRegistry = Arc::new(Mutex::new(HashMap::new()));
     let next_id = Arc::new(AtomicU64::new(0));
+    let timings = Timings {
+        heartbeat_interval: config.heartbeat_interval,
+        heartbeat_timeout: config.heartbeat_timeout,
+        handshake_timeout: config.handshake_timeout,
+    };
 
     let accept_outbound = outbound.clone();
     tokio::spawn(async move {
@@ -84,8 +103,7 @@ pub async fn spawn(config: Config) -> std::io::Result<TransportHandle> {
             tokio::spawn(handle_connection(
                 stream,
                 id,
-                config.heartbeat_interval,
-                config.heartbeat_timeout,
+                timings,
                 inbound_tx.clone(),
                 event_tx.clone(),
                 accept_outbound.clone(),

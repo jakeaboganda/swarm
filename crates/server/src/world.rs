@@ -206,8 +206,9 @@ pub fn spawn_road(commands: &mut Commands, road: &map::RoadNetwork) {
         .chunks_exact(3)
         .map(|t| [t[0], t[1], t[2]])
         .collect();
-    // The mesh is our own generated geometry; a trimesh failure here is a
-    // construction bug, not a runtime condition.
+    // Checked at load by `app::load_map`, which is where an imported (and
+    // therefore untrusted) map is rejected with its filename attached. By here
+    // a failure would be a construction bug, not a bad input file.
     let collider =
         Collider::trimesh(mesh.vertices.clone(), triangles).expect("road surface is a valid mesh");
 

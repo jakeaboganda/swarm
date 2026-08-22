@@ -29,14 +29,22 @@ const ARRIVE_RADIUS: f32 = 2.0;
 /// waypoint permanently "unreached". Returns `None` once arrived (the
 /// caller should advance to the next waypoint), else the desired velocity
 /// with arrive-slowdown applied.
+///
+/// The result is always finite. A waypoint that yields no usable direction --
+/// non-finite, or far enough away that the delta overflows -- reports as
+/// arrived, so the plan advances past it instead of pushing `NaN` into
+/// `ExternalForce`. `inbound::sanitize_plan` already keeps those out of a
+/// plan; this is the last guard before the force is applied.
 fn planar_seek(current: Vec3, target: Vec3, speed: f32) -> Option<Vec3> {
     let delta = Vec3::new(target.x - current.x, 0.0, target.z - current.z);
     let distance = delta.length();
-    if distance < ARRIVAL_TOLERANCE {
+    if !distance.is_finite() || distance < ARRIVAL_TOLERANCE {
         return None;
     }
-    let scaled_speed = speed * (distance / ARRIVE_RADIUS).min(1.0);
-    Some(delta / distance * scaled_speed)
+    // `max` returns the non-NaN side, so a NaN speed becomes a zero one.
+    let scaled_speed = speed.max(0.0) * (distance / ARRIVE_RADIUS).min(1.0);
+    let velocity = delta / distance * scaled_speed;
+    velocity.is_finite().then_some(velocity)
 }
 
 /// Nearest point on each of the four walls to `position`, treated as
@@ -225,6 +233,38 @@ mod tests {
         assert!((desired.x - 5.0).abs() < 1e-4);
         assert_eq!(desired.y, 0.0);
         assert_eq!(desired.z, 0.0);
+    }
+
+    #[test]
+    fn planar_seek_never_returns_a_non_finite_velocity() {
+        // Sanitization upstream (`inbound::sanitize_plan`) keeps these out of
+        // a plan, but this is the last step before `DesiredVelocity` reaches
+        // `ExternalForce` and Rapier, so it holds the line on its own.
+        let nasty = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+            f32::MIN,
+            0.0,
+            -0.0,
+            1.0,
+        ];
+        for &cx in &nasty {
+            for &tx in &nasty {
+                for &speed in &nasty {
+                    let current = Vec3::new(cx, 1.0, cx);
+                    let target = Vec3::new(tx, 0.0, tx);
+                    if let Some(v) = planar_seek(current, target, speed) {
+                        assert!(
+                            v.is_finite(),
+                            "planar_seek({current:?}, {target:?}, {speed}) = {v:?}"
+                        );
+                        assert!(v.length() >= 0.0, "negative speed leaked through");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -285,6 +285,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_same_name_reconnect_keeps_the_newer_connection() {
+        // An agent that drops and comes back under the same name races its own
+        // cleanup: the old task's eviction can run *after* the new connection
+        // registered. The token exists so the old task recognises it is no
+        // longer the current connection and leaves the registry alone --
+        // otherwise a reconnecting agent would silently stop receiving
+        // perception.
+        let mut handle = spawn_test_server().await;
+        let old = connect(handle.local_addr, "car-1").await;
+        assert_eq!(await_connected(&mut handle).await, "car-1");
+
+        let mut new = connect(handle.local_addr, "car-1").await;
+        assert_eq!(await_connected(&mut handle).await, "car-1");
+
+        // Now let the older connection's cleanup run.
+        drop(old);
+        match tokio::time::timeout(Duration::from_secs(5), handle.events.recv())
+            .await
+            .expect("timed out")
+            .expect("events closed")
+        {
+            PerceptionEvent::AgentDisconnected { name } => assert_eq!(name, "car-1"),
+            other => panic!("expected AgentDisconnected, got {other:?}"),
+        }
+
+        // The survivor is still registered and still served.
+        handle.send("car-1", &sample_frame(11));
+        assert_eq!(next_frame(&mut new).await, sample_frame(11));
+    }
+
+    #[tokio::test]
+    async fn a_full_agent_queue_drops_frames_instead_of_blocking_the_sim() {
+        // `send` is called from the sim thread inside the fixed step. A slow
+        // agent must cost dropped frames -- each frame is a whole snapshot --
+        // never a stalled physics tick.
+        let mut handle = spawn_test_server().await;
+        let mut client = connect(handle.local_addr, "car-1").await;
+        await_connected(&mut handle).await;
+
+        const FLOOD: u64 = 500;
+        let start = std::time::Instant::now();
+        for tick in 0..FLOOD {
+            handle.send("car-1", &sample_frame(tick));
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "pushing {FLOOD} frames to an unread agent took {elapsed:?} -- \
+             the sim thread was blocked"
+        );
+
+        // What the agent does get is a suffix of the stream, not a backlog:
+        // the frames it reads are recent ones, and there are far fewer than
+        // were sent.
+        let mut received = 0;
+        while let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(300), client.next()).await
+        {
+            decode::<ServerToAgent>(&text).expect("decode");
+            received += 1;
+        }
+        assert!(received > 0, "the agent received nothing at all");
+        assert!(
+            received < FLOOD as usize,
+            "every frame was buffered for an agent that never read them"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_never_says_hello_is_dropped_at_the_handshake_timeout() {
+        // Slowloris on the perception port: upgrade, then say nothing.
+        let mut handle = spawn_test_server().await;
+        let (mut client, _) =
+            tokio_tungstenite::connect_async(format!("ws://{}", handle.local_addr))
+                .await
+                .expect("connect");
+
+        // It never registers, so the sim never routes to it.
+        let event = tokio::time::timeout(HANDSHAKE_TIMEOUT / 2, handle.events.recv()).await;
+        assert!(event.is_err(), "a silent agent registered");
+
+        // And the server hangs up on its own once the window passes.
+        let closed = tokio::time::timeout(HANDSHAKE_TIMEOUT * 2, async {
+            while let Some(Ok(_)) = client.next().await {}
+        })
+        .await;
+        assert!(closed.is_ok(), "the silent agent was never dropped");
+    }
+
+    #[tokio::test]
     async fn wrong_protocol_version_is_dropped() {
         let handle = spawn_test_server().await;
         let (mut client, _) =
