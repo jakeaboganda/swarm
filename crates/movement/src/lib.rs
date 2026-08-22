@@ -13,10 +13,15 @@ mod model;
 mod plugin;
 mod raycast_vehicle;
 mod systems;
+mod tire;
 
 pub use carlike::CarLike;
 pub use fullvehicle::FullVehicle;
 pub use holonomic::{seek_force, Holonomic};
 pub use model::{Actuation, BodyState, DesiredVelocity, MovementModel, PhysicalYaw};
 pub use plugin::{MovementPlugin, MovementSet};
-pub use raycast_vehicle::RaycastVehicle;
+pub use raycast_vehicle::{wheel_offset, RaycastVehicle};
+pub use tire::{
+    equilibrium_omega, slip_angle, slip_ratio, step_wheel, tire_force, TireForce, TireParams,
+    WheelInput, WheelOutput, WheelSpec, SLIP_SPEED_FLOOR,
+};

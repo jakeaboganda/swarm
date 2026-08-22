@@ -92,6 +92,19 @@ const WHEELS: [(f32, f32, bool); 4] = [
     (-1.0, -1.0, false), // rear-right
 ];
 
+/// Chassis-local attach point of wheel `index`, in the body's own frame
+/// (Bevy convention: +X right, +Y up, -Z forward). This is the rig geometry a
+/// viewer needs to place a wheel, and the same offset the drive system rotates
+/// into world space to cast from.
+pub fn wheel_offset(index: usize, vehicle: &RaycastVehicle) -> Vec3 {
+    let (fb, lr, _) = WHEELS[index % WHEELS.len()];
+    Vec3::new(
+        vehicle.half_track * lr,
+        vehicle.wheel_y,
+        -vehicle.half_wheelbase * fb,
+    )
+}
+
 /// Driver: `DesiredVelocity` -> `VehicleControls`, i.e. the pedals + wheel. A
 /// proportional speed controller for the drive force and a rate-limited
 /// proportional steering law, the same shape as `FullVehicle`'s driver.
@@ -347,6 +360,51 @@ mod tests {
             ),
             0.0
         );
+    }
+
+    #[test]
+    fn wheels_are_placed_at_the_rig_offsets() {
+        let v = vehicle();
+        // Bevy's forward is -Z, so the front pair sits at negative local Z.
+        assert_eq!(
+            wheel_offset(0, &v),
+            Vec3::new(v.half_track, v.wheel_y, -v.half_wheelbase),
+            "front-left"
+        );
+        assert_eq!(
+            wheel_offset(1, &v),
+            Vec3::new(-v.half_track, v.wheel_y, -v.half_wheelbase),
+            "front-right"
+        );
+        assert_eq!(
+            wheel_offset(2, &v),
+            Vec3::new(v.half_track, v.wheel_y, v.half_wheelbase),
+            "rear-left"
+        );
+        assert_eq!(
+            wheel_offset(3, &v),
+            Vec3::new(-v.half_track, v.wheel_y, v.half_wheelbase),
+            "rear-right"
+        );
+
+        // Rotated into world space it must reproduce, exactly, the attach
+        // point the drive system builds from the body axes today -- including
+        // on a body that is yawed, pitched and rolled.
+        let transform = Transform::from_translation(Vec3::new(3.0, 1.0, -2.0)).looking_to(
+            Vec3::new(1.0, 0.3, 1.0).normalize(),
+            Vec3::new(0.1, 1.0, 0.0),
+        );
+        for (index, (fb, lr, _)) in WHEELS.into_iter().enumerate() {
+            let expected = transform.translation
+                + *transform.forward() * (v.half_wheelbase * fb)
+                + *transform.right() * (v.half_track * lr)
+                + *transform.up() * v.wheel_y;
+            let actual = transform.translation + transform.rotation * wheel_offset(index, &v);
+            assert!(
+                (actual - expected).length() < 1e-4,
+                "wheel {index}: {actual:?} vs {expected:?}"
+            );
+        }
     }
 
     #[test]
