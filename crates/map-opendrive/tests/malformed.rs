@@ -9,11 +9,12 @@
 use map_opendrive::{load_file, load_str};
 
 const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/");
-/// The three maps the repo actually ships and drives on.
-const SHIPPED: [&str; 3] = [
+/// The maps the repo actually ships and drives on.
+const SHIPPED: [&str; 4] = [
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps/demo.xodr"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps/e6mini.xodr"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps/town07.xodr"),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps/testtrack.xodr"),
 ];
 
 fn fixture(name: &str) -> map::RoadNetwork {

@@ -1,0 +1,8 @@
+{
+  "arena": { "width": 50.0, "depth": 50.0 },
+  "map": "maps/testtrack.xodr",
+  "roster": [
+    { "name": "car", "embodiment": "raycast_vehicle" }
+  ],
+  "time": { "duration": 300.0 }
+}

@@ -150,6 +150,19 @@ impl Sim {
         }
     }
 
+    /// Advances the sim without pausing between ticks.
+    ///
+    /// The pause in [`Sim::step`] is there to let the socket side make
+    /// progress; a long stretch of pure driving exchanges no messages, so it
+    /// only costs wall-clock. Use this for those, and `step` around anything
+    /// that has to cross the wire.
+    pub fn step_quiet(&mut self, count: usize) {
+        let _guard = self.runtime.enter();
+        for _ in 0..count {
+            self.app.update();
+        }
+    }
+
     /// Steps until `f` returns `Some`, or panics after [`EXPECT_TIMEOUT`].
     /// `what` names the thing being waited for, so a timeout reads as a claim
     /// that stopped being true.
