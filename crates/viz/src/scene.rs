@@ -86,6 +86,30 @@ pub struct EntityDescriptor {
     /// `#[serde(default)]` keeps pre-v3 encodings decodable.
     #[serde(default)]
     pub sensors: Option<SensorView>,
+    /// The wheel geometry to draw, for entities that have wheels. `None` for
+    /// everything else, which is every non-vehicle. Additive, so an older
+    /// viewer simply draws the body.
+    #[serde(default)]
+    pub wheels: Option<WheelRig>,
+}
+
+/// The fixed geometry of a vehicle's wheels, sent once with the entity rather
+/// than every frame.
+///
+/// A viewer cannot derive any of this: it never sees the vehicle's wheelbase or
+/// track, only its body transform. The offsets are chassis-local, so a viewer
+/// parents its wheels to the body and lets the body's own transform carry them.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WheelRig {
+    pub radius: f32,
+    pub width: f32,
+    /// Suspension length at full extension (m). The offsets below are where
+    /// the suspension *attaches*; the wheel centre hangs `rest - travel` below
+    /// that, so a viewer needs this to place it at all.
+    pub rest: f32,
+    /// Attach points in the body's own frame, in the order wheel poses arrive:
+    /// front-left, front-right, rear-left, rear-right.
+    pub offsets: [Vec3; 4],
 }
 
 /// The few numbers a viewer needs to draw an agent's sensing region: max
@@ -134,6 +158,12 @@ pub struct ArenaBounds {
 }
 
 /// A change to the scene between frames.
+///
+/// `EntitySpawned` is much the largest variant, and deliberately not boxed:
+/// these are serialized and sent, not held in bulk, so one allocation per
+/// spawn event would buy nothing and cost every construction and match site an
+/// indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SceneEvent {

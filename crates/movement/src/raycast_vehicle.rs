@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{ExternalForce, QueryFilter, ReadRapierContext, Velocity};
 
@@ -399,51 +397,7 @@ pub fn drive_raycast_vehicles(
         // Overwrite, not accumulate (ExternalForce persists across ticks).
         force.force = total_force;
         force.torque = total_torque;
-
-        if std::env::var("VEHICLE_DEBUG").is_ok() {
-            debug_dump(&vehicle, &wheels, transform, &controls, forward_speed);
-        }
     }
-}
-
-/// Per-tick chassis + wheel state on stderr, behind `VEHICLE_DEBUG`.
-fn debug_dump(
-    vehicle: &RaycastVehicle,
-    wheels: &Wheels,
-    transform: &Transform,
-    controls: &VehicleControls,
-    forward_speed: f32,
-) {
-    const NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
-    let mut per_wheel = String::new();
-    for (name, wheel) in NAMES.iter().zip(wheels.0.iter()) {
-        if wheel.contact {
-            let _ = write!(
-                per_wheel,
-                " {name}:c{:.2}/N{:.0}/k{:+.2}",
-                wheel.compression, wheel.load, wheel.slip_ratio
-            );
-        } else {
-            let _ = write!(per_wheel, " {name}:air");
-        }
-    }
-    // Chassis attitude: pitch = nose above horizontal (+ is nose-up),
-    // roll = right side above horizontal.
-    let pitch = transform.forward().y.asin().to_degrees();
-    let roll = transform.right().y.asin().to_degrees();
-    eprintln!(
-        "y={:.2} pitch={:+.1} roll={:+.1} fspeed={:.2} engine={:.0} brake={:.0} \
-         steer={:+.2} load={:.0}{}",
-        transform.translation.y,
-        pitch,
-        roll,
-        forward_speed,
-        controls.engine_torque,
-        controls.brake_torque,
-        vehicle.steer,
-        wheels.total_load(),
-        per_wheel,
-    );
 }
 
 /// Accumulate a force applied at centre-of-mass-relative point `arm` into the

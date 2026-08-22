@@ -28,6 +28,10 @@ pub struct VizEntity {
     /// The agent's sensing region for the debug envelope overlay; `None` for
     /// static geometry.
     pub sensors: Option<viz::SensorView>,
+    /// Wheel geometry for a viewer to draw, for entities that have wheels.
+    /// Fixed for the life of the entity, so it rides the descriptor rather
+    /// than every frame.
+    pub wheels: Option<viz::WheelRig>,
 }
 
 pub fn viz_embodiment(embodiment: protocol::scenario::Embodiment) -> viz::Embodiment {
@@ -72,6 +76,7 @@ fn descriptor(entity: &VizEntity, transform: &Transform) -> viz::EntityDescripto
         color: entity.color,
         transform: to_transform(transform),
         sensors: entity.sensors,
+        wheels: entity.wheels,
     }
 }
 
@@ -128,17 +133,23 @@ pub fn broadcast_state(viz: Res<Viz>, state: Res<State<ScenarioState>>) {
 /// Every `TICKS_PER_FRAME` physics ticks, broadcasts a scene frame
 /// (positions/orientations) plus a debug frame (plans + reflex flags),
 /// stamped with the current tick so the viewer can interpolate on sim-time.
+/// What a frame needs from each entity. Named because it is five items wide:
+/// the identity and pose that go in the scene layer, the plan and reflex state
+/// that go in the debug layer, and the wheels, which straddle both.
+type FrameQuery<'a> = (
+    &'a VizEntity,
+    &'a Transform,
+    Option<&'a Plan>,
+    Option<&'a DesiredVelocity>,
+    Option<&'a movement::Wheels>,
+);
+
 pub fn broadcast_frames(
     mut last_emit: Local<u64>,
     viz: Res<Viz>,
     tick: Res<Tick>,
     overlay: Res<crate::perception_router::PerceptionOverlay>,
-    query: Query<(
-        &VizEntity,
-        &Transform,
-        Option<&Plan>,
-        Option<&DesiredVelocity>,
-    )>,
+    query: Query<FrameQuery>,
 ) {
     if tick.0 < *last_emit + TICKS_PER_FRAME {
         return;
@@ -147,13 +158,28 @@ pub fn broadcast_frames(
 
     let mut frame = Vec::new();
     let mut debug = Vec::new();
-    for (entity, transform, plan, desired) in &query {
+    for (entity, transform, plan, desired, wheels) in &query {
         if !entity.kind.is_dynamic() {
             continue;
         }
+        // Geometry a viewer cannot derive: a locked wheel's spin is not the
+        // body's speed, and suspension travel is invisible from outside.
+        let wheel_poses = wheels
+            .map(|w| {
+                w.0.iter()
+                    .map(|wheel| viz::WheelPose {
+                        steer: wheel.steer,
+                        spin: wheel.angle,
+                        travel: wheel.compression,
+                        load: wheel.load,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         frame.push(viz::EntityFrame {
             id: entity.id.clone(),
             transform: to_transform(transform),
+            wheels: wheel_poses,
         });
         // What is *left* of the plan. The tracker does not consume waypoints
         // (the agent's path stays as it submitted it), so the ones already
@@ -171,6 +197,18 @@ pub fn broadcast_frames(
             reflex_active: desired.map(|d| d.urgent).unwrap_or(false),
             // The agent's latest perceived set (keyed by name == viz id).
             detections: overlay.blips_for(&entity.id.0),
+            // Diagnostics rather than geometry, so they ride the debug layer.
+            wheels: wheels
+                .map(|w| {
+                    w.0.iter()
+                        .map(|wheel| viz::WheelDebug {
+                            slip_ratio: wheel.slip_ratio,
+                            slip_angle: wheel.slip_angle,
+                            contact: wheel.contact,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
     }
 

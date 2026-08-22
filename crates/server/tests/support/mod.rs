@@ -568,3 +568,83 @@ impl Sim {
         transform.translation.y += height;
     }
 }
+
+impl Sim {
+    /// Connects a viewer to the viz pathway and completes its handshake.
+    pub fn watch_viz(&self, subscribe_debug: bool) -> VizClient {
+        VizClient::connect(&self.runtime, self.viz_addr, subscribe_debug)
+    }
+}
+
+/// A viewer on the viz pathway (`:4001`), same shape as [`TestAgent`]. The
+/// wire is MessagePack binary frames rather than JSON text.
+pub struct VizClient {
+    inbound: std_mpsc::Receiver<viz::ServerToViewer>,
+    _outbound: tokio_mpsc::UnboundedSender<Message>,
+}
+
+impl VizClient {
+    pub fn connect(runtime: &Runtime, addr: SocketAddr, subscribe_debug: bool) -> Self {
+        let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel::<Message>();
+        let (in_tx, in_rx) = std_mpsc::channel::<viz::ServerToViewer>();
+        let url = format!("ws://{addr}");
+        let hello = viz::encode(&viz::ViewerToServer::Hello(viz::Hello {
+            protocol_version: viz::PROTOCOL_VERSION,
+            subscribe_debug,
+        }));
+
+        let mut ws = runtime.block_on(async move {
+            let (mut ws, _) = tokio_tungstenite::connect_async(url)
+                .await
+                .expect("viewer connects");
+            ws.send(Message::binary(hello)).await.expect("send hello");
+            ws
+        });
+
+        runtime.spawn(async move {
+            loop {
+                tokio::select! {
+                    outgoing = out_rx.recv() => match outgoing {
+                        Some(message) => { if ws.send(message).await.is_err() { break } }
+                        None => { let _ = ws.close(None).await; break }
+                    },
+                    incoming = ws.next() => match incoming {
+                        Some(Ok(Message::Binary(bytes))) => {
+                            match viz::decode::<viz::ServerToViewer>(&bytes) {
+                                Ok(message) => {
+                                    if in_tx.send(message).is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(err) => panic!("undecodable viz message: {err}"),
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(_)) | None => break,
+                    },
+                }
+            }
+        });
+
+        Self {
+            inbound: in_rx,
+            _outbound: out_tx,
+        }
+    }
+
+    pub fn try_recv(&self) -> Option<viz::ServerToViewer> {
+        self.inbound.try_recv().ok()
+    }
+}
+
+impl Sim {
+    /// Steps until `viewer` receives a message `f` accepts, and returns it.
+    pub fn expect_viz<T>(
+        &mut self,
+        viewer: &VizClient,
+        what: &str,
+        f: impl Fn(&viz::ServerToViewer) -> Option<T>,
+    ) -> T {
+        self.expect(what, |_| viewer.try_recv().as_ref().and_then(&f))
+    }
+}

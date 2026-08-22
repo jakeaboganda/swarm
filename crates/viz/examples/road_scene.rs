@@ -40,6 +40,7 @@ fn main() {
         },
         transform: Transform::IDENTITY,
         sensors: None,
+        wheels: None,
     };
 
     let scene = ServerToViewer::SceneInit(SceneInit {

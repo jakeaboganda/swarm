@@ -139,6 +139,12 @@ In the viewer: **F** follows/unfollows the nearest vehicle (chase-cam), **Tab**
 cycles vehicles, **P** toggles the perception overlay (what each agent detects),
 **O** toggles the sensing envelope (its range/field-of-view).
 
+Cars are drawn on their real wheels: each one steers, spins, and rides its own
+suspension travel. They are tinted by what the tire is doing — **red** for a
+locked wheel (stopped while the car is still sliding), **blue** for wheelspin,
+grey for a wheel off the ground. Chase-cam a car under a braking reflex and you
+can watch all four lock.
+
 ## Writing an agent
 
 An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:

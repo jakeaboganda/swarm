@@ -220,3 +220,124 @@ fn a_densely_sampled_plan_is_driven_at_the_speed_the_agent_asked_for() {
         "asked for {ASKED} m/s down a straight line and never got past {fastest:.2}"
     );
 }
+
+#[test]
+fn wheel_state_reaches_a_viewer() {
+    // The wire half of the wheel work: a viewer has to be told the rig once
+    // and each wheel's pose every frame, because it can derive neither. The
+    // rig it draws must be the rig the physics casts from, or the wheels will
+    // be visibly in the wrong place.
+    let (mut sim, _agent) = settled_car();
+    let viewer = sim.watch_viz(true);
+
+    // The scene-init a viewer gets on connect carries the rig.
+    let rig = sim.expect_viz(&viewer, "the car's wheel rig", |message| match message {
+        viz::ServerToViewer::SceneInit(init) => init
+            .entities
+            .iter()
+            .find(|e| e.id.0 == "car")
+            .and_then(|e| e.wheels),
+        _ => None,
+    });
+    let vehicle: RaycastVehicle = sim.component("car");
+    assert_eq!(rig.radius, vehicle.wheel_radius);
+    assert_eq!(rig.rest, vehicle.suspension_rest);
+    assert!(rig.width > 0.0);
+    for (index, offset) in rig.offsets.iter().enumerate() {
+        let expected = movement::wheel_offset(index, &vehicle);
+        assert_eq!(
+            (offset.x, offset.y, offset.z),
+            (expected.x, expected.y, expected.z),
+            "wheel {index} is drawn somewhere the physics does not cast from"
+        );
+    }
+
+    // Every frame carries a pose per wheel. Settled on flat ground, all four
+    // are loaded and compressed.
+    let poses = sim.expect_viz(
+        &viewer,
+        "a frame with wheel poses",
+        |message| match message {
+            viz::ServerToViewer::Frame(frame) => frame
+                .entities
+                .iter()
+                .find(|e| e.id.0 == "car")
+                .map(|e| e.wheels.clone())
+                .filter(|w| !w.is_empty()),
+            _ => None,
+        },
+    );
+    assert_eq!(poses.len(), 4);
+    for (index, pose) in poses.iter().enumerate() {
+        assert!(
+            pose.load > 0.0,
+            "wheel {index} reported no load to the viewer"
+        );
+        assert!(
+            pose.travel > 0.0 && pose.travel < vehicle.suspension_rest,
+            "wheel {index} travel {} is outside the suspension",
+            pose.travel
+        );
+        assert!(
+            (0.0..std::f32::consts::TAU).contains(&pose.spin),
+            "spin {} is not wrapped",
+            pose.spin
+        );
+    }
+
+    // And the diagnostics ride the debug layer, not the scene layer.
+    let debug = sim.expect_viz(
+        &viewer,
+        "a debug frame with wheels",
+        |message| match message {
+            viz::ServerToViewer::DebugFrame(frame) => frame
+                .entities
+                .iter()
+                .find(|e| e.id.0 == "car")
+                .map(|e| e.wheels.clone())
+                .filter(|w| !w.is_empty()),
+            _ => None,
+        },
+    );
+    assert_eq!(debug.len(), 4);
+    assert!(
+        debug.iter().all(|w| w.contact),
+        "a wheel reported no ground contact while parked on flat ground"
+    );
+}
+
+#[test]
+fn an_agent_without_wheels_sends_none_to_the_viewer() {
+    // The fields are additive and optional, and a holonomic puck has no
+    // wheels: it must send no rig and no poses rather than four zeroed ones,
+    // or a viewer would draw wheels on a puck.
+    let mut sim = Sim::new(scenario(&["puck"]));
+    let _agent = sim.join("puck");
+    sim.expect("the scenario to start", |sim| {
+        (sim.state() == ScenarioState::Running).then_some(())
+    });
+    let viewer = sim.watch_viz(false);
+
+    let described = sim.expect_viz(&viewer, "the puck's descriptor", |message| match message {
+        viz::ServerToViewer::SceneInit(init) => init
+            .entities
+            .iter()
+            .find(|e| e.id.0 == "puck")
+            .map(|e| e.wheels),
+        _ => None,
+    });
+    assert!(
+        described.is_none(),
+        "a holonomic puck was given a wheel rig"
+    );
+
+    let poses = sim.expect_viz(&viewer, "a frame for the puck", |message| match message {
+        viz::ServerToViewer::Frame(frame) => frame
+            .entities
+            .iter()
+            .find(|e| e.id.0 == "puck")
+            .map(|e| e.wheels.len()),
+        _ => None,
+    });
+    assert_eq!(poses, 0, "a wheelless agent sent wheel poses");
+}

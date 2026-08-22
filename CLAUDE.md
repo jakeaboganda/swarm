@@ -154,8 +154,11 @@ Cargo workspace, ten crates:
   `protocol`.
 - **`viz`** — the *visualization* pathway (`:4001`): the semantic scene wire
   types (MessagePack, versioned) and the WebSocket broadcast server that fans
-  them out to viewers. Its debug layer also carries a human-only perception
-  overlay (per-agent detections + a sensing envelope). Independent of
+  them out to viewers. A wheeled entity carries its wheel rig on its descriptor
+  and a pose per wheel per frame — chassis-relative, and only what a viewer
+  cannot derive (a locked wheel's spin is not its road speed). Its debug layer
+  also carries human-only diagnostics: a perception overlay (per-agent
+  detections + a sensing envelope) and per-wheel slip and contact. Independent of
   `protocol` and `perception` (a separate pathway; viz-local types only).
 - **`perception`** — the *sensor* pathway (`:4002`): the JSON wire types
   (`Hello`, per-device `PerceptionFrame`) and a per-agent-routed push server

@@ -2,6 +2,7 @@ mod client;
 mod follow;
 mod overlay;
 mod scene;
+mod wheels;
 
 use bevy::prelude::*;
 use bevy::window::{PresentMode, Window, WindowPlugin};
@@ -85,6 +86,12 @@ async fn main() {
                 .chain(),
         )
         .add_systems(Update, scene::log_timing.after(scene::advance_playback))
+        // Wheels are children of their body, so they pose after the body has
+        // been posed by the playback clock.
+        .add_systems(
+            Update,
+            (wheels::pose_wheels, wheels::tint_wheels).after(scene::advance_playback),
+        )
         .add_systems(
             Update,
             (

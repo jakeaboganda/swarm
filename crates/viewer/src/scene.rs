@@ -8,6 +8,7 @@ use viz::{EntityDescriptor, EntityId, SceneEvent, ServerToViewer, Shape};
 use crate::client::VizStream;
 use crate::follow::{FollowCam, Followable};
 use crate::overlay::{DebugData, PerceivedBlip, SensorEnvelope, Trail};
+use crate::wheels::{spawn_wheels, WheelState};
 
 /// How many ticks behind the newest frame the render clock plays, so there
 /// is always a next snapshot to interpolate toward and a late frame doesn't
@@ -237,7 +238,14 @@ fn spawn_entity(
             vertical_fov_half_angle: sensors.vertical_fov_half_angle,
         });
     }
-    map.0.insert(descriptor.id.clone(), entity.id());
+    if descriptor.wheels.is_some() {
+        entity.insert(WheelState::default());
+    }
+    let id = entity.id();
+    if let Some(rig) = &descriptor.wheels {
+        spawn_wheels(commands, meshes, materials, id, rig);
+    }
+    map.0.insert(descriptor.id.clone(), id);
 }
 
 /// Drains the viz stream and applies it to the rendered world: (re)builds
@@ -254,6 +262,7 @@ pub fn apply_stream(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut histories: Query<&mut History>,
     mut debug: Query<&mut DebugData>,
+    mut wheel_states: Query<&mut WheelState>,
     mut clock: ResMut<RenderClock>,
     time: Res<Time>,
     mut diag: ResMut<Diag>,
@@ -330,6 +339,11 @@ pub fn apply_stream(
                             rotation: t.rotation,
                         });
                     }
+                    // Wheel poses are applied as they arrive rather than
+                    // interpolated through the clock -- see `wheels`.
+                    if let Ok(mut state) = wheel_states.get_mut(entity) {
+                        state.poses.clone_from(&entity_frame.wheels);
+                    }
                 }
             }
             // Prime the clock off the first frame, one buffer behind newest.
@@ -351,6 +365,9 @@ pub fn apply_stream(
                             .map(|p| Vec3::new(p.x, p.y, p.z))
                             .collect();
                         data.reflex_active = entity_debug.reflex_active;
+                        if let Ok(mut wheels) = wheel_states.get_mut(entity) {
+                            wheels.diagnostics.clone_from(&entity_debug.wheels);
+                        }
                         data.detections = entity_debug
                             .detections
                             .iter()

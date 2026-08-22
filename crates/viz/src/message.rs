@@ -94,6 +94,7 @@ mod tests {
                 fov_half_angle: 1.2,
                 vertical_fov_half_angle: 0.5,
             }),
+            wheels: None,
         }
     }
 
@@ -124,6 +125,7 @@ mod tests {
                         },
                         transform: Transform::IDENTITY,
                         sensors: None,
+                        wheels: None,
                     },
                     EntityDescriptor {
                         id: EntityId("road".into()),
@@ -145,6 +147,7 @@ mod tests {
                         },
                         transform: Transform::IDENTITY,
                         sensors: None,
+                        wheels: None,
                     },
                 ],
             }),
@@ -163,6 +166,7 @@ mod tests {
                         position: Vec3::new(1.0, 1.0, 2.0),
                         rotation: Quat::new(0.0, 0.6, 0.0, 0.8),
                     },
+                    wheels: vec![],
                 }],
             }),
             ServerToViewer::DebugFrame(DebugFrame {
@@ -176,6 +180,7 @@ mod tests {
                         position: Vec3::new(3.0, 0.0, -1.0),
                         kind: DetectionKind::Agent,
                     }],
+                    wheels: vec![],
                 }],
             }),
         ]
@@ -197,6 +202,145 @@ mod tests {
             let back: ServerToViewer = serde_json::from_str(&json).expect("from json");
             assert_eq!(message, back);
         }
+    }
+
+    #[test]
+    fn wheel_rig_and_poses_round_trip() {
+        use crate::frame::{EntityFrame, Frame, WheelPose};
+        use crate::scene::WheelRig;
+
+        let rig = WheelRig {
+            radius: 0.32,
+            width: 0.22,
+            rest: 0.20,
+            offsets: [
+                Vec3::new(0.8, -0.35, -1.3),
+                Vec3::new(-0.8, -0.35, -1.3),
+                Vec3::new(0.8, -0.35, 1.3),
+                Vec3::new(-0.8, -0.35, 1.3),
+            ],
+        };
+        let frame = ServerToViewer::Frame(Frame {
+            tick: 9,
+            entities: vec![EntityFrame {
+                id: crate::scene::EntityId("car".into()),
+                transform: Transform::IDENTITY,
+                wheels: vec![
+                    WheelPose {
+                        steer: 0.12,
+                        spin: 4.71,
+                        travel: 0.058,
+                        load: 3188.0,
+                    };
+                    4
+                ],
+            }],
+        });
+        assert_eq!(
+            decode::<ServerToViewer>(&encode(&frame)).expect("decode"),
+            frame
+        );
+
+        // The rig travels on the descriptor, once.
+        let mut descriptor = crate::scene::EntityDescriptor {
+            id: crate::scene::EntityId("car".into()),
+            name: "car".into(),
+            kind: crate::scene::EntityKind::Agent {
+                embodiment: crate::scene::Embodiment::RaycastVehicle,
+            },
+            shape: crate::scene::Shape::Cuboid {
+                half_extents: Vec3::new(0.8, 0.4, 1.4),
+            },
+            color: crate::scene::Color {
+                r: 0.8,
+                g: 0.2,
+                b: 0.2,
+            },
+            transform: Transform::IDENTITY,
+            sensors: None,
+            wheels: Some(rig),
+        };
+        let event = ServerToViewer::Event(SceneEvent::EntitySpawned(descriptor.clone()));
+        assert_eq!(
+            decode::<ServerToViewer>(&encode(&event)).expect("decode"),
+            event
+        );
+
+        descriptor.wheels = None;
+        let event = ServerToViewer::Event(SceneEvent::EntitySpawned(descriptor));
+        assert_eq!(
+            decode::<ServerToViewer>(&encode(&event)).expect("decode"),
+            event
+        );
+    }
+
+    #[test]
+    fn wheel_diagnostics_round_trip_on_the_debug_layer() {
+        use crate::frame::{DebugFrame, EntityDebug, WheelDebug};
+
+        let debug = ServerToViewer::DebugFrame(DebugFrame {
+            tick: 3,
+            entities: vec![EntityDebug {
+                id: crate::scene::EntityId("car".into()),
+                plan: vec![],
+                reflex_active: true,
+                detections: vec![],
+                wheels: vec![
+                    WheelDebug {
+                        slip_ratio: -1.0,
+                        slip_angle: 0.08,
+                        contact: true,
+                    },
+                    WheelDebug {
+                        slip_ratio: 0.0,
+                        slip_angle: 0.0,
+                        contact: false,
+                    },
+                ],
+            }],
+        });
+        assert_eq!(
+            decode::<ServerToViewer>(&encode(&debug)).expect("decode"),
+            debug
+        );
+    }
+
+    #[test]
+    fn a_frame_without_wheels_still_decodes() {
+        // The whole reason the wheel fields are additive and the protocol
+        // version did not move: an encoding that predates them, or a sender
+        // that has nothing with wheels in it, must still decode. `to_vec_named`
+        // writes field-name maps, so a missing key takes its serde default.
+        use crate::frame::{EntityFrame, Frame};
+
+        #[derive(serde::Serialize)]
+        struct OldEntityFrame {
+            id: crate::scene::EntityId,
+            transform: Transform,
+        }
+        #[derive(serde::Serialize)]
+        struct OldFrame {
+            tick: u64,
+            entities: Vec<OldEntityFrame>,
+        }
+
+        let bytes = rmp_serde::to_vec_named(&OldFrame {
+            tick: 1,
+            entities: vec![OldEntityFrame {
+                id: crate::scene::EntityId("puck".into()),
+                transform: Transform::IDENTITY,
+            }],
+        })
+        .expect("encode without the wheel field");
+        let decoded: Frame = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(
+            decoded.entities[0],
+            EntityFrame {
+                id: crate::scene::EntityId("puck".into()),
+                transform: Transform::IDENTITY,
+                wheels: vec![],
+            }
+        );
     }
 
     #[test]

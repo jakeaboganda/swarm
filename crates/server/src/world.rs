@@ -226,6 +226,28 @@ pub fn agent_spawn_transform(
         .looking_to(Vec3::X, Vec3::Y)
 }
 
+/// Tyre section width (m). Cosmetic only -- nothing in the physics has a
+/// notion of how wide a wheel is, so it lives here with the rest of what a
+/// viewer needs to draw rather than in the vehicle model.
+const CAR_WHEEL_WIDTH: f32 = 0.22;
+
+/// The wheel geometry a viewer needs to draw a car: radius, width, and where
+/// the four wheels sit in the body's own frame. Taken from the same rig the
+/// drive system casts from, so the wheels a viewer draws are the wheels the
+/// physics uses.
+fn wheel_rig() -> viz::WheelRig {
+    let vehicle = RaycastVehicle::default();
+    viz::WheelRig {
+        radius: vehicle.wheel_radius,
+        width: CAR_WHEEL_WIDTH,
+        rest: vehicle.suspension_rest,
+        offsets: std::array::from_fn(|index| {
+            let offset = movement::wheel_offset(index, &vehicle);
+            viz::Vec3::new(offset.x, offset.y, offset.z)
+        }),
+    }
+}
+
 /// Spawns the road as one static trimesh collider, tagged with a `VizEntity`
 /// carrying its surface mesh so viewers render it. The baked `RoadNetwork` is
 /// the single source; the collider and the viewer see the same triangles.
@@ -259,6 +281,7 @@ pub fn spawn_road(commands: &mut Commands, road: &map::RoadNetwork) {
             },
             color: ROAD_COLOR,
             sensors: None,
+            wheels: None,
         },
     ));
 }
@@ -285,6 +308,7 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
             },
             color: GROUND_COLOR,
             sensors: None,
+            wheels: None,
         },
     ));
 
@@ -332,6 +356,7 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
                 },
                 color: WALL_COLOR,
                 sensors: None,
+                wheels: None,
             },
         ));
     }
@@ -420,6 +445,7 @@ pub fn spawn_agent(
             shape: viz_shape,
             color,
             sensors: sensor_view,
+            wheels: is_car.then(wheel_rig),
         },
         // Physics components, nested so the whole spawn stays within Bevy's
         // per-tuple bundle element limit.
