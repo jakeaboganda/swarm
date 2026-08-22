@@ -149,9 +149,21 @@ fn forward_lane(map: Option<&map::RoadNetwork>) -> Option<&map::Lane> {
 /// Requiring headroom past the spawn station keeps cars on solid road.
 const MIN_SPAWN_LANE_LEN: f32 = CAR_START_S + 6.0;
 
-/// Forward driving lanes long enough to spawn a car on, in network order, for
+/// Whether a lane has enough surface under it to drop a car onto: long enough
+/// that the wheels clear its ends, and wide enough that they land on it at
+/// all.
+///
+/// The width test is not hypothetical. Town07 contains a 25.7 m lane of
+/// *zero* width -- long enough to pass any length bar, with no surface to
+/// stand on -- and a car placed there falls through the world. It took a
+/// 20-car fleet to land on it, because it is one lane in forty-five.
+fn spawnable(lane: &map::Lane, half_track: f32) -> bool {
+    lane.center.length() >= MIN_SPAWN_LANE_LEN && lane.width >= half_track * 2.0
+}
+
+/// Forward driving lanes a car can be spawned on, in network order, for
 /// spreading a fleet across the map. Falls back to *all* forward lanes if none
-/// clear the length bar (a tiny map), so a car still spawns somewhere.
+/// qualify (a tiny map), so a car still spawns somewhere.
 fn forward_lanes(map: Option<&map::RoadNetwork>) -> Vec<&map::Lane> {
     let all: Vec<&map::Lane> = map
         .map(|net| {
@@ -160,10 +172,11 @@ fn forward_lanes(map: Option<&map::RoadNetwork>) -> Vec<&map::Lane> {
                 .collect()
         })
         .unwrap_or_default();
+    let half_track = RaycastVehicle::default().half_track;
     let safe: Vec<&map::Lane> = all
         .iter()
         .copied()
-        .filter(|l| l.center.length() >= MIN_SPAWN_LANE_LEN)
+        .filter(|l| spawnable(l, half_track))
         .collect();
     if safe.is_empty() {
         all
@@ -542,6 +555,38 @@ pub fn spawn_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lane_with_no_surface_is_not_spawnable() {
+        // Town07 has a 25.7 m lane of zero width: long enough to clear any
+        // length bar, with nothing under the wheels. A car placed on it falls
+        // out of the world. Width is as much a spawn requirement as length.
+        let half_track = RaycastVehicle::default().half_track;
+        let lane = |width: f32, length: f32| map::Lane {
+            id: map::LaneId(0),
+            kind: map::LaneKind::Driving,
+            direction: map::Direction::Forward,
+            center: map::Polyline::new(vec![Vec3::ZERO, Vec3::new(length, 0.0, 0.0)]),
+            width,
+            successors: Vec::new(),
+            predecessors: Vec::new(),
+            neighbors: Vec::new(),
+        };
+        let long = MIN_SPAWN_LANE_LEN + 10.0;
+        assert!(spawnable(&lane(3.5, long), half_track), "an ordinary lane");
+        assert!(
+            !spawnable(&lane(0.0, long), half_track),
+            "a zero-width lane has no surface to stand on"
+        );
+        assert!(
+            !spawnable(&lane(half_track, long), half_track),
+            "a lane narrower than the car leaves its wheels off the edge"
+        );
+        assert!(
+            !spawnable(&lane(3.5, MIN_SPAWN_LANE_LEN - 1.0), half_track),
+            "the length bar still applies"
+        );
+    }
 
     #[test]
     fn fleet_smaller_than_lanes_gets_a_distinct_lane_each() {
