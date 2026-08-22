@@ -178,3 +178,45 @@ fn a_reflex_brake_locks_the_wheels() {
         "a stopped wheel under a car doing {speed} m/s reported slip {slip}"
     );
 }
+
+#[test]
+fn a_densely_sampled_plan_is_driven_at_the_speed_the_agent_asked_for() {
+    // The plan's speed is the agent's to set -- `request_route` takes it and
+    // stamps it on every waypoint precisely so the agent keeps that authority.
+    // The router samples at 2 m, which is exactly `ARRIVE_RADIUS`, so applying
+    // the arrive-slowdown at every waypoint left a routed car permanently
+    // inside the ramp: it cruised at roughly two thirds of what it asked for
+    // and never once reached it.
+    //
+    // Flat ground on purpose. The driver is proportional, so on a grade it has
+    // a real steady-state offset (about 1.5 m/s on the demo road's 4%), and
+    // that would confound what this measures. Here the only load is drag,
+    // worth ~9%.
+    const ASKED: f32 = 8.0;
+    const SPACING: f32 = 2.0;
+    let (mut sim, agent) = settled_car();
+    let start = sim.position_of("car");
+
+    // Straight down +X, the way the car already faces, sampled as densely as
+    // the server's own router would.
+    let waypoints = (1..=60)
+        .map(|i| waypoint(start.x + i as f32 * SPACING, start.z, ASKED))
+        .collect();
+    agent.send(ClientMessage::SubmitPlan { waypoints });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("car") == 1).then_some(())
+    });
+
+    let mut fastest = 0.0f32;
+    for _ in 0..900 {
+        sim.step(1);
+        if sim.plan_waypoints("car").is_empty() {
+            break;
+        }
+        fastest = fastest.max(sim.component::<Velocity>("car").linear.length());
+    }
+    assert!(
+        fastest > ASKED * 0.85,
+        "asked for {ASKED} m/s down a straight line and never got past {fastest:.2}"
+    );
+}

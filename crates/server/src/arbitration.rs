@@ -17,9 +17,10 @@ use crate::world::Radius;
 /// A waypoint is reached once the entity is within this horizontal
 /// distance of it.
 const ARRIVAL_TOLERANCE: f32 = 0.5;
-/// Inside this horizontal distance of a waypoint, commanded speed scales
-/// down linearly toward zero ("arrive" behavior) so the entity settles on
-/// the point instead of overshooting and orbiting it.
+/// Inside this horizontal distance of the *final* waypoint, commanded speed
+/// scales down linearly toward zero ("arrive" behavior) so the entity settles
+/// on the point instead of overshooting and orbiting it. Intermediate
+/// waypoints are passed through at the speed the plan asked for.
 const ARRIVE_RADIUS: f32 = 2.0;
 
 /// Horizontal (xz-plane) steering toward a waypoint. Motion is
@@ -27,22 +28,32 @@ const ARRIVE_RADIUS: f32 = 2.0;
 /// ignore the vertical axis — otherwise the capsule's resting height above
 /// the ground (center well above y=0) would keep every ground-plane
 /// waypoint permanently "unreached". Returns `None` once arrived (the
-/// caller should advance to the next waypoint), else the desired velocity
-/// with arrive-slowdown applied.
+/// caller should advance to the next waypoint), else the desired velocity --
+/// with arrive-slowdown applied only when `arrive` says this is the last
+/// waypoint in the plan.
 ///
 /// The result is always finite. A waypoint that yields no usable direction --
 /// non-finite, or far enough away that the delta overflows -- reports as
 /// arrived, so the plan advances past it instead of pushing `NaN` into
 /// `ExternalForce`. `inbound::sanitize_plan` already keeps those out of a
 /// plan; this is the last guard before the force is applied.
-fn planar_seek(current: Vec3, target: Vec3, speed: f32) -> Option<Vec3> {
+fn planar_seek(current: Vec3, target: Vec3, speed: f32, arrive: bool) -> Option<Vec3> {
     let delta = Vec3::new(target.x - current.x, 0.0, target.z - current.z);
     let distance = delta.length();
     if !distance.is_finite() || distance < ARRIVAL_TOLERANCE {
         return None;
     }
     // `max` returns the non-NaN side, so a NaN speed becomes a zero one.
-    let scaled_speed = speed.max(0.0) * (distance / ARRIVE_RADIUS).min(1.0);
+    let commanded = speed.max(0.0);
+    // Only the destination is arrived at. A vertex partway along a path is
+    // driven through, and slowing for it would mean the plan's speed is never
+    // actually reached -- the router samples at 2 m, which is exactly
+    // `ARRIVE_RADIUS`, so a routed car would spend every leg inside the ramp.
+    let scaled_speed = if arrive {
+        commanded * (distance / ARRIVE_RADIUS).min(1.0)
+    } else {
+        commanded
+    };
     let velocity = delta / distance * scaled_speed;
     velocity.is_finite().then_some(velocity)
 }
@@ -192,7 +203,10 @@ pub fn arbitrate(
                 waypoint.position.y,
                 waypoint.position.z,
             );
-            match planar_seek(transform.translation, target, waypoint.speed) {
+            // The last waypoint is a destination to settle on; the rest are
+            // vertices to drive through.
+            let arrive = plan.waypoints.len() == 1;
+            match planar_seek(transform.translation, target, waypoint.speed, arrive) {
                 Some(value) => {
                     *desired = DesiredVelocity {
                         value,
@@ -223,13 +237,18 @@ mod tests {
         // waypoint; horizontally it is within tolerance, so it has arrived.
         let current = Vec3::new(0.2, 1.0, 0.1);
         let target = Vec3::new(0.0, 0.0, 0.0);
-        assert_eq!(planar_seek(current, target, 5.0), None);
+        assert_eq!(planar_seek(current, target, 5.0, true), None);
     }
 
     #[test]
     fn full_speed_far_from_target_in_the_horizontal_plane() {
-        let desired = planar_seek(Vec3::new(0.0, 1.0, 0.0), Vec3::new(10.0, 0.0, 0.0), 5.0)
-            .expect("not arrived");
+        let desired = planar_seek(
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            5.0,
+            true,
+        )
+        .expect("not arrived");
         assert!((desired.x - 5.0).abs() < 1e-4);
         assert_eq!(desired.y, 0.0);
         assert_eq!(desired.z, 0.0);
@@ -255,7 +274,7 @@ mod tests {
                 for &speed in &nasty {
                     let current = Vec3::new(cx, 1.0, cx);
                     let target = Vec3::new(tx, 0.0, tx);
-                    if let Some(v) = planar_seek(current, target, speed) {
+                    if let Some(v) = planar_seek(current, target, speed, true) {
                         assert!(
                             v.is_finite(),
                             "planar_seek({current:?}, {target:?}, {speed}) = {v:?}"
@@ -268,10 +287,46 @@ mod tests {
     }
 
     #[test]
+    fn an_intermediate_waypoint_is_passed_at_full_speed() {
+        // Slowing to settle onto a destination is right; doing it at every
+        // vertex of a path is not -- the car is passing through those, not
+        // arriving at them. The server's own router samples at 2 m, exactly
+        // ARRIVE_RADIUS, so a routed agent would otherwise spend every leg
+        // inside the slowdown and never reach the speed it asked for.
+        let close = planar_seek(
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            5.0,
+            false,
+        )
+        .expect("not arrived");
+        assert!(
+            (close.length() - 5.0).abs() < 1e-4,
+            "passed a mid-path waypoint at {} m/s instead of 5",
+            close.length()
+        );
+
+        // The last waypoint still gets the arrive behaviour.
+        let arriving = planar_seek(
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            5.0,
+            true,
+        )
+        .expect("not arrived");
+        assert!((arriving.length() - 2.5).abs() < 1e-4);
+    }
+
+    #[test]
     fn speed_scales_down_inside_the_arrive_radius() {
         // 1 unit out with ARRIVE_RADIUS 2.0 -> half the commanded speed.
-        let desired = planar_seek(Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 5.0)
-            .expect("not arrived");
+        let desired = planar_seek(
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            5.0,
+            true,
+        )
+        .expect("not arrived");
         assert!((desired.length() - 2.5).abs() < 1e-4);
     }
 }
