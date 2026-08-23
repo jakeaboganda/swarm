@@ -13,7 +13,7 @@ type checker that is confidently wrong, which is worse than no annotation.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal, TypedDict, Union
+from typing import Literal, TypedDict
 
 
 class _GroundPoint(TypedDict):
@@ -92,7 +92,7 @@ class DistanceToMeasure(TypedDict):
 
 #: What a reflex rule reads. Mirrors `protocol::SensorKind`, an internally
 #: tagged enum, so the `kind` value discriminates the three shapes.
-SensorKind = Union[TimeToCollisionMeasure, SpeedMeasure, DistanceToMeasure]
+SensorKind = TimeToCollisionMeasure | SpeedMeasure | DistanceToMeasure
 
 #: Comparison a rule applies to its reading. Mirrors `protocol::Operator`.
 Operator = Literal["less_than", "greater_than"]
@@ -101,7 +101,7 @@ Operator = Literal["less_than", "greater_than"]
 ReflexAction = Literal["brake", "stop_and_hold"]
 
 #: A number for the whole path, or one per point.
-SpeedSpec = Union[float, Sequence[float]]
+SpeedSpec = float | Sequence[float]
 
 
 class ReflexRule(TypedDict):
