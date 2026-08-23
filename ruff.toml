@@ -1,0 +1,40 @@
+# Lint config for the Python side (clients/python: the `shotgun` toolkit, the
+# demo clients, and scripts/). Deliberately a standalone ruff.toml and not a
+# pyproject.toml: the clients resolve `shotgun` through `sys.path[0]` and there
+# is no install step, so nothing here may look like a packaging manifest.
+# Lives at the repo root beside Cargo.toml and rust-toolchain.toml, where the
+# rest of the tool config already is; ruff walks up from each file, so this one
+# covers the whole tree.
+#
+# Run by `scripts/gate.sh lint`.
+
+# The same cap rustfmt already enforces on the Rust side, so the repo has one
+# number and not two.
+line-length = 100
+
+[lint]
+# Correctness first. Nothing here is a taste rule -- every one of these is a
+# thing that is either a bug or mechanically fixable with no argument.
+#
+#   F        pyflakes: undefined names, unused imports, f-strings with no
+#            placeholder. The reason this file exists.
+#   E4/E7/E9 ruff's default pycodestyle subset: import placement, statement
+#            errors, syntax errors.
+#   E501     line length (see above). Listed explicitly, along with E4/E7/E9,
+#            rather than a bare "E" so that a future ruff promoting E1/E2/E3
+#            out of preview cannot silently start firing whitespace noise.
+#   B        bugbear: mutable default arguments, except-clause ordering, and
+#            B023 (a loop variable captured by a closure) -- which matters in
+#            a tree this full of nested async callbacks.
+#   I        import sorting. Auto-fixable, never a judgement call.
+#
+# Considered and left off: SIM (wants contextlib.suppress in place of the
+# demos' readable try/except KeyboardInterrupt), RUF022 (shotgun's __all__ is
+# grouped by source module on purpose, not sorted), PL (30 hits, nearly all
+# "magic value in comparison" inside the self-test, where the magic values are
+# the test), UP (modernization, not correctness).
+select = ["E4", "E7", "E9", "E501", "F", "B", "I"]
+
+# `ruff format` is deliberately NOT part of the gate: it would rewrite the
+# demo clients' hand-laid-out JSON payload dicts, and those layouts are what
+# makes the wire protocol readable in them.

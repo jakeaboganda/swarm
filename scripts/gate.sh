@@ -11,7 +11,7 @@
 #   scripts/gate.sh fmt        # a single step:
 #                              #   fmt | clippy | test | test-server
 #                              #   test-viewer
-#                              #   selftest | clients   (the python side)
+#                              #   lint | selftest | clients   (the python side)
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -43,6 +43,18 @@ run_in() {
 # run. Anything pure that does end up in there -- camera placement, wheel
 # tinting -- was silently never executed until this line existed.
 [ "$step" = all ] || [ "$step" = test-viewer ] && run cargo test -p viewer -j 2
+# clippy for the Python side. Rules and rationale live in ruff.toml. ruff is a
+# hard requirement, like cargo and python3: a gate step that skips itself when
+# the tool is missing validates nothing on exactly the machine that needed it.
+if [ "$step" = all ] || [ "$step" = lint ]; then
+    if command -v ruff > /dev/null 2>&1; then
+        run ruff check clients/python scripts
+    else
+        echo "=== ruff check ==="
+        echo "ruff not found. Install it:  pip install ruff  (or: uv tool install ruff)"
+        status=1
+    fi
+fi
 [ "$step" = all ] || [ "$step" = selftest ] && run_in clients/python python3 -m shotgun.selftest
 [ "$step" = all ] || [ "$step" = clients ] && run python3 scripts/check_clients.py
 

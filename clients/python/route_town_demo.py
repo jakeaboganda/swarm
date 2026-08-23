@@ -64,7 +64,10 @@ async def main():
         return
     lanes = driving_lanes(map_data)
     spawn = joined["position"]
-    print(f"Town07 loaded: {len(lanes)} driving lanes. car at x={spawn['x']:.0f},z={spawn['z']:.0f}")
+    print(
+        f"Town07 loaded: {len(lanes)} driving lanes. "
+        f"car at x={spawn['x']:.0f},z={spawn['z']:.0f}"
+    )
 
     start = nearest_lane(lanes, spawn)
     dest_lane, reach = farthest_reachable(lanes, start["id"], spawn)

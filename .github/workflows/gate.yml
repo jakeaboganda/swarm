@@ -32,5 +32,9 @@ jobs:
       # still resolve. A client without `websockets` exits at its own skip
       # guard *before* that import, so without this the check silently
       # validates nothing here -- which is the one place it matters most.
-      - run: pip install websockets
+      # `ruff` is the gate's Python linter and a hard requirement -- the lint
+      # step fails rather than skipping if it is absent, so it has to be here.
+      # Pinned: an unpinned linter turns a ruff release into a red CI run on a
+      # commit that changed nothing. Bump deliberately.
+      - run: pip install websockets ruff==0.12.5
       - run: scripts/gate.sh
