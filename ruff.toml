@@ -28,11 +28,15 @@ line-length = 100
 #            a tree this full of nested async callbacks.
 #   I        import sorting. Auto-fixable, never a judgement call.
 #
+# Docstring shape (D200/D205/D209/D400) is added on top of this by
+# clients/python/shotgun/ruff.toml, for the library only -- the demos are not
+# held to it. Rationale lives in that file, next to the rules.
+#
 # Considered and left off: SIM (wants contextlib.suppress in place of the
 # demos' readable try/except KeyboardInterrupt), RUF022 (shotgun's __all__ is
 # grouped by source module on purpose, not sorted), PL (30 hits, nearly all
 # "magic value in comparison" inside the self-test, where the magic values are
-# the test), UP (modernization, not correctness).
+# the test), and UP (modernization, not correctness).
 select = ["E4", "E7", "E9", "E501", "F", "B", "I"]
 
 # `ruff format` is deliberately NOT part of the gate: it would rewrite the

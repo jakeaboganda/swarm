@@ -9,20 +9,28 @@ misspelt one is a rule the server silently never fires).
 Exits 0 if every check passes, 1 otherwise.
 """
 
+from __future__ import annotations
+
+import inspect
 import math
 import sys
+import typing
+from types import ModuleType
 
 from . import geometry as g
 from . import lanes as ln
 from . import reflexes as rx
 from . import speed as sp
+from . import wire
+from .wire import LaneData, MapData, Vec3
 
 
-def p(x, z, y=0.0):
+def p(x: float, z: float, y: float = 0.0) -> Vec3:
+    """A point, taking X and Z first because the tests are plan-view."""
     return {"x": float(x), "y": float(y), "z": float(z)}
 
 
-def circle(radius, n=128, y=0.0):
+def circle(radius: float, n: int = 128, y: float = 0.0) -> list[Vec3]:
     """A closed-ish arc of `n` points sampled around a circle of `radius`."""
     return [
         p(radius * math.cos(2 * math.pi * i / n), radius * math.sin(2 * math.pi * i / n), y)
@@ -30,12 +38,13 @@ def circle(radius, n=128, y=0.0):
     ]
 
 
-def line(length, n, y=0.0):
+def line(length: float, n: int, y: float = 0.0) -> list[Vec3]:
     """`n` evenly spaced points along +X."""
     return [p(length * i / (n - 1), 0.0, y) for i in range(n)]
 
 
-def close(a, b, tol=1e-9):
+def close(a: float, b: float, tol: float = 1e-9) -> bool:
+    """Whether two floats agree to within `tol`."""
     return abs(a - b) <= tol
 
 
@@ -85,7 +94,8 @@ def test_project_point_finds_the_perpendicular():
 def test_project_point_interpolates_height():
     pts = [p(0, 0, y=0.0), p(10, 0, y=4.0)]
     point, _, _, _ = g.project_point(pts, p(2.5, 0))
-    assert close(point["y"], 1.0), point
+    assert "y" in point, "an interpolated point must carry a height"
+    assert close(point.get("y", 0.0), 1.0), point
 
 
 def test_project_point_clamps_past_the_ends():
@@ -278,8 +288,9 @@ def test_profile_endpoints_keep_cruise():
 # --- lanes ----------------------------------------------------------------
 
 
-def fake_map():
-    fwd = {
+def fake_map() -> MapData:
+    """A two-way road, an onward lane, an orphan, and a sidewalk."""
+    fwd: LaneData = {
         "id": 7,
         "kind": "driving",
         "direction": "forward",
@@ -289,24 +300,33 @@ def fake_map():
         "predecessors": [],
         "neighbors": [9],
     }
-    back = dict(fwd, id=9, direction="backward", successors=[], neighbors=[7],
-                centerline=[p(20, 4), p(10, 4), p(0, 4)])
-    onward = dict(fwd, id=8, successors=[], neighbors=[],
-                  centerline=[p(20, 0), p(30, 0)])
-    orphan = dict(fwd, id=99, successors=[], neighbors=[],
-                  centerline=[p(500, 500), p(510, 500)])
+    back: LaneData = {**fwd, "id": 9, "direction": "backward", "successors": [],
+                      "neighbors": [7],
+                      "centerline": [p(20, 4), p(10, 4), p(0, 4)]}
+    onward: LaneData = {**fwd, "id": 8, "successors": [], "neighbors": [],
+                        "centerline": [p(20, 0), p(30, 0)]}
+    orphan: LaneData = {**fwd, "id": 99, "successors": [], "neighbors": [],
+                        "centerline": [p(500, 500), p(510, 500)]}
     # A real map carries lanes you must not drive on. Nothing else in the
     # fixture is non-driving, so without this the `kind` filter is never
     # exercised: delete it and every other lane test would still pass.
-    walk = dict(fwd, id=100, kind="sidewalk", successors=[], neighbors=[],
-                centerline=[p(0, 100), p(20, 100)])
+    walk: LaneData = {**fwd, "id": 100, "kind": "sidewalk", "successors": [],
+                      "neighbors": [], "centerline": [p(0, 100), p(20, 100)]}
     return {"lanes": [fwd, back, onward, orphan, walk]}
+
+
+def forward_lane() -> LaneData:
+    """The fixture's forward driving lane, with the None case ruled out."""
+    lane = ln.pick_driving_lane(fake_map())
+    assert lane is not None, "the fixture must have a forward driving lane"
+    return lane
 
 
 def test_pick_driving_lane():
     m = fake_map()
-    assert ln.pick_driving_lane(m)["id"] == 7
-    assert ln.pick_driving_lane(m, "backward")["id"] == 9
+    fwd, back = ln.pick_driving_lane(m), ln.pick_driving_lane(m, "backward")
+    assert fwd is not None and fwd["id"] == 7
+    assert back is not None and back["id"] == 9
     assert ln.pick_driving_lane({"lanes": []}) is None
     assert ln.pick_driving_lane(None) is None, "the arena world delivers no map"
     ids = [lane["id"] for lane in ln.driving_lanes(m)]
@@ -346,7 +366,7 @@ def test_reachable_lanes_is_in_breadth_first_order():
     # Sparse ids are the real case -- both town demos pass driving_lanes(map),
     # a filtered subset. A set would come back in hash order here.
     ids = [1000003 * i + 7 for i in range(12)]
-    chain = [
+    chain: list[LaneData] = [
         {"id": lane_id, "kind": "driving", "direction": "forward", "width": 3.5,
          "centerline": [p(0, 0)], "predecessors": [], "neighbors": [],
          "successors": [ids[k + 1]] if k + 1 < len(ids) else []}
@@ -356,7 +376,7 @@ def test_reachable_lanes_is_in_breadth_first_order():
 
 
 def test_lane_points_starts_at_the_car():
-    lane = ln.pick_driving_lane(fake_map())
+    lane = forward_lane()
     assert len(ln.lane_points(lane)) == 3
     ahead = ln.lane_points(lane, p(9, 1))
     assert len(ahead) == 2 and ahead[0]["x"] == 10.0, ahead
@@ -364,19 +384,21 @@ def test_lane_points_starts_at_the_car():
 
 
 def test_lane_plan_shape():
-    lane = ln.pick_driving_lane(fake_map())
+    lane = forward_lane()
     plan = ln.lane_plan(lane, p(-5, 0), 6.0)
     assert len(plan) == 3
     for wp in plan:
         assert set(wp) == {"position", "speed"}, wp
         assert set(wp["position"]) == {"x", "y", "z"}, wp
         assert isinstance(wp["speed"], float)
-    assert close(plan[1]["position"]["y"], 1.0), "height must survive the plan"
+    # The key set is asserted above, so .get's default is never taken; it is
+    # there because wire.Vec3 declares "y" optional.
+    assert close(plan[1]["position"].get("y", 0.0), 1.0), "height must survive"
     assert all(wp["speed"] == 6.0 for wp in plan)
 
 
 def test_lane_plan_with_a_speed_profile():
-    lane = ln.pick_driving_lane(fake_map())
+    lane = forward_lane()
     pts = ln.lane_points(lane, p(0, 0))
     plan = ln.lane_plan(lane, p(0, 0), sp.speed_profile(pts, 9.0))
     assert [wp["speed"] for wp in plan] == sp.speed_profile(pts, 9.0)
@@ -438,9 +460,11 @@ def test_distance_to_measure_shape():
 
 def test_rule_rejects_bad_enums():
     for bad in (
-        lambda: rx.rule("ground_truth", rx.ttc(), "lessThan", 1.0, "brake"),
-        lambda: rx.rule("ground_truth", rx.ttc(), "less_than", 1.0, "hold"),
-        lambda: rx.rule("ground_truth", "time_to_collision", "less_than", 1.0, "brake"),
+        # Deliberately ill-typed: the point is that they raise at runtime,
+        # for the caller who built a rule out of untyped JSON config.
+        lambda: rx.rule("ground_truth", rx.ttc(), "lessThan", 1.0, "brake"),  # type: ignore[arg-type]
+        lambda: rx.rule("ground_truth", rx.ttc(), "less_than", 1.0, "hold"),  # type: ignore[arg-type]
+        lambda: rx.rule("ground_truth", "time_to_collision", "less_than", 1.0, "brake"),  # type: ignore[arg-type]
         lambda: rx.rule("", rx.ttc(), "less_than", 1.0, "brake"),
     ):
         try:
@@ -456,7 +480,72 @@ def test_rule_numbers_are_json_types():
     assert isinstance(r["priority"], int) and not isinstance(r["priority"], bool)
 
 
-def main():
+# --- annotations ----------------------------------------------------------
+
+
+def _own_functions(mod: ModuleType):
+    """The functions `mod` actually defines, not the ones it imported."""
+    return [
+        (name, fn)
+        for name, fn in vars(mod).items()
+        if inspect.isfunction(fn) and fn.__module__ == mod.__name__
+    ]
+
+
+def test_every_function_is_annotated():
+    # `from __future__ import annotations` makes every annotation a string, so
+    # a typo in one is invisible until something resolves it. Nothing in the
+    # gate type-checks; this at least proves the names exist and that no
+    # parameter was missed.
+    checked = 0
+    for mod in (g, ln, rx, sp):
+        for name, fn in _own_functions(mod):
+            where = f"{mod.__name__}.{name}"
+            hints = typing.get_type_hints(fn)
+            assert "return" in hints, f"{where} has no return annotation"
+            for param in inspect.signature(fn).parameters:
+                assert param in hints, f"{where}: parameter {param!r} unannotated"
+            checked += 1
+    assert checked >= 18, f"only found {checked} functions -- did a module move?"
+
+
+def test_wire_types_match_the_protocol_field_names():
+    # These mirror crates/protocol/src/{map,messages}.rs. A field renamed there
+    # and not here is a type checker that is confidently wrong, so the names
+    # are pinned: changing one has to be deliberate.
+    expected = {
+        "Vec3": {"x", "y", "z"},
+        "Waypoint": {"position", "speed"},
+        "LaneData": {"id", "kind", "direction", "width", "centerline",
+                     "successors", "predecessors", "neighbors"},
+        "MapData": {"lanes"},
+        "ReflexRule": {"sensor", "measure", "operator", "threshold", "action",
+                       "priority"},
+        "TimeToCollisionMeasure": {"kind"},
+        "SpeedMeasure": {"kind"},
+        "DistanceToMeasure": {"kind", "target"},
+    }
+    for name, keys in expected.items():
+        cls = getattr(wire, name)
+        got = set(cls.__annotations__) | set(getattr(cls, "__required_keys__", ()))
+        assert got == keys, f"{name}: {got} != {keys}"
+        typing.get_type_hints(cls)  # every field type must resolve
+
+    # Only `y` is optional, and only because geometry reads it with .get().
+    assert wire.Vec3.__required_keys__ == frozenset({"x", "z"}), \
+        wire.Vec3.__required_keys__
+    assert wire.Vec3.__optional_keys__ == frozenset({"y"})
+
+
+def test_reflex_constructors_return_the_measure_they_name():
+    # The three measure shapes are a tagged union; the tag has to match.
+    assert rx.ttc()["kind"] == "time_to_collision"
+    assert rx.speed()["kind"] == "speed"
+    assert rx.distance_to(p(0, 0))["kind"] == "distance_to"
+
+
+def main() -> int:
+    """Run every `test_*` in this module. Returns a process exit code."""
     tests = sorted(
         (name, fn)
         for name, fn in globals().items()

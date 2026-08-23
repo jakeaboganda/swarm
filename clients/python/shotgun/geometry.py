@@ -8,24 +8,34 @@ A point is any mapping with "x"/"y"/"z" keys: the wire's Vec3 shape. "y" is
 optional and defaults to 0.0, so plain XZ dicts work too.
 """
 
+from __future__ import annotations
+
 import math
+from collections.abc import Sequence
+
+from .wire import Vec3
 
 
-def dist2(a, b):
-    """Squared horizontal distance between two points. Squared because most
-    callers only compare distances, and a square root there is wasted."""
+def dist2(a: Vec3, b: Vec3) -> float:
+    """Squared horizontal distance between two points.
+
+    Squared because most callers only compare distances, and a square root
+    there is wasted.
+    """
     return (a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2
 
 
-def dist(a, b):
+def dist(a: Vec3, b: Vec3) -> float:
     """Horizontal distance between two points, in metres."""
     return math.sqrt(dist2(a, b))
 
 
-def arc_lengths(points):
-    """Cumulative distance along a polyline, one entry per point (first is
-    0.0). Lets a caller address a position by metres travelled instead of by
-    point index. Returns [] for no points."""
+def arc_lengths(points: Sequence[Vec3]) -> list[float]:
+    """Cumulative distance along a polyline, one entry per point.
+
+    The first entry is 0.0. Lets a caller address a position by metres
+    travelled instead of by point index. Returns [] for no points.
+    """
     if not points:
         return []
     out = [0.0]
@@ -34,16 +44,20 @@ def arc_lengths(points):
     return out
 
 
-def nearest_index(points, p):
-    """Index of the polyline point closest to `p`. Raises ValueError if the
-    polyline is empty."""
+def nearest_index(points: Sequence[Vec3], p: Vec3) -> int:
+    """Index of the polyline point closest to `p`.
+
+    Raises ValueError if the polyline is empty.
+    """
     if not points:
         raise ValueError("nearest_index: empty polyline")
     return min(range(len(points)), key=lambda i: dist2(points[i], p))
 
 
-def project_point(points, p):
-    """Project `p` onto a polyline. Returns `(point, index, t, offset)`:
+def project_point(points: Sequence[Vec3], p: Vec3) -> tuple[Vec3, int, float, float]:
+    """Project `p` onto a polyline.
+
+    Returns `(point, index, t, offset)`:
 
     * `point`  -- the closest point *on* the polyline (interpolated, with Y
                   interpolated too, so it sits on the graded surface)
@@ -63,7 +77,10 @@ def project_point(points, p):
         only = points[0]
         return _copy(only), 0, 0.0, dist(only, p)
 
-    best = None
+    # Seeded rather than started at None: with two or more points the loop runs
+    # at least once and any real d2 beats inf, so the seed is always replaced.
+    best_d2 = math.inf
+    best: tuple[Vec3, int, float] = (_copy(points[0]), 0, 0.0)
     for i, (a, b) in enumerate(zip(points, points[1:])):
         ax, az = a["x"], a["z"]
         dx, dz = b["x"] - ax, b["z"] - az
@@ -75,13 +92,14 @@ def project_point(points, p):
             t = min(1.0, max(0.0, t))
         on = _lerp(a, b, t)
         d2 = dist2(on, p)
-        if best is None or d2 < best[0]:
-            best = (d2, on, i, t)
-    d2, on, i, t = best
-    return on, i, t, math.sqrt(d2)
+        if d2 < best_d2:
+            best_d2 = d2
+            best = (on, i, t)
+    on, index, t = best
+    return on, index, t, math.sqrt(best_d2)
 
 
-def _lerp(a, b, t):
+def _lerp(a: Vec3, b: Vec3, t: float) -> Vec3:
     return {
         "x": a["x"] + (b["x"] - a["x"]) * t,
         "y": a.get("y", 0.0) + (b.get("y", 0.0) - a.get("y", 0.0)) * t,
@@ -89,5 +107,5 @@ def _lerp(a, b, t):
     }
 
 
-def _copy(p):
+def _copy(p: Vec3) -> Vec3:
     return {"x": p["x"], "y": p.get("y", 0.0), "z": p["z"]}

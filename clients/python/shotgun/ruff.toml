@@ -1,0 +1,33 @@
+# Extra lint rules for the `shotgun` library, on top of the repo-root
+# ruff.toml. Ruff resolves config by walking up from each file, so this applies
+# to the package and nothing else. It is linter config, not packaging: it does
+# not make this directory installable and does not touch `sys.path[0]`
+# resolution, which is what keeps the demos import-and-run.
+#
+# Scoped here rather than expressed as a root per-file-ignores because ruff's
+# `*` crosses `/`, so "clients/python/*.py" silently matches
+# clients/python/shotgun/geometry.py as well -- verified, not assumed.
+extend = "../../../ruff.toml"
+
+[lint]
+# PEP 257 docstring SHAPE: a one-line summary, a blank line, then the body.
+# The library's docstrings are its API reference, so the first line has to
+# stand alone -- that is what an editor tooltip and `pydoc` show.
+#
+#   D200  a one-line docstring stays on one line
+#   D205  blank line between the summary and the description
+#   D209  multi-line docstring closes its quotes on their own line
+#   D400  the summary line ends with a period
+#
+# All four already pass, so they pin the form rather than demand a rewrite.
+#
+# Left off: D401 (imperative mood) -- 10 hits here, all on summaries like
+# "Discrete curvature at each point, in 1/m." A noun phrase is the right shape
+# for a pure function that returns a value; "Compute..." adds a verb that says
+# nothing. And D1xx (missing docstring), which would demand one on all 39
+# test_* functions in selftest.py.
+#
+# The demo clients are deliberately NOT held to this: their docstrings are
+# runbooks -- what the demo shows, how to run it, which scenario -- whose
+# opening paragraph is meant to be a paragraph.
+extend-select = ["D200", "D205", "D209", "D400"]

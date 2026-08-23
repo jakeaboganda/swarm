@@ -1,17 +1,21 @@
 """Speed profiling: how fast to take a path, corner by corner.
 
 A plan is a list of positions with a speed on each. Stamping one cruise speed
-on every waypoint asks the car to take a hairpin as fast as the straight, and
-the tyres decide the rest. These functions set a speed per point instead --
-slow enough for the corner, and slowing *before* it rather than at it.
+on every waypoint asks the car to take a hairpin as fast as the straight.
+These functions set a speed per point instead -- slow enough for the corner,
+and slowing *before* it rather than at it.
 
 Works on any list of points, so it profiles a lane centerline and a
 server-returned route alike.
 """
 
+from __future__ import annotations
+
 import math
+from collections.abc import Sequence
 
 from .geometry import dist
+from .wire import Vec3, Waypoint
 
 # Lateral acceleration budget, m/s^2. ~0.5 g: half of what a mu=1.0 tyre on
 # dry tarmac can hold, leaving the other half for braking, camber and bumps.
@@ -26,9 +30,11 @@ A_BRAKE = 3.0
 KAPPA_EPS = 1e-6
 
 
-def curvature(points):
-    """Discrete curvature at each point, in 1/m -- one entry per point, so it
-    lines up with `points` and with `speed_profile`.
+def curvature(points: Sequence[Vec3]) -> list[float]:
+    """Discrete curvature at each point, in 1/m.
+
+    One entry per point, so it lines up with `points` and with
+    `speed_profile`.
 
     At an interior point it is the turn angle between the incoming and
     outgoing segments divided by their mean length: for a polyline sampled
@@ -53,11 +59,16 @@ def curvature(points):
     return out
 
 
-def speed_profile(points, cruise, a_lat=A_LAT, a_brake=A_BRAKE):
-    """A speed for every point in `points`, capped by cruise, by cornering
-    grip, and by how early braking has to start.
+def speed_profile(
+    points: Sequence[Vec3],
+    cruise: float,
+    a_lat: float = A_LAT,
+    a_brake: float = A_BRAKE,
+) -> list[float]:
+    """A speed for every point in `points`.
 
-    Three passes:
+    Capped by cruise, by cornering grip, and by how early braking has to
+    start. Three passes:
 
     1. every point starts at `cruise`;
     2. each point is capped at `sqrt(a_lat / kappa)` -- the fastest a corner
@@ -70,6 +81,9 @@ def speed_profile(points, cruise, a_lat=A_LAT, a_brake=A_BRAKE):
     measurements: an agent cannot see its vehicle's mass, tyres or grip, and
     the server never tells it. On ice or in a truck they are optimistic. Pass
     your own if you know better.
+
+    Nothing here is validated: a negative `cruise` comes back unchanged, and
+    `a_lat` of 0.0 caps every corner at 0.0.
     """
     n = len(points)
     if n == 0:
@@ -89,13 +103,23 @@ def speed_profile(points, cruise, a_lat=A_LAT, a_brake=A_BRAKE):
     return speeds
 
 
-def retime(plan, cruise, a_lat=A_LAT, a_brake=A_BRAKE):
-    """Re-speed an existing plan: same positions, speeds from
-    `speed_profile`. The server's router stamps one flat speed on every
-    waypoint of a route -- this is how an agent takes that route and drives it
-    at a sane speed for each corner."""
+def retime(
+    plan: Sequence[Waypoint],
+    cruise: float,
+    a_lat: float = A_LAT,
+    a_brake: float = A_BRAKE,
+) -> list[Waypoint]:
+    """Re-speed an existing plan: same positions, speeds from `speed_profile`.
+
+    The server's router stamps one flat speed on every waypoint of a route --
+    this is how an agent takes that route and drives it at a sane speed for
+    each corner.
+    """
     points = [wp["position"] for wp in plan]
     speeds = speed_profile(points, cruise, a_lat=a_lat, a_brake=a_brake)
+    # .copy(), not dict(): identical shallow copy, and a type checker can see
+    # that it is still a Vec3.
     return [
-        {"position": dict(wp["position"]), "speed": s} for wp, s in zip(plan, speeds)
+        {"position": wp["position"].copy(), "speed": s}
+        for wp, s in zip(plan, speeds)
     ]
