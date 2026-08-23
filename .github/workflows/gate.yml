@@ -17,6 +17,17 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Bevy's default features pull in `alsa-sys` (audio), `libudev-sys`
+      # (gamepads) and the wayland/xkbcommon stack (windowing). Their build
+      # scripts probe pkg-config, which finds nothing on a bare runner, so the
+      # whole workspace fails to compile before a single test runs. A
+      # developer's machine usually has these already, which is why this only
+      # ever breaks in CI. Same list Bevy's own CI installs.
+      - name: Install Bevy's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # The gate imports every Python client to check its `shotgun` helpers
       # still resolve. A client without `websockets` exits at its own skip
       # guard *before* that import, so without this the check silently
