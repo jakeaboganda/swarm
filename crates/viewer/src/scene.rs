@@ -8,6 +8,7 @@ use viz::{EntityDescriptor, EntityId, EntityNode, Geometry, NodePath, SceneEvent
 use crate::client::VizStream;
 use crate::follow::{FollowCam, Followable};
 use crate::overlay::{DebugData, PerceivedBlip, SensorEnvelope, Trail};
+use crate::view::{view_placement, CameraView};
 
 /// How many ticks behind the newest frame the render clock plays, so there
 /// is always a next snapshot to interpolate toward and a late frame doesn't
@@ -551,26 +552,40 @@ pub fn advance_playback(
     }
 }
 
-/// Frames the top-down camera to the arena once its bounds arrive (and if
-/// they change between scenarios). Skipped while following a vehicle, which
-/// owns the camera itself.
+/// Frames the camera on the whole arena — when its bounds arrive, when they
+/// change between scenarios, when the view angle changes, and when follow mode
+/// is switched off and hands the camera back.
 pub fn frame_camera(
     state: Res<ViewerState>,
+    view: Res<CameraView>,
     follow: Res<FollowCam>,
     mut camera: Query<&mut Transform, With<Camera3d>>,
 ) {
-    if follow.target.is_some() || !state.is_changed() {
+    // In follow mode the follow camera owns the transform.
+    if follow.target.is_some() || !(state.is_changed() || view.is_changed() || follow.is_changed())
+    {
         return;
     }
-    let Some(arena) = state.arena else { return };
-    let Ok(mut transform) = camera.single_mut() else {
+    let Some(arena) = state.arena else {
         return;
     };
     let span = arena.width.max(arena.depth);
-    *transform =
-        Transform::from_xyz(0.0, span * 0.9, span * 0.75).looking_at(Vec3::ZERO, Vec3::Y);
+    // Straight down sees only what fits in the frustum at that height, so it
+    // has to sit further out than the three-quarter views do.
+    let distance = if view.is_top() {
+        span * 1.25
+    } else {
+        span * 0.9
+    };
+    // The arena has no heading, so the view is taken in the world frame.
+    let (offset, up) = view_placement(*view, distance, span * 0.9);
+    if let Ok(mut transform) = camera.single_mut() {
+        *transform = Transform::from_translation(offset).looking_at(Vec3::ZERO, up);
+    }
 }
 
+/// Spawns the camera and light. The camera frames a 50-unit arena from
+/// above; scene geometry arrives over the stream.
 pub fn setup_camera(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {

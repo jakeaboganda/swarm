@@ -2,6 +2,7 @@ mod client;
 mod follow;
 mod overlay;
 mod scene;
+mod view;
 mod wheels;
 
 use bevy::prelude::*;
@@ -63,6 +64,7 @@ async fn main() {
         .insert_resource(Diag::new(std::env::var("VIZ_DIAG").is_ok()))
         .insert_resource(overlay::OverlayToggles::default())
         .insert_resource(follow::FollowCam::default())
+        .insert_resource(view::CameraView::default())
         .add_systems(
             Startup,
             (
@@ -92,6 +94,7 @@ async fn main() {
             (
                 overlay::toggle_overlays,
                 follow::follow_input,
+                view::view_input,
                 follow::update_follow_label,
             ),
         )

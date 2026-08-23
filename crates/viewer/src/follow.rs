@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use viz::EntityId;
 
+use crate::view::{view_placement, CameraView};
+
 // Follow-camera tuning. Constants for now; config-driven tweaking comes after
 // the automotive sandbox plan.
 //
@@ -84,9 +86,12 @@ pub fn follow_input(
 }
 
 /// In follow mode, ease the camera to a fixed offset from the tracked entity,
-/// looking at it. Reverts to overview if that entity is gone.
+/// looking at it. Which offset is the current `CameraView`'s, taken in the
+/// entity's own frame so "front" and "side" mean the car's front and side.
+/// Reverts to overview if that entity is gone.
 pub fn follow_camera(
     time: Res<Time>,
+    view: Res<CameraView>,
     mut follow: ResMut<FollowCam>,
     targets: Query<(&Followable, &Transform), Without<Camera3d>>,
     mut camera: Query<&mut Transform, With<Camera3d>>,
@@ -110,28 +115,39 @@ pub fn follow_camera(
     if heading == Vec3::ZERO {
         heading = Vec3::X;
     }
-    let desired = focus - heading * FOLLOW_DISTANCE + Vec3::Y * FOLLOW_HEIGHT;
+    // The entity's ground frame: its heading, with pitch and roll dropped.
+    let basis = Transform::IDENTITY.looking_to(heading, Vec3::Y).rotation;
+    let (offset, up) = view_placement(*view, FOLLOW_DISTANCE, FOLLOW_HEIGHT);
+    let desired = focus + basis * offset;
     let alpha = (FOLLOW_SMOOTH * time.delta_secs()).min(1.0);
     camera.translation = camera.translation.lerp(desired, alpha);
-    camera.look_at(focus, Vec3::Y);
+    camera.look_at(focus, basis * up);
 }
 
-/// Shows "Following: <name>" while following, blank otherwise.
+/// Shows "Following: <name>" while following, and names the camera view
+/// whenever it is not the default — a top-down overview is otherwise
+/// indistinguishable from a broken camera.
 pub fn update_follow_label(
     follow: Res<FollowCam>,
+    view: Res<CameraView>,
     followables: Query<&Followable>,
     mut label: Query<&mut Text, With<FollowLabel>>,
 ) {
     let Ok(mut text) = label.single_mut() else {
         return;
     };
+    let angle = if *view == CameraView::default() {
+        String::new()
+    } else {
+        format!("   [{} view]", view.label())
+    };
     let content = match &follow.target {
         Some(id) => followables
             .iter()
             .find(|f| &f.id == id)
-            .map(|f| format!("Following: {}   (Tab: next, F: overview)", f.name))
+            .map(|f| format!("Following: {}{angle}   (Tab: next, F: overview)", f.name))
             .unwrap_or_default(),
-        None => String::new(),
+        None => angle.trim_start().to_string(),
     };
     if text.0 != content {
         text.0 = content;

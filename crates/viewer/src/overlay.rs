@@ -29,6 +29,9 @@ pub struct DebugData {
     /// What this agent currently perceives (delayed, noised) — drawn as
     /// ghosts by `draw_detections`.
     pub detections: Vec<PerceivedBlip>,
+    /// Per-wheel diagnostics, in `viz::WHEEL_NODES` order — what `tint_wheels`
+    /// colours the wheel nodes by.
+    pub wheels: Vec<viz::WheelDebug>,
 }
 
 /// One entity as an agent perceives it, mirrored from the viz debug frame.

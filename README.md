@@ -137,7 +137,11 @@ scripts/run.sh scenario_road_fleet.json clients/python/fleet_town_demo.py
 
 In the viewer: **F** follows/unfollows the nearest vehicle (chase-cam), **Tab**
 cycles vehicles, **P** toggles the perception overlay (what each agent detects),
-**O** toggles the sensing envelope (its range/field-of-view).
+**O** toggles the sensing envelope (its range/field-of-view). **1**, **2** and
+**3** switch to the front, side and top views — of the followed vehicle if there
+is one, of the whole arena if not; pressing the active one again returns to the
+default chase/overview. The side view is how you watch a wheel lock or the
+suspension compress.
 
 Cars are drawn on their real wheels: each one steers, spins, and rides its own
 suspension travel. They are tinted by what the tire is doing — **red** for a
