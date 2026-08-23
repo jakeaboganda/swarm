@@ -18,6 +18,7 @@ pub mod time_budget;
 pub mod tracker;
 pub mod transport_bridge;
 pub mod viz_broadcast;
+pub mod viz_nodes;
 pub mod world;
 
 pub use app::{build_app, load_map, SimConfig};

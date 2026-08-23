@@ -3,12 +3,11 @@ use std::collections::{HashMap, VecDeque};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
-use viz::{EntityDescriptor, EntityId, SceneEvent, ServerToViewer, Shape};
+use viz::{EntityDescriptor, EntityId, EntityNode, Geometry, NodePath, SceneEvent, ServerToViewer};
 
 use crate::client::VizStream;
 use crate::follow::{FollowCam, Followable};
 use crate::overlay::{DebugData, PerceivedBlip, SensorEnvelope, Trail};
-use crate::wheels::{spawn_wheels, WheelState};
 
 /// How many ticks behind the newest frame the render clock plays, so there
 /// is always a next snapshot to interpolate toward and a late frame doesn't
@@ -31,14 +30,26 @@ const DT_SMOOTHING: f64 = 0.1;
 const CATCHUP_GAIN: f64 = 0.02;
 const MAX_RATE_ADJUST: f64 = 0.1;
 
-/// Maps a viz `EntityId` to the Bevy entity rendering it.
+/// Maps a viz `EntityId` to the Bevy entity rendering its root node.
 #[derive(Resource, Default)]
 pub struct EntityMap(HashMap<EntityId, Entity>);
 
 impl EntityMap {
-    /// The Bevy entity rendering `id`, if any.
+    /// The Bevy entity rendering `id`'s root node, if any.
     pub fn get(&self, id: &EntityId) -> Option<Entity> {
         self.0.get(id).copied()
+    }
+}
+
+/// Every node of one entity, by path. Lives on the entity's root, and is how a
+/// sparse frame update finds the node it addresses.
+#[derive(Component, Default)]
+pub struct NodeIndex(HashMap<NodePath, Entity>);
+
+impl NodeIndex {
+    /// The Bevy entity rendering the node at `path`, if any.
+    pub fn get(&self, path: &NodePath) -> Option<Entity> {
+        self.0.get(path).copied()
     }
 }
 
@@ -156,18 +167,26 @@ fn to_transform(transform: &viz::Transform) -> Transform {
     }
 }
 
-fn mesh_for(shape: &Shape, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
-    match shape {
-        Shape::Capsule {
+fn mesh_for(geometry: &Geometry, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
+    match geometry {
+        Geometry::Capsule {
             radius,
             half_length,
         } => meshes.add(Capsule3d::new(*radius, half_length * 2.0)),
-        Shape::Cuboid { half_extents } => meshes.add(Cuboid::new(
+        Geometry::Cuboid { half_extents } => meshes.add(Cuboid::new(
             half_extents.x * 2.0,
             half_extents.y * 2.0,
             half_extents.z * 2.0,
         )),
-        Shape::Mesh {
+        Geometry::Cylinder { radius, height } => meshes.add(Cylinder::new(*radius, *height)),
+        Geometry::Sphere { radius } => meshes.add(Sphere::new(*radius)),
+        // Nothing resolves an asset reference yet. Draw its bounding box
+        // rather than nothing at all, so the node is visible and locatable.
+        Geometry::Asset { uri, scale } => {
+            warn!("no asset loader for {uri}: drawing a bounding box");
+            meshes.add(Cuboid::new(scale.x, scale.y, scale.z))
+        }
+        Geometry::Mesh {
             positions,
             normals,
             indices,
@@ -207,6 +226,44 @@ fn material_for(
     })
 }
 
+/// Spawns one node and, recursively, its children, parented to it. Each node
+/// gets its own material instance, so an overlay can tint one (a locked wheel)
+/// without touching its siblings.
+fn spawn_node(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    descriptor: &EntityDescriptor,
+    node: &EntityNode,
+    path: NodePath,
+    index: &mut NodeIndex,
+) -> Entity {
+    // Visibility explicitly, because a node without geometry is a pure pivot
+    // and would otherwise not carry the components its children inherit.
+    let mut entity = commands.spawn((to_transform(&node.transform), Visibility::default()));
+    if let Some(geometry) = &node.geometry {
+        entity.insert((
+            Mesh3d(mesh_for(geometry, meshes)),
+            MeshMaterial3d(material_for(descriptor, materials)),
+        ));
+    }
+    let id = entity.id();
+    index.0.insert(path.clone(), id);
+    for child in &node.children {
+        let child_id = spawn_node(
+            commands,
+            meshes,
+            materials,
+            descriptor,
+            child,
+            path.child(&child.name),
+            index,
+        );
+        commands.entity(id).add_child(child_id);
+    }
+    id
+}
+
 fn spawn_entity(
     commands: &mut Commands,
     map: &mut EntityMap,
@@ -214,12 +271,20 @@ fn spawn_entity(
     materials: &mut Assets<StandardMaterial>,
     descriptor: &EntityDescriptor,
 ) {
-    let transform = to_transform(&descriptor.transform);
-    let mut entity = commands.spawn((
-        Mesh3d(mesh_for(&descriptor.shape, meshes)),
-        MeshMaterial3d(material_for(descriptor, materials)),
-        transform,
-    ));
+    let mut index = NodeIndex::default();
+    let id = spawn_node(
+        commands,
+        meshes,
+        materials,
+        descriptor,
+        &descriptor.root,
+        NodePath::root(),
+        &mut index,
+    );
+    // The per-entity components all live on the root: it is what the frame
+    // stream, the overlays and the follow camera address.
+    let mut entity = commands.entity(id);
+    entity.insert(index);
     if descriptor.kind.is_dynamic() {
         entity.insert((
             DebugData::default(),
@@ -238,13 +303,6 @@ fn spawn_entity(
             vertical_fov_half_angle: sensors.vertical_fov_half_angle,
         });
     }
-    if descriptor.wheels.is_some() {
-        entity.insert(WheelState::default());
-    }
-    let id = entity.id();
-    if let Some(rig) = &descriptor.wheels {
-        spawn_wheels(commands, meshes, materials, id, rig);
-    }
     map.0.insert(descriptor.id.clone(), id);
 }
 
@@ -262,7 +320,8 @@ pub fn apply_stream(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut histories: Query<&mut History>,
     mut debug: Query<&mut DebugData>,
-    mut wheel_states: Query<&mut WheelState>,
+    node_indices: Query<&NodeIndex>,
+    mut node_transforms: Query<&mut Transform>,
     mut clock: ResMut<RenderClock>,
     time: Res<Time>,
     mut diag: ResMut<Diag>,
@@ -330,19 +389,35 @@ pub fn apply_stream(
         if let Some(frame) = stream.frame.borrow_and_update().clone() {
             clock.newest = clock.newest.max(frame.tick as f64);
             for entity_frame in &frame.entities {
-                if let Some(&entity) = map.0.get(&entity_frame.id) {
-                    if let Ok(mut history) = histories.get_mut(entity) {
-                        let t = to_transform(&entity_frame.transform);
-                        history.push(Sample {
-                            tick: frame.tick as f64,
-                            translation: t.translation,
-                            rotation: t.rotation,
-                        });
+                let Some(&entity) = map.0.get(&entity_frame.id) else {
+                    continue;
+                };
+                for update in &entity_frame.nodes {
+                    if update.path.is_root() {
+                        // The root goes through the playback clock, so it is
+                        // recorded rather than applied.
+                        if let Ok(mut history) = histories.get_mut(entity) {
+                            let t = to_transform(&update.transform);
+                            history.push(Sample {
+                                tick: frame.tick as f64,
+                                translation: t.translation,
+                                rotation: t.rotation,
+                            });
+                        }
+                        continue;
                     }
-                    // Wheel poses are applied as they arrive rather than
-                    // interpolated through the clock -- see `wheels`.
-                    if let Ok(mut state) = wheel_states.get_mut(entity) {
-                        state.poses.clone_from(&entity_frame.wheels);
+                    // Child nodes are applied as they arrive, not interpolated:
+                    // they move by tiny amounts between frames, except a wheel's
+                    // spin, which aliases at speed however it is handled.
+                    let Some(node) = node_indices
+                        .get(entity)
+                        .ok()
+                        .and_then(|i| i.get(&update.path))
+                    else {
+                        continue;
+                    };
+                    if let Ok(mut transform) = node_transforms.get_mut(node) {
+                        *transform = to_transform(&update.transform);
                     }
                 }
             }
@@ -365,9 +440,7 @@ pub fn apply_stream(
                             .map(|p| Vec3::new(p.x, p.y, p.z))
                             .collect();
                         data.reflex_active = entity_debug.reflex_active;
-                        if let Ok(mut wheels) = wheel_states.get_mut(entity) {
-                            wheels.diagnostics.clone_from(&entity_debug.wheels);
-                        }
+                        data.wheels.clone_from(&entity_debug.wheels);
                         data.detections = entity_debug
                             .detections
                             .iter()
@@ -479,27 +552,25 @@ pub fn advance_playback(
 }
 
 /// Frames the top-down camera to the arena once its bounds arrive (and if
-/// they change between scenarios).
+/// they change between scenarios). Skipped while following a vehicle, which
+/// owns the camera itself.
 pub fn frame_camera(
     state: Res<ViewerState>,
     follow: Res<FollowCam>,
     mut camera: Query<&mut Transform, With<Camera3d>>,
 ) {
-    // In follow mode the follow camera owns the transform.
     if follow.target.is_some() || !state.is_changed() {
         return;
     }
-    let Some(arena) = state.arena else {
+    let Some(arena) = state.arena else { return };
+    let Ok(mut transform) = camera.single_mut() else {
         return;
     };
-    let height = arena.width.max(arena.depth) * 0.9;
-    if let Ok(mut transform) = camera.single_mut() {
-        *transform = Transform::from_xyz(0.0, height, height).looking_at(Vec3::ZERO, Vec3::Y);
-    }
+    let span = arena.width.max(arena.depth);
+    *transform =
+        Transform::from_xyz(0.0, span * 0.9, span * 0.75).looking_at(Vec3::ZERO, Vec3::Y);
 }
 
-/// Spawns the camera and light. The camera frames a 50-unit arena from
-/// above; scene geometry arrives over the stream.
 pub fn setup_camera(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {

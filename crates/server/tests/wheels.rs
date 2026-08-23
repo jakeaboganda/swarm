@@ -8,8 +8,10 @@
 
 mod support;
 
+use bevy::math::{Quat, Vec3 as Vec3f};
+use bevy::transform::components::Transform as Placement;
 use bevy_rapier3d::prelude::Velocity;
-use movement::{RaycastVehicle, Wheels};
+use movement::{wheel_offset, RaycastVehicle, Wheels};
 use protocol::messages::{ClientMessage, Operator, ReflexAction, SensorKind, Waypoint};
 use protocol::scenario::{Embodiment, ScenarioConfig};
 use protocol::Vec3;
@@ -64,6 +66,12 @@ fn wheel_state_is_populated_once_the_car_is_running() {
             vehicle.suspension_rest
         );
         assert!(wheel.load.is_finite() && wheel.omega.is_finite());
+        // Wrapped, so a long drive doesn't lose visible precision in f32.
+        assert!(
+            (0.0..std::f32::consts::TAU).contains(&wheel.angle),
+            "wheel {index} spin angle {} is not wrapped",
+            wheel.angle
+        );
     }
 
     // The suspension is holding the car up: at rest the four springs together
@@ -221,67 +229,146 @@ fn a_densely_sampled_plan_is_driven_at_the_speed_the_agent_asked_for() {
     );
 }
 
+/// A viz transform as Bevy maths, so a node's world pose can be composed the
+/// way a viewer's scene graph composes it.
+fn placement(transform: &viz::Transform) -> Placement {
+    Placement {
+        translation: Vec3f::new(
+            transform.position.x,
+            transform.position.y,
+            transform.position.z,
+        ),
+        rotation: Quat::from_xyzw(
+            transform.rotation.x,
+            transform.rotation.y,
+            transform.rotation.z,
+            transform.rotation.w,
+        ),
+        scale: Vec3f::ONE,
+    }
+}
+
 #[test]
 fn wheel_state_reaches_a_viewer() {
-    // The wire half of the wheel work: a viewer has to be told the rig once
-    // and each wheel's pose every frame, because it can derive neither. The
-    // rig it draws must be the rig the physics casts from, or the wheels will
-    // be visibly in the wrong place.
+    // The wire half of the wheel work. A viewer is told the car's node tree
+    // once and, every frame, where each node is -- because it can derive none
+    // of it. The claim is not just that the numbers arrive: it is that
+    // composing them the way a scene graph does puts each wheel where the
+    // physics has it, on the ground, turned the right way. The viewer no
+    // longer composes anything, so this is now assertable end to end.
     let (mut sim, _agent) = settled_car();
     let viewer = sim.watch_viz(true);
 
-    // The scene-init a viewer gets on connect carries the rig.
-    let rig = sim.expect_viz(&viewer, "the car's wheel rig", |message| match message {
+    // The scene-init a viewer gets on connect carries the tree.
+    let root = sim.expect_viz(&viewer, "the car's node tree", |message| match message {
         viz::ServerToViewer::SceneInit(init) => init
             .entities
             .iter()
             .find(|e| e.id.0 == "car")
-            .and_then(|e| e.wheels),
+            .map(|e| e.root.clone()),
         _ => None,
     });
     let vehicle: RaycastVehicle = sim.component("car");
-    assert_eq!(rig.radius, vehicle.wheel_radius);
-    assert_eq!(rig.rest, vehicle.suspension_rest);
-    assert!(rig.width > 0.0);
-    for (index, offset) in rig.offsets.iter().enumerate() {
-        let expected = movement::wheel_offset(index, &vehicle);
-        assert_eq!(
-            (offset.x, offset.y, offset.z),
-            (expected.x, expected.y, expected.z),
-            "wheel {index} is drawn somewhere the physics does not cast from"
+    let names: Vec<&str> = root.children.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names, viz::WHEEL_NODES.to_vec());
+    // Every wheel attaches at the same height, so one is enough to bound them.
+    let attach_y = wheel_offset(0, &vehicle).y;
+    for child in &root.children {
+        match child.geometry {
+            Some(viz::Geometry::Cylinder { radius, height }) => {
+                assert_eq!(
+                    radius, vehicle.wheel_radius,
+                    "{} is drawn a size the physics does not use",
+                    child.name
+                );
+                assert!(height > 0.0, "{} has no width", child.name);
+            }
+            ref other => panic!("{} is not a cylinder: {other:?}", child.name),
+        }
+        // A settled car's descriptor carries its *current* suspension, not the
+        // full extension it spawned at -- a viewer joining mid-scenario sees
+        // the wheels where they are.
+        assert!(
+            child.transform.position.y > attach_y - vehicle.suspension_rest,
+            "{} is drawn at full extension under a settled car",
+            child.name
         );
     }
 
-    // Every frame carries a pose per wheel. Settled on flat ground, all four
-    // are loaded and compressed.
-    let poses = sim.expect_viz(
+    // Every frame carries the nodes that moved: the body and four wheels.
+    let nodes = sim.expect_viz(
         &viewer,
-        "a frame with wheel poses",
+        "a frame with the car's nodes",
         |message| match message {
             viz::ServerToViewer::Frame(frame) => frame
                 .entities
                 .iter()
                 .find(|e| e.id.0 == "car")
-                .map(|e| e.wheels.clone())
-                .filter(|w| !w.is_empty()),
+                .map(|e| e.nodes.clone())
+                .filter(|nodes| nodes.len() > 1),
             _ => None,
         },
     );
-    assert_eq!(poses.len(), 4);
-    for (index, pose) in poses.iter().enumerate() {
+    assert_eq!(nodes.len(), 5, "a car is a body node and four wheels");
+    let body = nodes
+        .iter()
+        .find(|n| n.path.is_root())
+        .map(|n| placement(&n.transform))
+        .expect("the body's own node");
+    let wheels: Wheels = sim.component("car");
+
+    for (index, name) in viz::WHEEL_NODES.iter().enumerate() {
+        let path = viz::NodePath::root().child(name);
+        let local = nodes
+            .iter()
+            .find(|n| n.path == path)
+            .map(|n| placement(&n.transform))
+            .unwrap_or_else(|| panic!("no update for {name}"));
+
+        // 1. Where the sim has it. The wheel hangs below its attach point by
+        //    whatever suspension is left extended, so the wire and the
+        //    suspension state have to agree to the millimetre.
+        let attach = wheel_offset(index, &vehicle);
+        let extension = vehicle.suspension_rest - wheels.0[index].compression;
         assert!(
-            pose.load > 0.0,
-            "wheel {index} reported no load to the viewer"
+            (local.translation.y - (attach.y - extension)).abs() < 0.01,
+            "{name} is drawn at {} but its suspension puts it at {}",
+            local.translation.y,
+            attach.y - extension
         );
         assert!(
-            pose.travel > 0.0 && pose.travel < vehicle.suspension_rest,
-            "wheel {index} travel {} is outside the suspension",
-            pose.travel
+            extension > 0.0 && extension < vehicle.suspension_rest,
+            "{name} is outside its {} m of travel",
+            vehicle.suspension_rest
         );
+
+        // 2. Composed the way a viewer composes it, the wheel is on the
+        //    ground: its centre sits one radius above the arena floor at
+        //    y = 0. This is the assertion the old rig could not make -- the
+        //    viewer did the composing, so a rig missing its rest length drew
+        //    the wheels a suspension-length in the air and nothing caught it.
+        let world = body.mul_transform(local);
         assert!(
-            (0.0..std::f32::consts::TAU).contains(&pose.spin),
-            "spin {} is not wrapped",
-            pose.spin
+            (world.translation.y - vehicle.wheel_radius).abs() < 0.02,
+            "{name} is drawn with its centre {} m up, not one {} m radius above the ground",
+            world.translation.y,
+            vehicle.wheel_radius
+        );
+        // And directly over the point the drive system casts from.
+        let cast_from = body.transform_point(attach);
+        assert!(
+            (world.translation.x - cast_from.x).abs() < 0.01
+                && (world.translation.z - cast_from.z).abs() < 0.01,
+            "{name} is drawn at {:?}, not under the point the physics casts from {cast_from:?}",
+            world.translation
+        );
+
+        // 3. And it is a wheel, not a drum standing on its end: its axle runs
+        //    across the car, level with the ground.
+        let axle = world.rotation * Vec3f::Y;
+        assert!(
+            axle.dot(*body.right()).abs() > 0.99,
+            "{name}'s axle points {axle:?}, not across the body"
         );
     }
 
@@ -308,9 +395,9 @@ fn wheel_state_reaches_a_viewer() {
 
 #[test]
 fn an_agent_without_wheels_sends_none_to_the_viewer() {
-    // The fields are additive and optional, and a holonomic puck has no
-    // wheels: it must send no rig and no poses rather than four zeroed ones,
-    // or a viewer would draw wheels on a puck.
+    // A holonomic puck is one node. It must have no children rather than four
+    // degenerate ones, and its frames must carry its root alone -- or a viewer
+    // would draw wheels on a puck.
     let mut sim = Sim::new(scenario(&["puck"]));
     let _agent = sim.join("puck");
     sim.expect("the scenario to start", |sim| {
@@ -318,26 +405,29 @@ fn an_agent_without_wheels_sends_none_to_the_viewer() {
     });
     let viewer = sim.watch_viz(false);
 
-    let described = sim.expect_viz(&viewer, "the puck's descriptor", |message| match message {
+    let root = sim.expect_viz(&viewer, "the puck's node tree", |message| match message {
         viz::ServerToViewer::SceneInit(init) => init
             .entities
             .iter()
             .find(|e| e.id.0 == "puck")
-            .map(|e| e.wheels),
+            .map(|e| e.root.clone()),
         _ => None,
     });
     assert!(
-        described.is_none(),
-        "a holonomic puck was given a wheel rig"
+        root.children.is_empty(),
+        "a holonomic puck was given child nodes: {:?}",
+        root.children
     );
+    assert!(matches!(root.geometry, Some(viz::Geometry::Capsule { .. })));
 
-    let poses = sim.expect_viz(&viewer, "a frame for the puck", |message| match message {
+    let nodes = sim.expect_viz(&viewer, "a frame for the puck", |message| match message {
         viz::ServerToViewer::Frame(frame) => frame
             .entities
             .iter()
             .find(|e| e.id.0 == "puck")
-            .map(|e| e.wheels.len()),
+            .map(|e| e.nodes.clone()),
         _ => None,
     });
-    assert_eq!(poses, 0, "a wheelless agent sent wheel poses");
+    assert_eq!(nodes.len(), 1, "a wheelless agent sent more than its body");
+    assert!(nodes[0].path.is_root());
 }

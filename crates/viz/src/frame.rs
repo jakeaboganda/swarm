@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::math::{Transform, Vec3};
-use crate::scene::EntityId;
+use crate::scene::{EntityId, NodePath};
 
-/// The scene layer: the physical state of every dynamic entity this tick.
-/// Full snapshot in v1 (every dynamic entity every frame); a delta variant
-/// can slot in behind this type later.
+/// The scene layer: what moved this tick.
+///
+/// Sparse by node: an entity contributes only the nodes whose transform
+/// changed. A wall contributes nothing at all (static geometry is never in a
+/// frame); a puck sends its root; a car sends its root and four wheels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
     pub tick: u64,
@@ -15,36 +17,26 @@ pub struct Frame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntityFrame {
     pub id: EntityId,
-    pub transform: Transform,
-    /// Each wheel's pose relative to the body, in rig order. Empty for
-    /// entities without wheels. `#[serde(default)]` keeps earlier encodings
-    /// decodable.
-    #[serde(default)]
-    pub wheels: Vec<WheelPose>,
+    pub nodes: Vec<NodeUpdate>,
 }
 
-/// One wheel this frame, relative to the chassis.
-///
-/// Only what a viewer cannot work out for itself. Spin is the notable one: a
-/// locked wheel's spin is *not* its road speed, so a viewer that integrated
-/// wheel angle from vehicle speed would draw a smoothly turning wheel on a car
-/// that is sliding -- erasing the one thing worth seeing. Suspension travel is
-/// not visible from the body transform at all.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct WheelPose {
-    /// Steering angle about the chassis up axis (radians).
-    pub steer: f32,
-    /// Accumulated spin about the axle, wrapped to `[0, 2pi)`. Sent as a
-    /// scalar rather than folded into a rotation because a quaternion would
-    /// alias: above about 35 m/s a wheel turns more than half a revolution
-    /// between frames, and an interpolating viewer would draw it slowing and
-    /// running backwards.
-    pub spin: f32,
-    /// Suspension compression from full extension (m). Positive is compressed.
-    pub travel: f32,
-    /// Vertical load carried by this wheel (N). Zero when airborne.
-    pub load: f32,
+/// Where one node of an entity is now. The root's transform is the entity's
+/// world pose; every other node's is relative to its parent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeUpdate {
+    pub path: NodePath,
+    pub transform: Transform,
 }
+
+/// The node names a vehicle's four wheels get, in the rig order
+/// [`EntityDebug::wheels`] arrives in: front-left, front-right, rear-left,
+/// rear-right.
+///
+/// Shared so the sim (which builds the nodes) and a viewer (which keys
+/// per-wheel diagnostics onto them) cannot disagree. A stopgap: when the debug
+/// layer grows per-node named values, the diagnostics address nodes directly
+/// and this goes away with them.
+pub const WHEEL_NODES: [&str; 4] = ["wheel.fl", "wheel.fr", "wheel.rl", "wheel.rr"];
 
 /// The debug layer: non-physical annotations a viewer may render or ignore
 /// — intent (the remaining plan) and diagnostics (reflex state). Sent as a
@@ -67,13 +59,12 @@ pub struct EntityDebug {
     /// What this agent currently perceives through its simulated sensors —
     /// the delayed, noised set actually delivered on the sensor pathway.
     /// Debug overlay only (a viewer draws each as a "ghost"); empty for
-    /// non-agents. `#[serde(default)]` keeps pre-v3 encodings decodable.
-    #[serde(default)]
+    /// non-agents.
     pub detections: Vec<Blip>,
     /// Per-wheel diagnostics, in rig order. Empty for entities without wheels.
     /// Diagnostics rather than geometry, so they ride the debug layer: a
     /// scene-only consumer (a recorder, a USD export) has no use for them.
-    #[serde(default)]
+    /// Keyed onto nodes by [`WHEEL_NODES`].
     pub wheels: Vec<WheelDebug>,
 }
 

@@ -1,13 +1,13 @@
 //! Puts a baked road mesh on the viz wire. Builds a small road-surface strip,
-//! wraps it in a scene-init as a `Shape::Mesh` entity (the same way the server
-//! sends a road to viewers), round-trips it through MessagePack, and prints a
-//! summary.
+//! wraps it in a scene-init as a one-node entity with `Geometry::Mesh` (the
+//! same way the server sends a road to viewers), round-trips it through
+//! MessagePack, and prints a summary.
 //!
 //! Run: `cargo run -p viz --example road_scene`
 
 use viz::{
-    decode, encode, ArenaBounds, Color, EntityDescriptor, EntityId, EntityKind, ScenarioState,
-    SceneInit, ServerToViewer, Shape, Transform, Vec3, PROTOCOL_VERSION,
+    decode, encode, ArenaBounds, Color, EntityDescriptor, EntityId, EntityKind, EntityNode,
+    Geometry, ScenarioState, SceneInit, ServerToViewer, Vec3, PROTOCOL_VERSION,
 };
 
 fn main() {
@@ -28,19 +28,17 @@ fn main() {
         id: EntityId("road".into()),
         name: "road".into(),
         kind: EntityKind::Static,
-        shape: Shape::Mesh {
+        root: EntityNode::body(Geometry::Mesh {
             positions,
             normals,
             indices,
-        },
+        }),
         color: Color {
             r: 0.2,
             g: 0.2,
             b: 0.22,
         },
-        transform: Transform::IDENTITY,
         sensors: None,
-        wheels: None,
     };
 
     let scene = ServerToViewer::SceneInit(SceneInit {
@@ -64,9 +62,9 @@ fn main() {
 
     if let ServerToViewer::SceneInit(init) = &back {
         for entity in &init.entities {
-            if let Shape::Mesh {
+            if let Some(Geometry::Mesh {
                 positions, indices, ..
-            } = &entity.shape
+            }) = &entity.root.geometry
             {
                 println!(
                     "road mesh '{}': {} vertices, {} triangles, {} MessagePack bytes",

@@ -5,11 +5,11 @@ use crate::frame::{DebugFrame, Frame};
 use crate::scene::{SceneEvent, SceneInit};
 
 /// Version of the viz wire schema. A viewer declares it in `Hello`; the sim
-/// declares it in `SceneInit`. Bump it for any breaking change — notably a
-/// new message/enum variant (e.g. the future delta/keyframe frame), which
-/// an older internally-tagged decoder would otherwise fail on. Additive
-/// *fields* are backward compatible and don't require a bump.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// declares it in `SceneInit`, and drops a viewer that declared anything else.
+/// Bump it for any change to the shape of these types: nothing outside this
+/// repo consumes this wire, so the schema is broken cleanly rather than kept
+/// compatible, and the failure mode is a viewer that refuses to connect.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Everything the sim streams to a viewer. The scene layer (`SceneInit`,
 /// `Event`, `Frame`) is canonical/physical; `DebugFrame` is the optional
@@ -68,9 +68,41 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, rmp_serde::decode:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{Blip, DetectionKind, EntityDebug, EntityFrame};
+    use crate::frame::{
+        Blip, DetectionKind, EntityDebug, EntityFrame, NodeUpdate, WheelDebug, WHEEL_NODES,
+    };
     use crate::math::{Quat, Transform, Vec3};
     use crate::scene::*;
+
+    fn at(x: f32, y: f32, z: f32) -> Transform {
+        Transform {
+            position: Vec3::new(x, y, z),
+            rotation: Quat::IDENTITY,
+        }
+    }
+
+    /// A car: a cuboid body with four wheel children, the tree the sim builds
+    /// for a `RaycastVehicle`.
+    fn car_tree() -> EntityNode {
+        let wheels = WHEEL_NODES
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                EntityNode::new(
+                    *name,
+                    at(if index % 2 == 0 { 0.8 } else { -0.8 }, -0.55, -1.3),
+                    Geometry::Cylinder {
+                        radius: 0.32,
+                        height: 0.22,
+                    },
+                )
+            })
+            .collect();
+        EntityNode::body(Geometry::Cuboid {
+            half_extents: Vec3::new(0.8, 0.4, 1.4),
+        })
+        .with_children(wheels)
+    }
 
     fn sample_descriptor() -> EntityDescriptor {
         EntityDescriptor {
@@ -79,22 +111,20 @@ mod tests {
             kind: EntityKind::Agent {
                 embodiment: Embodiment::CarLike,
             },
-            shape: Shape::Capsule {
-                radius: 0.5,
-                half_length: 0.5,
-            },
             color: Color {
                 r: 0.9,
                 g: 0.4,
                 b: 0.1,
             },
-            transform: Transform::IDENTITY,
+            root: EntityNode::body(Geometry::Capsule {
+                radius: 0.5,
+                half_length: 0.5,
+            }),
             sensors: Some(SensorView {
                 range: 20.0,
                 fov_half_angle: 1.2,
                 vertical_fov_half_angle: 0.5,
             }),
-            wheels: None,
         }
     }
 
@@ -115,23 +145,26 @@ mod tests {
                         id: EntityId("wall-0".into()),
                         name: "wall-0".into(),
                         kind: EntityKind::Static,
-                        shape: Shape::Cuboid {
-                            half_extents: Vec3::new(25.0, 1.5, 0.25),
-                        },
                         color: Color {
                             r: 0.45,
                             g: 0.47,
                             b: 0.52,
                         },
-                        transform: Transform::IDENTITY,
+                        root: EntityNode::body(Geometry::Cuboid {
+                            half_extents: Vec3::new(25.0, 1.5, 0.25),
+                        }),
                         sensors: None,
-                        wheels: None,
                     },
                     EntityDescriptor {
                         id: EntityId("road".into()),
                         name: "road".into(),
                         kind: EntityKind::Static,
-                        shape: Shape::Mesh {
+                        color: Color {
+                            r: 0.2,
+                            g: 0.2,
+                            b: 0.22,
+                        },
+                        root: EntityNode::body(Geometry::Mesh {
                             positions: vec![
                                 Vec3::new(0.0, 0.0, -2.0),
                                 Vec3::new(0.0, 0.0, 2.0),
@@ -139,15 +172,8 @@ mod tests {
                             ],
                             normals: vec![Vec3::new(0.0, 1.0, 0.0); 3],
                             indices: vec![0, 1, 2],
-                        },
-                        color: Color {
-                            r: 0.2,
-                            g: 0.2,
-                            b: 0.22,
-                        },
-                        transform: Transform::IDENTITY,
+                        }),
                         sensors: None,
-                        wheels: None,
                     },
                 ],
             }),
@@ -162,11 +188,13 @@ mod tests {
                 tick: 42,
                 entities: vec![EntityFrame {
                     id: EntityId("car-1".into()),
-                    transform: Transform {
-                        position: Vec3::new(1.0, 1.0, 2.0),
-                        rotation: Quat::new(0.0, 0.6, 0.0, 0.8),
-                    },
-                    wheels: vec![],
+                    nodes: vec![NodeUpdate {
+                        path: NodePath::root(),
+                        transform: Transform {
+                            position: Vec3::new(1.0, 1.0, 2.0),
+                            rotation: Quat::new(0.0, 0.6, 0.0, 0.8),
+                        },
+                    }],
                 }],
             }),
             ServerToViewer::DebugFrame(DebugFrame {
@@ -205,83 +233,107 @@ mod tests {
     }
 
     #[test]
-    fn wheel_rig_and_poses_round_trip() {
-        use crate::frame::{EntityFrame, Frame, WheelPose};
-        use crate::scene::WheelRig;
+    fn a_nested_tree_round_trips() {
+        // The tree is recursive, and every geometry variant has to survive the
+        // wire -- including `Asset`, which is a reference a viewer resolves
+        // (or falls back from), never bytes.
+        let mut root = car_tree();
+        root.children.push(
+            EntityNode {
+                name: "mount".into(),
+                transform: at(0.0, 0.5, -1.0),
+                // A pure pivot: no geometry of its own.
+                geometry: None,
+                children: Vec::new(),
+            }
+            .with_children(vec![
+                EntityNode::new(
+                    "lidar",
+                    at(0.0, 0.1, 0.0),
+                    Geometry::Asset {
+                        uri: "models/lidar.glb".into(),
+                        scale: Vec3::new(1.0, 1.0, 1.0),
+                    },
+                ),
+                EntityNode::new("dome", at(0.0, 0.2, 0.0), Geometry::Sphere { radius: 0.1 }),
+            ]),
+        );
 
-        let rig = WheelRig {
-            radius: 0.32,
-            width: 0.22,
-            rest: 0.20,
-            offsets: [
-                Vec3::new(0.8, -0.35, -1.3),
-                Vec3::new(-0.8, -0.35, -1.3),
-                Vec3::new(0.8, -0.35, 1.3),
-                Vec3::new(-0.8, -0.35, 1.3),
-            ],
+        let mut descriptor = sample_descriptor();
+        descriptor.root = root;
+        let event = ServerToViewer::Event(SceneEvent::EntitySpawned(descriptor.clone()));
+        let back: ServerToViewer = decode(&encode(&event)).expect("decode");
+        assert_eq!(event, back);
+
+        // And the decoded tree is still addressable at depth.
+        let ServerToViewer::Event(SceneEvent::EntitySpawned(decoded)) = back else {
+            panic!("wrong variant");
         };
+        assert_eq!(
+            decoded.root.get(&NodePath::from("mount/lidar")).unwrap(),
+            descriptor.root.get(&NodePath::from("mount/lidar")).unwrap()
+        );
+        assert_eq!(decoded.root.children.len(), 5);
+    }
+
+    #[test]
+    fn a_frame_carries_only_the_nodes_that_moved() {
+        // The point of the sparse frame: a puck sends one update, a car sends
+        // five, and a wall sends no entry at all.
         let frame = ServerToViewer::Frame(Frame {
             tick: 9,
-            entities: vec![EntityFrame {
-                id: crate::scene::EntityId("car".into()),
-                transform: Transform::IDENTITY,
-                wheels: vec![
-                    WheelPose {
-                        steer: 0.12,
-                        spin: 4.71,
-                        travel: 0.058,
-                        load: 3188.0,
-                    };
-                    4
-                ],
-            }],
+            entities: vec![
+                EntityFrame {
+                    id: EntityId("puck".into()),
+                    nodes: vec![NodeUpdate {
+                        path: NodePath::root(),
+                        transform: at(1.0, 0.5, 2.0),
+                    }],
+                },
+                EntityFrame {
+                    id: EntityId("car".into()),
+                    nodes: std::iter::once(NodeUpdate {
+                        path: NodePath::root(),
+                        transform: at(4.0, 0.5, 0.0),
+                    })
+                    .chain(WHEEL_NODES.iter().map(|name| NodeUpdate {
+                        path: NodePath::root().child(name),
+                        transform: Transform {
+                            position: Vec3::new(0.8, -0.5, -1.3),
+                            // A quarter turn about Z: the axle laid across the
+                            // body, as the sim sends it.
+                            rotation: Quat::new(
+                                0.0,
+                                0.0,
+                                std::f32::consts::FRAC_1_SQRT_2,
+                                std::f32::consts::FRAC_1_SQRT_2,
+                            ),
+                        },
+                    }))
+                    .collect(),
+                },
+            ],
         });
-        assert_eq!(
-            decode::<ServerToViewer>(&encode(&frame)).expect("decode"),
-            frame
-        );
-
-        // The rig travels on the descriptor, once.
-        let mut descriptor = crate::scene::EntityDescriptor {
-            id: crate::scene::EntityId("car".into()),
-            name: "car".into(),
-            kind: crate::scene::EntityKind::Agent {
-                embodiment: crate::scene::Embodiment::RaycastVehicle,
-            },
-            shape: crate::scene::Shape::Cuboid {
-                half_extents: Vec3::new(0.8, 0.4, 1.4),
-            },
-            color: crate::scene::Color {
-                r: 0.8,
-                g: 0.2,
-                b: 0.2,
-            },
-            transform: Transform::IDENTITY,
-            sensors: None,
-            wheels: Some(rig),
+        let back: ServerToViewer = decode(&encode(&frame)).expect("decode");
+        assert_eq!(frame, back);
+        let ServerToViewer::Frame(decoded) = back else {
+            panic!("wrong variant");
         };
-        let event = ServerToViewer::Event(SceneEvent::EntitySpawned(descriptor.clone()));
+        assert_eq!(decoded.entities[0].nodes.len(), 1);
+        assert_eq!(decoded.entities[1].nodes.len(), 5);
+        assert!(decoded.entities[1].nodes[0].path.is_root());
         assert_eq!(
-            decode::<ServerToViewer>(&encode(&event)).expect("decode"),
-            event
-        );
-
-        descriptor.wheels = None;
-        let event = ServerToViewer::Event(SceneEvent::EntitySpawned(descriptor));
-        assert_eq!(
-            decode::<ServerToViewer>(&encode(&event)).expect("decode"),
-            event
+            decoded.entities[1].nodes[1].path,
+            NodePath::from("wheel.fl")
         );
     }
 
     #[test]
     fn wheel_diagnostics_round_trip_on_the_debug_layer() {
-        use crate::frame::{DebugFrame, EntityDebug, WheelDebug};
-
         let debug = ServerToViewer::DebugFrame(DebugFrame {
             tick: 3,
             entities: vec![EntityDebug {
-                id: crate::scene::EntityId("car".into()),
+                id: EntityId("car".into()),
                 plan: vec![],
                 reflex_active: true,
                 detections: vec![],
@@ -302,44 +354,6 @@ mod tests {
         assert_eq!(
             decode::<ServerToViewer>(&encode(&debug)).expect("decode"),
             debug
-        );
-    }
-
-    #[test]
-    fn a_frame_without_wheels_still_decodes() {
-        // The whole reason the wheel fields are additive and the protocol
-        // version did not move: an encoding that predates them, or a sender
-        // that has nothing with wheels in it, must still decode. `to_vec_named`
-        // writes field-name maps, so a missing key takes its serde default.
-        use crate::frame::{EntityFrame, Frame};
-
-        #[derive(serde::Serialize)]
-        struct OldEntityFrame {
-            id: crate::scene::EntityId,
-            transform: Transform,
-        }
-        #[derive(serde::Serialize)]
-        struct OldFrame {
-            tick: u64,
-            entities: Vec<OldEntityFrame>,
-        }
-
-        let bytes = rmp_serde::to_vec_named(&OldFrame {
-            tick: 1,
-            entities: vec![OldEntityFrame {
-                id: crate::scene::EntityId("puck".into()),
-                transform: Transform::IDENTITY,
-            }],
-        })
-        .expect("encode without the wheel field");
-        let decoded: Frame = rmp_serde::from_slice(&bytes).expect("decode");
-        assert_eq!(
-            decoded.entities[0],
-            EntityFrame {
-                id: crate::scene::EntityId("puck".into()),
-                transform: Transform::IDENTITY,
-                wheels: vec![],
-            }
         );
     }
 
