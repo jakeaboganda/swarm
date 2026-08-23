@@ -35,7 +35,9 @@ def pick_driving_lane(map_data, direction="forward"):
 
 
 def nearest_lane(lanes, p):
-    """The lane whose centerline passes closest to point `p`. Raises
+    """The lane with the centerline *vertex* closest to point `p`. Vertex, not
+    projected point: on a sparsely sampled centerline that can differ, so use
+    `project_point` if you need the true perpendicular distance. Raises
     ValueError if `lanes` is empty."""
     if not lanes:
         raise ValueError("nearest_lane: no lanes")
@@ -45,22 +47,25 @@ def nearest_lane(lanes, p):
 def reachable_lanes(lanes, start_id, lane_changes=True):
     """Every lane reachable from `start_id` by driving: a breadth-first walk of
     the delivered graph over `successors`, plus `neighbors` when
-    `lane_changes` is set. Includes the start lane. Use it to check a
-    destination is actually drivable to before asking the server to route --
-    the router will refuse an unreachable one."""
+    `lane_changes` is set. Includes the start lane, first, and the rest in
+    breadth-first order -- so picking one is reproducible run to run. Use it to
+    check a destination is actually drivable to before asking the server to
+    route -- the router will refuse an unreachable one."""
     by_id = {lane["id"]: lane for lane in lanes}
     seen = {start_id}
+    found = []
     queue = deque([start_id])
     while queue:
         lane = by_id.get(queue.popleft())
         if lane is None:
             continue
+        found.append(lane)
         edges = lane["successors"] + (lane["neighbors"] if lane_changes else [])
         for nxt in edges:
             if nxt not in seen:
                 seen.add(nxt)
                 queue.append(nxt)
-    return [by_id[i] for i in seen if i in by_id]
+    return found
 
 
 def lane_points(lane, start=None):

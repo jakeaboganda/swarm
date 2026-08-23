@@ -295,7 +295,12 @@ def fake_map():
                   centerline=[p(20, 0), p(30, 0)])
     orphan = dict(fwd, id=99, successors=[], neighbors=[],
                   centerline=[p(500, 500), p(510, 500)])
-    return {"lanes": [fwd, back, onward, orphan]}
+    # A real map carries lanes you must not drive on. Nothing else in the
+    # fixture is non-driving, so without this the `kind` filter is never
+    # exercised: delete it and every other lane test would still pass.
+    walk = dict(fwd, id=100, kind="sidewalk", successors=[], neighbors=[],
+                centerline=[p(0, 100), p(20, 100)])
+    return {"lanes": [fwd, back, onward, orphan, walk]}
 
 
 def test_pick_driving_lane():
@@ -304,7 +309,8 @@ def test_pick_driving_lane():
     assert ln.pick_driving_lane(m, "backward")["id"] == 9
     assert ln.pick_driving_lane({"lanes": []}) is None
     assert ln.pick_driving_lane(None) is None, "the arena world delivers no map"
-    assert len(ln.driving_lanes(m)) == 4
+    ids = [lane["id"] for lane in ln.driving_lanes(m)]
+    assert ids == [7, 9, 8, 99], "the sidewalk must be filtered out"
 
 
 def test_nearest_lane():
@@ -323,9 +329,30 @@ def test_reachable_lanes():
     lanes = fake_map()["lanes"]
     ids = sorted(lane["id"] for lane in ln.reachable_lanes(lanes, 7))
     assert ids == [7, 8, 9], ids
-    ids = sorted(lane["id"] for lane in ln.reachable_lanes(lanes, 7, lane_changes=False))
+    ids = sorted(
+        lane["id"] for lane in ln.reachable_lanes(lanes, 7, lane_changes=False)
+    )
     assert ids == [7, 8], "without lane changes the backward lane is unreachable"
     assert [lane["id"] for lane in ln.reachable_lanes(lanes, 99)] == [99]
+
+
+def test_reachable_lanes_is_in_breadth_first_order():
+    # Order must be the walk order, not the order a set happens to iterate in.
+    # Callers pick a destination out of this list; hash order would make the
+    # choice depend on the id values rather than the graph.
+    lanes = fake_map()["lanes"]
+    assert [lane["id"] for lane in ln.reachable_lanes(lanes, 7)] == [7, 8, 9]
+
+    # Sparse ids are the real case -- both town demos pass driving_lanes(map),
+    # a filtered subset. A set would come back in hash order here.
+    ids = [1000003 * i + 7 for i in range(12)]
+    chain = [
+        {"id": lane_id, "kind": "driving", "direction": "forward", "width": 3.5,
+         "centerline": [p(0, 0)], "predecessors": [], "neighbors": [],
+         "successors": [ids[k + 1]] if k + 1 < len(ids) else []}
+        for k, lane_id in enumerate(ids)
+    ]
+    assert [lane["id"] for lane in ln.reachable_lanes(chain, ids[0])] == ids
 
 
 def test_lane_points_starts_at_the_car():
@@ -435,6 +462,11 @@ def main():
         for name, fn in globals().items()
         if name.startswith("test_") and callable(fn)
     )
+    if not tests:
+        # Collecting nothing must not exit 0: a rename that stops matching the
+        # prefix would otherwise turn the gate's python step into a no-op.
+        print("FAIL: collected no tests")
+        return 1
     failed = []
     for name, fn in tests:
         try:

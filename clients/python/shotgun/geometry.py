@@ -53,7 +53,9 @@ def project_point(points, p):
 
     Unlike `nearest_index` this looks between the points, so the offset is a
     true perpendicular distance rather than a distance to the nearest vertex.
-    Raises ValueError if the polyline is empty.
+    Raises ValueError if the polyline is empty. A one-point polyline has no
+    segment: it returns `index` 0 and `t` 0.0, so don't index `points[index+1]`
+    without checking the length.
     """
     if not points:
         raise ValueError("project_point: empty polyline")
