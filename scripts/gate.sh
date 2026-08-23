@@ -10,6 +10,7 @@
 #   scripts/gate.sh            # everything
 #   scripts/gate.sh fmt        # a single step:
 #                              #   fmt | clippy | test | test-server
+#                              #   test-viewer
 #                              #   selftest | clients   (the python side)
 
 set -uo pipefail
@@ -37,6 +38,11 @@ run_in() {
 [ "$step" = all ] || [ "$step" = test ] && run cargo test -p protocol -p movement -p sensors \
     -p transport -p viz -p perception -p map -p map-opendrive
 [ "$step" = all ] || [ "$step" = test-server ] && run cargo test -p server -j 2
+# `viewer` is excluded from the *testing* requirement (CLAUDE.md: rendering is
+# verified by looking at the screen), but it is not excluded from having tests
+# run. Anything pure that does end up in there -- camera placement, wheel
+# tinting -- was silently never executed until this line existed.
+[ "$step" = all ] || [ "$step" = test-viewer ] && run cargo test -p viewer -j 2
 [ "$step" = all ] || [ "$step" = selftest ] && run_in clients/python python3 -m shotgun.selftest
 [ "$step" = all ] || [ "$step" = clients ] && run python3 scripts/check_clients.py
 

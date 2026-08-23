@@ -17,9 +17,12 @@ pub enum CameraView {
     Chase,
     /// Ahead, looking back at it.
     Front,
-    /// Off its right flank — the view for watching a wheel lock or the
-    /// suspension compress.
-    Side,
+    /// Off its left flank, looking at its left side.
+    Left,
+    /// Off its right flank, looking at its right side. Either flank view is
+    /// the one for watching a wheel lock or the suspension compress; which
+    /// one you want depends on which way the corner goes.
+    Right,
     /// Straight down.
     Top,
 }
@@ -37,7 +40,8 @@ impl CameraView {
         match self {
             CameraView::Chase => "chase",
             CameraView::Front => "front",
-            CameraView::Side => "side",
+            CameraView::Left => "left",
+            CameraView::Right => "right",
             CameraView::Top => "top",
         }
     }
@@ -50,21 +54,25 @@ pub fn view_placement(view: CameraView, distance: f32, height: f32) -> (Vec3, Ve
     match view {
         CameraView::Chase => (Vec3::new(0.0, height, distance), Vec3::Y),
         CameraView::Front => (Vec3::new(0.0, height, -distance), Vec3::Y),
-        CameraView::Side => (Vec3::new(distance, height, 0.0), Vec3::Y),
+        // Named for the flank you are looking at, so the camera sits on that
+        // side: the left view is off the subject's left, seeing its left side.
+        CameraView::Left => (Vec3::new(-distance, height, 0.0), Vec3::Y),
+        CameraView::Right => (Vec3::new(distance, height, 0.0), Vec3::Y),
         // Looking straight down, `+Y` is the view direction and useless as an
         // up vector, so the subject's own forward becomes up on screen.
         CameraView::Top => (Vec3::new(0.0, distance, 0.0), Vec3::NEG_Z),
     }
 }
 
-/// `1`/`2`/`3` select the front, side and top views; pressing the one already
-/// active returns to the default. They apply whether or not a vehicle is
-/// followed — following just changes what the view is a view *of*.
+/// `1`/`2`/`3`/`4` select the front, left, right and top views; pressing the
+/// one already active returns to the default. They apply whether or not a
+/// vehicle is followed — following just changes what the view is a view *of*.
 pub fn view_input(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<CameraView>) {
     let pressed = [
         (KeyCode::Digit1, CameraView::Front),
-        (KeyCode::Digit2, CameraView::Side),
-        (KeyCode::Digit3, CameraView::Top),
+        (KeyCode::Digit2, CameraView::Left),
+        (KeyCode::Digit3, CameraView::Right),
+        (KeyCode::Digit4, CameraView::Top),
     ]
     .into_iter()
     .find(|(key, _)| keys.just_pressed(*key));
@@ -98,10 +106,31 @@ mod tests {
         let (front, _) = view_placement(CameraView::Front, D, H);
         assert_eq!(front.z, -D, "the front view must sit ahead of the subject");
         assert_eq!(front.x, 0.0);
-        let (side, _) = view_placement(CameraView::Side, D, H);
-        assert_eq!(side, Vec3::new(D, H, 0.0), "the side view must sit abeam");
+        let (left, _) = view_placement(CameraView::Left, D, H);
+        assert_eq!(
+            left,
+            Vec3::new(-D, H, 0.0),
+            "the left view must sit to port"
+        );
+        let (right, _) = view_placement(CameraView::Right, D, H);
+        assert_eq!(
+            right,
+            Vec3::new(D, H, 0.0),
+            "the right view must sit to starboard"
+        );
         let (top, _) = view_placement(CameraView::Top, D, H);
         assert_eq!(top, Vec3::new(0.0, D, 0.0), "the top view must sit above");
+    }
+
+    #[test]
+    fn the_two_flank_views_are_opposite_each_other() {
+        // Not just "both abeam": a left view that sat on the right would still
+        // frame the car, and would silently be the same view twice.
+        let (left, _) = view_placement(CameraView::Left, D, H);
+        let (right, _) = view_placement(CameraView::Right, D, H);
+        assert_eq!(left.x, -right.x, "the flanks are on the same side");
+        assert_eq!((left.y, left.z), (right.y, right.z));
+        assert!(left.x < 0.0, "left must be the subject's -X");
     }
 
     #[test]
@@ -109,7 +138,8 @@ mod tests {
         for view in [
             CameraView::Chase,
             CameraView::Front,
-            CameraView::Side,
+            CameraView::Left,
+            CameraView::Right,
             CameraView::Top,
         ] {
             let (offset, _) = view_placement(view, D, H);
@@ -125,7 +155,8 @@ mod tests {
         for view in [
             CameraView::Chase,
             CameraView::Front,
-            CameraView::Side,
+            CameraView::Left,
+            CameraView::Right,
             CameraView::Top,
         ] {
             let (offset, up) = view_placement(view, D, H);

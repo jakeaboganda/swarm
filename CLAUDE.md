@@ -154,12 +154,15 @@ Cargo workspace, ten crates:
   `protocol`.
 - **`viz`** — the *visualization* pathway (`:4001`): the semantic scene wire
   types (MessagePack, versioned) and the WebSocket broadcast server that fans
-  them out to viewers. A wheeled entity carries its wheel rig on its descriptor
-  and a pose per wheel per frame — chassis-relative, and only what a viewer
-  cannot derive (a locked wheel's spin is not its road speed). Its debug layer
-  also carries human-only diagnostics: a perception overlay (per-agent
-  detections + a sensing envelope) and per-wheel slip and contact. Independent of
-  `protocol` and `perception` (a separate pathway; viz-local types only).
+  them out to viewers. An entity is a **tree of nodes** — each a local
+  transform, optional `Geometry` (primitives, a baked mesh, or an asset URI)
+  and children — so a car is a body with four wheel children, and a frame
+  carries only the nodes that moved, addressed by path. The **sim computes
+  every node transform**: a viewer draws where it is told and composes nothing.
+  Its debug layer also carries human-only diagnostics: a perception overlay
+  (per-agent detections + a sensing envelope) and per-wheel slip and contact.
+  Independent of `protocol` and `perception` (a separate pathway; viz-local
+  types only).
 - **`perception`** — the *sensor* pathway (`:4002`): the JSON wire types
   (`Hello`, per-device `PerceptionFrame`) and a per-agent-routed push server
   (each agent receives only its own perception, unlike viz's identical
@@ -228,7 +231,10 @@ Cargo workspace, ten crates:
   ephemeral ports and drives it through the real agent pathway — the scenario
   lifecycle, the control-loop guardrails below, and same-binary determinism.
   Untrusted agent input is tested at the pure boundary (`inbound`). `viewer`
-  stays excluded (rendering is verified by looking at the screen).
+  stays excluded from the *requirement* to have tests (rendering is verified by
+  looking at the screen) -- but the gate runs whatever tests it does have, so
+  anything pure that lands there (camera placement, wheel tinting) is not
+  silently skipped.
 - **Dependencies**: free to add anything already implied by this file
   (`bevy`, `bevy_rapier3d`, `tokio`, `tokio-tungstenite`, `serde`/
   `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree` — the
@@ -288,6 +294,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p protocol -p movement -p sensors -p transport \
            -p viz -p perception -p map -p map-opendrive
 cargo test -p server -j 2
+cargo test -p viewer -j 2
 (cd clients/python && python3 -m shotgun.selftest)
 python3 scripts/check_clients.py
 ```
