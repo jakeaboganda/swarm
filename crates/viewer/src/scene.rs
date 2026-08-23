@@ -570,15 +570,10 @@ pub fn frame_camera(
         return;
     };
     let span = arena.width.max(arena.depth);
-    // Straight down sees only what fits in the frustum at that height, so it
-    // has to sit further out than the three-quarter views do.
-    let distance = if view.is_top() {
-        span * 1.25
-    } else {
-        span * 0.9
-    };
     // The arena has no heading, so the view is taken in the world frame.
-    let (offset, up) = view_placement(*view, distance, span * 0.9);
+    // `view_placement` scales the base pair per view -- the top view's extra
+    // distance lives there, with the rest of the framing.
+    let (offset, up) = view_placement(*view, span * 0.9, span * 0.9);
     if let Ok(mut transform) = camera.single_mut() {
         *transform = Transform::from_translation(offset).looking_at(Vec3::ZERO, up);
     }

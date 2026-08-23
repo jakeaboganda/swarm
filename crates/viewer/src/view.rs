@@ -17,6 +17,10 @@ pub enum CameraView {
     Chase,
     /// Ahead, looking back at it.
     Front,
+    /// Behind, looking forward at it. Distinct from `Chase`: this is a level
+    /// rear elevation, where `Chase` is the raised three-quarter view you
+    /// drive from.
+    Rear,
     /// Off its left flank, looking at its left side.
     Left,
     /// Off its right flank, looking at its right side. Either flank view is
@@ -27,12 +31,25 @@ pub enum CameraView {
     Top,
 }
 
+/// How far out the top view sits, against the caller's base distance. Looking
+/// straight down, the camera sees only what fits in its frustum at that
+/// height, so it needs more room than a view that looks across at its subject.
+const TOP_DISTANCE: f32 = 2.0;
+
+/// How high the four cardinal views sit, against the caller's base height.
+/// They are *elevations* -- low and looking across at the subject, which is
+/// where a wheel locking up or a spring compressing actually reads. `Chase`
+/// keeps the full height because it is the view you drive from.
+const ELEVATION_HEIGHT: f32 = 0.25;
+
 impl CameraView {
-    /// Whether this view looks straight down. It needs its own framing
-    /// distance: from directly above, the camera sees only what fits in the
-    /// frustum at that height.
-    pub fn is_top(self) -> bool {
-        matches!(self, CameraView::Top)
+    /// This view's distance and height, scaled from the caller's base pair.
+    fn scaled(self, distance: f32, height: f32) -> (f32, f32) {
+        match self {
+            CameraView::Chase => (distance, height),
+            CameraView::Top => (distance * TOP_DISTANCE, height),
+            _ => (distance, height * ELEVATION_HEIGHT),
+        }
     }
 
     /// What to call this view on screen.
@@ -40,6 +57,7 @@ impl CameraView {
         match self {
             CameraView::Chase => "chase",
             CameraView::Front => "front",
+            CameraView::Rear => "rear",
             CameraView::Left => "left",
             CameraView::Right => "right",
             CameraView::Top => "top",
@@ -51,9 +69,11 @@ impl CameraView {
 /// screen — both in the subject's own frame (forward `-Z`, right `+X`, up
 /// `+Y`), so the caller rotates them by whatever basis it is framing in.
 pub fn view_placement(view: CameraView, distance: f32, height: f32) -> (Vec3, Vec3) {
+    let (distance, height) = view.scaled(distance, height);
     match view {
         CameraView::Chase => (Vec3::new(0.0, height, distance), Vec3::Y),
         CameraView::Front => (Vec3::new(0.0, height, -distance), Vec3::Y),
+        CameraView::Rear => (Vec3::new(0.0, height, distance), Vec3::Y),
         // Named for the flank you are looking at, so the camera sits on that
         // side: the left view is off the subject's left, seeing its left side.
         CameraView::Left => (Vec3::new(-distance, height, 0.0), Vec3::Y),
@@ -64,15 +84,16 @@ pub fn view_placement(view: CameraView, distance: f32, height: f32) -> (Vec3, Ve
     }
 }
 
-/// `1`/`2`/`3`/`4` select the front, left, right and top views; pressing the
-/// one already active returns to the default. They apply whether or not a
+/// `1`-`5` select the front, rear, left, right and top views; pressing the one
+/// already active returns to the default. They apply whether or not a
 /// vehicle is followed — following just changes what the view is a view *of*.
 pub fn view_input(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<CameraView>) {
     let pressed = [
         (KeyCode::Digit1, CameraView::Front),
-        (KeyCode::Digit2, CameraView::Left),
-        (KeyCode::Digit3, CameraView::Right),
-        (KeyCode::Digit4, CameraView::Top),
+        (KeyCode::Digit2, CameraView::Rear),
+        (KeyCode::Digit3, CameraView::Left),
+        (KeyCode::Digit4, CameraView::Right),
+        (KeyCode::Digit5, CameraView::Top),
     ]
     .into_iter()
     .find(|(key, _)| keys.just_pressed(*key));
@@ -106,20 +127,25 @@ mod tests {
         let (front, _) = view_placement(CameraView::Front, D, H);
         assert_eq!(front.z, -D, "the front view must sit ahead of the subject");
         assert_eq!(front.x, 0.0);
+        // The flanks are abeam: the height they sit at is the elevation
+        // claim, tested on its own below.
         let (left, _) = view_placement(CameraView::Left, D, H);
         assert_eq!(
-            left,
-            Vec3::new(-D, H, 0.0),
+            (left.x, left.z),
+            (-D, 0.0),
             "the left view must sit to port"
         );
         let (right, _) = view_placement(CameraView::Right, D, H);
         assert_eq!(
-            right,
-            Vec3::new(D, H, 0.0),
+            (right.x, right.z),
+            (D, 0.0),
             "the right view must sit to starboard"
         );
+        // Directly overhead. How far overhead is the stand-off claim, tested
+        // on its own below.
         let (top, _) = view_placement(CameraView::Top, D, H);
-        assert_eq!(top, Vec3::new(0.0, D, 0.0), "the top view must sit above");
+        assert_eq!((top.x, top.z), (0.0, 0.0), "the top view must sit above");
+        assert!(top.y > 0.0);
     }
 
     #[test]
@@ -131,6 +157,66 @@ mod tests {
         assert_eq!(left.x, -right.x, "the flanks are on the same side");
         assert_eq!((left.y, left.z), (right.y, right.z));
         assert!(left.x < 0.0, "left must be the subject's -X");
+    }
+
+    #[test]
+    fn front_and_rear_are_opposite_each_other() {
+        let (front, _) = view_placement(CameraView::Front, D, H);
+        let (rear, _) = view_placement(CameraView::Rear, D, H);
+        assert_eq!(front.z, -rear.z, "both ends are on the same side");
+        assert_eq!((front.x, front.y), (rear.x, rear.y));
+        assert!(front.z < 0.0, "front must be the subject's -Z");
+    }
+
+    #[test]
+    fn the_rear_view_is_not_just_the_chase_view_again() {
+        // Chase already sits behind the subject, so a rear view sharing its
+        // height would be a second key for the same picture. Rear is a level
+        // elevation; chase is the raised view you drive from.
+        let (rear, _) = view_placement(CameraView::Rear, D, H);
+        let (chase, _) = view_placement(CameraView::Chase, D, H);
+        assert_eq!(rear.z, chase.z, "both sit behind");
+        assert!(
+            rear.y < chase.y,
+            "rear sits at {} and chase at {}: the same picture twice",
+            rear.y,
+            chase.y
+        );
+    }
+
+    #[test]
+    fn the_cardinal_views_look_across_at_the_subject_not_down_at_it() {
+        // A flank view exists to show a wheel locking and a spring
+        // compressing. From 6 m up at 12 m out you are looking at the roof.
+        for view in [
+            CameraView::Front,
+            CameraView::Rear,
+            CameraView::Left,
+            CameraView::Right,
+        ] {
+            let (offset, _) = view_placement(view, D, H);
+            let horizontal = offset.x.hypot(offset.z);
+            assert!(
+                offset.y < horizontal * 0.5,
+                "{view:?} looks down at {:.0} degrees",
+                offset.y.atan2(horizontal).to_degrees()
+            );
+        }
+    }
+
+    #[test]
+    fn the_top_view_stands_off_further_than_the_rest() {
+        // Straight down, the camera frames only what fits in its frustum at
+        // that height, so the same base distance shows far less than it does
+        // from across the subject.
+        let (top, _) = view_placement(CameraView::Top, D, H);
+        let (chase, _) = view_placement(CameraView::Chase, D, H);
+        assert!(
+            top.y > chase.length(),
+            "top sits at {} but chase is already {} away",
+            top.y,
+            chase.length()
+        );
     }
 
     #[test]

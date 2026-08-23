@@ -137,8 +137,8 @@ scripts/run.sh scenario_road_fleet.json clients/python/fleet_town_demo.py
 
 In the viewer: **F** follows/unfollows the nearest vehicle (chase-cam), **Tab**
 cycles vehicles, **P** toggles the perception overlay (what each agent detects),
-**O** toggles the sensing envelope (its range/field-of-view). **1**–**4**
-switch to the front, left, right and top views — of the followed vehicle if there
+**O** toggles the sensing envelope (its range/field-of-view). **1**–**5**
+switch to the front, rear, left, right and top views — of the followed vehicle if there
 is one, of the whole arena if not; pressing the active one again returns to the
 default chase/overview. A flank view is how you watch a wheel lock or the
 suspension compress -- pick the side the corner turns toward.
