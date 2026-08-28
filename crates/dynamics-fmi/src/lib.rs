@@ -8,6 +8,7 @@
 
 mod binding;
 mod driver;
+mod fmu;
 mod instance;
 mod model;
 mod pose;
@@ -17,6 +18,7 @@ pub use binding::{
     ResolvedGround, ResolvedInputs, ResolvedOutputs,
 };
 pub use driver::{Controls, Driver, DriverConfig, DriverInput};
+pub use fmu::{Fmu, LoadError};
 pub use instance::{FmuError, FmuInstance, StepOutcome, ValueReference};
-pub use model::{Causality, ModelDescription, Variable};
+pub use model::{BaseType, Causality, ModelDescription, Variable};
 pub use pose::{read_pose, Pose};

@@ -5,5 +5,10 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# FMI 3.0 Co-Simulation only -- drop the default fmi2 / ls-bus surface. Note:
+# fmi -> fmi-sys runs bindgen, so a build needs libclang; on a box without the
+# clang driver's builtin headers, point bindgen at gcc's:
+#   BINDGEN_EXTRA_CLANG_ARGS="-I$(gcc -print-file-name=include)"
+fmi = { version = "0.8.0", default-features = false, features = ["fmi3"] }
 glam = { workspace = true }
 thiserror = { workspace = true }

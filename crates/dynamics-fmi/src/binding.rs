@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::instance::ValueReference;
-use crate::model::{Causality, ModelDescription};
+use crate::model::{BaseType, Causality, ModelDescription};
 
 /// The driver-actuator inputs every FMU vehicle exposes, named by the FMU's own
 /// variable names. Fed from the [`crate::Driver`]; all three are required.
@@ -100,6 +100,15 @@ pub enum BindError {
         second_role: String,
         name: String,
         vr: ValueReference,
+    },
+    /// A role names a variable that is not `Float64`. Every role is driven or
+    /// read via `SetFloat64`/`GetFloat64`, so a non-Float64 variable cannot be
+    /// used.
+    #[error("role `{role}` variable `{name}` has base type {actual:?}, expected Float64")]
+    WrongBaseType {
+        role: String,
+        name: String,
+        actual: BaseType,
     },
 }
 
@@ -214,6 +223,13 @@ fn resolve(
             actual: var.causality,
         });
     }
+    if var.base_type != BaseType::Float64 {
+        return Err(BindError::WrongBaseType {
+            role: role.to_string(),
+            name: name.to_string(),
+            actual: var.base_type,
+        });
+    }
     Ok(var.value_reference)
 }
 
@@ -235,10 +251,20 @@ mod tests {
     use crate::model::Variable;
 
     fn var(name: &str, vr: ValueReference, causality: Causality) -> Variable {
+        var_typed(name, vr, causality, BaseType::Float64)
+    }
+
+    fn var_typed(
+        name: &str,
+        vr: ValueReference,
+        causality: Causality,
+        base_type: BaseType,
+    ) -> Variable {
         Variable {
             name: name.into(),
             value_reference: vr,
             causality,
+            base_type,
         }
     }
 
@@ -375,6 +401,30 @@ mod tests {
                 second_role: "z".into(),
                 name: "Y".into(),
                 vr: 11,
+            }
+        );
+    }
+
+    #[test]
+    fn a_role_bound_to_a_non_float64_variable_is_rejected() {
+        // `delta` (the steer input) is declared Int32, not Float64.
+        let md = ModelDescription::new(vec![
+            var_typed("delta", 1, Causality::Input, BaseType::Int32),
+            var("ax", 2, Causality::Input),
+            var("brk", 3, Causality::Input),
+            var("z_road", 4, Causality::Input),
+            var("X", 10, Causality::Output),
+            var("Y", 11, Causality::Output),
+            var("Z", 12, Causality::Output),
+            var("psi", 13, Causality::Output),
+        ]);
+        let err = spec().resolve(&md).unwrap_err();
+        assert_eq!(
+            err,
+            BindError::WrongBaseType {
+                role: "steer".into(),
+                name: "delta".into(),
+                actual: BaseType::Int32,
             }
         );
     }
