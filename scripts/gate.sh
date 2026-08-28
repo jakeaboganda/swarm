@@ -19,6 +19,14 @@ cd "$(dirname "$0")/.."
 step="${1:-all}"
 status=0
 
+# `dynamics-fmi` depends on `fmi`, whose `fmi-sys` build runs bindgen (libclang).
+# On a box whose libclang lacks the clang driver's builtin headers (so bindgen
+# can't find <stddef.h>), point it at gcc's include dir. Harmless where clang
+# ships its own headers, so it's safe to always set.
+if command -v gcc > /dev/null 2>&1; then
+    export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} -I$(gcc -print-file-name=include)"
+fi
+
 run() {
     echo "=== $* ==="
     "$@" || status=1
@@ -35,7 +43,7 @@ run_in() {
 
 [ "$step" = all ] || [ "$step" = fmt ] && run cargo fmt --check
 [ "$step" = all ] || [ "$step" = clippy ] && run cargo clippy --workspace --all-targets -- -D warnings
-[ "$step" = all ] || [ "$step" = test ] && run cargo test -p protocol -p movement -p sensors \
+[ "$step" = all ] || [ "$step" = test ] && run cargo test -p protocol -p dynamics-fmi -p movement -p sensors \
     -p transport -p viz -p perception -p map -p map-opendrive
 [ "$step" = all ] || [ "$step" = test-server ] && run cargo test -p server -j 2
 # `viewer` is excluded from the *testing* requirement (CLAUDE.md: rendering is

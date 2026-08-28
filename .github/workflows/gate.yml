@@ -23,11 +23,15 @@ jobs:
       # whole workspace fails to compile before a single test runs. A
       # developer's machine usually has these already, which is why this only
       # ever breaks in CI. Same list Bevy's own CI installs.
+      # `clang`/`libclang-dev`: `dynamics-fmi` -> `fmi` -> `fmi-sys` runs bindgen,
+      # which needs libclang at build time (and clang's builtin headers so
+      # <stddef.h> resolves). Without it the whole workspace fails to compile.
       - name: Install Bevy's Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+            clang libclang-dev
       # The gate imports every Python client to check its `shotgun` helpers
       # still resolve. A client without `websockets` exits at its own skip
       # guard *before* that import, so without this the check silently
