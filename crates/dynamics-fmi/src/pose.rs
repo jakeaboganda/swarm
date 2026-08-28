@@ -27,7 +27,7 @@ pub fn read_pose(fmu: &mut impl FmuInstance, outputs: &ResolvedOutputs) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instance::ValueReference;
+    use crate::instance::{StepOutcome, ValueReference};
     use std::collections::HashMap;
 
     /// In-memory `FmuInstance` for the pure tests: a value store keyed by value
@@ -44,9 +44,14 @@ mod tests {
             self.values.insert(vr, value);
             Ok(())
         }
-        fn do_step(&mut self, _current_time: f64, _step_size: f64) -> Result<(), FmuError> {
+        fn do_step(&mut self, current_time: f64, step_size: f64) -> Result<StepOutcome, FmuError> {
             self.steps += 1;
-            Ok(())
+            Ok(StepOutcome {
+                event_handling_needed: false,
+                terminate_simulation: false,
+                early_return: false,
+                last_successful_time: current_time + step_size,
+            })
         }
         fn get_output(&mut self, vr: ValueReference) -> Result<f64, FmuError> {
             self.values
@@ -91,7 +96,16 @@ mod tests {
         let mut fmu = FakeFmu::default();
         fmu.set_input(1, 0.3).expect("set");
         assert_eq!(fmu.get_output(1).expect("get"), 0.3);
-        fmu.do_step(0.0, 1.0 / 64.0).expect("step");
+        let outcome = fmu.do_step(0.0, 1.0 / 64.0).expect("step");
+        assert_eq!(
+            outcome,
+            StepOutcome {
+                event_handling_needed: false,
+                terminate_simulation: false,
+                early_return: false,
+                last_successful_time: 1.0 / 64.0,
+            }
+        );
         fmu.do_step(1.0 / 64.0, 1.0 / 64.0).expect("step");
         assert_eq!(fmu.steps, 2);
     }

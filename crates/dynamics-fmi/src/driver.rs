@@ -198,21 +198,63 @@ mod tests {
         assert!(c.steer > 0.0, "steer={}", c.steer);
     }
 
-    #[test]
-    fn steer_is_clamped_to_max() {
-        // A near-reversal aim would exceed the clamp; it must saturate.
-        let mut d = Driver::new(DriverConfig {
+    /// A tight-lookahead aim in `dir` (world), heading -Z, that would demand a
+    /// steer past the clamp.
+    fn hard_turn(dir: Vec3) -> (Driver, DriverInput) {
+        let d = Driver::new(DriverConfig {
             max_steer: 0.4,
             ..Default::default()
         });
         let input = DriverInput {
-            desired_velocity: Vec3::new(1.0, 0.0, 0.05),
+            desired_velocity: dir,
             lookahead: 0.5,
             heading: Vec3::new(0.0, 0.0, -1.0),
             speed: 1.0,
             urgent: false,
         };
+        (d, input)
+    }
+
+    #[test]
+    fn steer_clamps_on_the_positive_side() {
+        // Aim forward-and--X (CCW of -Z heading) -> positive steer, saturated.
+        let (mut d, input) = hard_turn(Vec3::new(-1.0, 0.0, -0.05));
         let c = d.control(input, DT);
-        assert!(c.steer.abs() <= 0.4 + 1e-6, "steer={}", c.steer);
+        assert!((c.steer - 0.4).abs() < 1e-6, "steer={}", c.steer);
+    }
+
+    #[test]
+    fn steer_clamps_on_the_negative_side() {
+        // Aim forward-and-+X (CW of -Z heading) -> negative steer, saturated.
+        let (mut d, input) = hard_turn(Vec3::new(1.0, 0.0, -0.05));
+        let c = d.control(input, DT);
+        assert!((c.steer + 0.4).abs() < 1e-6, "steer={}", c.steer);
+    }
+
+    #[test]
+    fn speed_integrator_anti_windup_holds() {
+        // Isolate the integral term (kp=0, ki=1) with a small integral_limit, so
+        // the steady throttle equals ki*integral_limit and cannot wind past it.
+        // Without the clamp, a persistent positive error drives throttle to 1.0.
+        let mut d = Driver::new(DriverConfig {
+            speed_kp: 0.0,
+            speed_ki: 1.0,
+            integral_limit: 0.5,
+            ..Default::default()
+        });
+        let input = straight(10.0, 0.0); // large, persistent positive error
+        let mut c = Controls {
+            steer: 0.0,
+            throttle: 0.0,
+            brake: 0.0,
+        };
+        for _ in 0..2000 {
+            c = d.control(input, DT);
+        }
+        assert!(
+            (c.throttle - 0.5).abs() < 1e-6,
+            "throttle wound past the clamp: {}",
+            c.throttle
+        );
     }
 }

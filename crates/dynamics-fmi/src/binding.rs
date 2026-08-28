@@ -90,6 +90,17 @@ pub enum BindError {
         expected: Causality,
         actual: Causality,
     },
+    /// Two distinct roles resolved to the same FMU variable (a scenario-config
+    /// typo, e.g. `outputs.y` and `outputs.z` naming the same variable). Caught
+    /// by value reference, so it also flags two different names that alias one
+    /// variable.
+    #[error("roles `{first_role}` and `{second_role}` both bind FMU variable `{name}` (value-reference {vr})")]
+    DuplicateVariable {
+        first_role: String,
+        second_role: String,
+        name: String,
+        vr: ValueReference,
+    },
 }
 
 impl BindingSpec {
@@ -97,7 +108,7 @@ impl BindingSpec {
     /// exists and its causality matches the role's direction: inputs and ground
     /// must be `Input`, outputs must be `Output`.
     pub fn resolve(&self, md: &ModelDescription) -> Result<ResolvedBinding, BindError> {
-        Ok(ResolvedBinding {
+        let resolved = ResolvedBinding {
             inputs: ResolvedInputs {
                 steer: resolve(md, "steer", &self.inputs.steer, Causality::Input)?,
                 throttle: resolve(md, "throttle", &self.inputs.throttle, Causality::Input)?,
@@ -124,7 +135,62 @@ impl BindingSpec {
                 z: resolve(md, "z", &self.outputs.z, Causality::Output)?,
                 yaw: resolve(md, "yaw", &self.outputs.yaw, Causality::Output)?,
             },
-        })
+        };
+        self.check_no_duplicates(&resolved)?;
+        Ok(resolved)
+    }
+
+    /// Reject two distinct roles binding the same variable. Every role is bound
+    /// to its own actuator/output, so a shared value reference is a config
+    /// mistake, not a valid aliasing. Fixed order so the reported pair is
+    /// deterministic.
+    fn check_no_duplicates(&self, r: &ResolvedBinding) -> Result<(), BindError> {
+        let mut bound: Vec<(&str, &str, ValueReference)> = vec![
+            ("steer", self.inputs.steer.as_str(), r.inputs.steer),
+            ("throttle", self.inputs.throttle.as_str(), r.inputs.throttle),
+            ("brake", self.inputs.brake.as_str(), r.inputs.brake),
+        ];
+        for (role, name, vr) in [
+            (
+                "ground.height",
+                self.ground.height.as_deref(),
+                r.ground.height,
+            ),
+            (
+                "ground.normal_z",
+                self.ground.normal_z.as_deref(),
+                r.ground.normal_z,
+            ),
+            (
+                "ground.friction",
+                self.ground.friction.as_deref(),
+                r.ground.friction,
+            ),
+        ] {
+            if let (Some(name), Some(vr)) = (name, vr) {
+                bound.push((role, name, vr));
+            }
+        }
+        bound.extend([
+            ("x", self.outputs.x.as_str(), r.outputs.x),
+            ("y", self.outputs.y.as_str(), r.outputs.y),
+            ("z", self.outputs.z.as_str(), r.outputs.z),
+            ("yaw", self.outputs.yaw.as_str(), r.outputs.yaw),
+        ]);
+
+        for i in 0..bound.len() {
+            for j in (i + 1)..bound.len() {
+                if bound[i].2 == bound[j].2 {
+                    return Err(BindError::DuplicateVariable {
+                        first_role: bound[i].0.to_string(),
+                        second_role: bound[j].0.to_string(),
+                        name: bound[j].1.to_string(),
+                        vr: bound[j].2,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -292,6 +358,23 @@ mod tests {
                 name: "z_road".into(),
                 expected: Causality::Input,
                 actual: Causality::Output,
+            }
+        );
+    }
+
+    #[test]
+    fn two_roles_binding_the_same_variable_are_rejected() {
+        // A config typo: `outputs.z` points at the same variable as `outputs.y`.
+        let mut spec = spec();
+        spec.outputs.z = "Y".into();
+        let err = spec.resolve(&full_md()).unwrap_err();
+        assert_eq!(
+            err,
+            BindError::DuplicateVariable {
+                first_role: "y".into(),
+                second_role: "z".into(),
+                name: "Y".into(),
+                vr: 11,
             }
         );
     }
