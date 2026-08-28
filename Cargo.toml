@@ -9,6 +9,7 @@ members = [
     "crates/perception",
     "crates/map",
     "crates/map-opendrive",
+    "crates/dynamics-fmi",
     "crates/server",
     "crates/viewer",
 ]
@@ -26,6 +27,7 @@ viz = { path = "crates/viz" }
 perception = { path = "crates/perception" }
 map = { path = "crates/map" }
 map-opendrive = { path = "crates/map-opendrive" }
+dynamics-fmi = { path = "crates/dynamics-fmi" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
