@@ -43,6 +43,12 @@ const FLAT_GROUND_HEIGHT: f32 = 0.0;
 /// Sync` component): the driver (carrying its PI integrator) and the resolved
 /// role -> value-reference binding, plus the FMU's running communication-point
 /// time. The FMU handle itself lives in [`FmuStore`], not here.
+///
+/// The FMU integrates yaw as a real DOF, so a spawned FmuVehicle body MUST also
+/// carry [`crate::model::PhysicalYaw`]; otherwise the cosmetic
+/// `face_velocity_direction` system overwrites the FMU's heading with a
+/// velocity-facing one every frame. (`server` inserts it at spawn, like it does
+/// for `FullVehicle`/`RaycastVehicle`.)
 #[derive(Component, Debug, Clone)]
 pub struct FmuVehicle {
     /// Plan -> pedals controller; `&mut` each tick (holds integrator state).
@@ -53,6 +59,10 @@ pub struct FmuVehicle {
     /// drive this off our own clock; `StepOutcome::last_successful_time` is only
     /// advisory (an FMU with a coarser internal step lags it).
     pub elapsed: f64,
+    /// Latched once the FMU reports `terminate_simulation`: after that the body
+    /// is frozen and the FMU is never stepped again (stepping a terminated FMI
+    /// instance is an unsupported state transition), until `server` despawns it.
+    pub terminated: bool,
 }
 
 impl FmuVehicle {
@@ -61,6 +71,7 @@ impl FmuVehicle {
             driver,
             binding,
             elapsed: 0.0,
+            terminated: false,
         }
     }
 }
@@ -176,6 +187,12 @@ pub fn drive_fmu_vehicles(
     };
 
     for (entity, desired, velocity, mut transform, mut vehicle) in &mut query {
+        // A terminated FMU is frozen: never step it again (stepping past a
+        // terminate request is an unsupported FMI transition), and warn only
+        // the once, not every tick.
+        if vehicle.terminated {
+            continue;
+        }
         let Some(fmu) = store.get_mut(entity) else {
             continue;
         };
@@ -223,13 +240,18 @@ pub fn drive_fmu_vehicles(
         ) {
             Ok(step) => {
                 if step.outcome.terminate_simulation {
-                    // The FMU asked to stop. Freeze the body in place; the
-                    // scenario/lifecycle layer (server) owns despawn.
+                    // The FMU asked to stop. Latch it so we neither step nor
+                    // warn again; freeze the body in place. The scenario/
+                    // lifecycle layer (server) owns despawn.
                     warn!("FMU for {entity:?} requested termination; freezing in place");
+                    veh.terminated = true;
                     continue;
                 }
-                // early_return: the pose is at last_successful_time, still the
-                // best available -- impose it and carry on.
+                // early_return can't fire on our path -- `Fmu::do_step` sets
+                // `early_return_allowed = false`, so a conformant FMU never
+                // returns before `dt`. If a future config allows it, the pose is
+                // at `last_successful_time` and advancing `elapsed` by the full
+                // `dt` would drift; revisit here then.
                 transform.translation = step.pose.position;
                 transform.rotation = Quat::from_rotation_y(step.pose.yaw);
                 veh.elapsed += dt as f64;

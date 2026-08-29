@@ -63,6 +63,8 @@ impl Default for DriverConfig {
 pub struct Driver {
     config: DriverConfig,
     speed_integral: f32,
+    /// Last steer angle we commanded, held through a reflex stop (see `control`).
+    last_steer: f32,
 }
 
 impl Driver {
@@ -70,22 +72,28 @@ impl Driver {
         Self {
             config,
             speed_integral: 0.0,
+            last_steer: 0.0,
         }
     }
 
     /// One tick: target velocity + body state -> controls.
     pub fn control(&mut self, input: DriverInput, dt: f32) -> Controls {
         if input.urgent {
-            // Reflex stop: full brake, straight, and bleed the integrator so we
-            // do not lunge forward when the reflex later clears.
+            // Reflex stop: full brake and bleed the integrator so we do not
+            // lunge forward when the reflex later clears. The wheel is *held*
+            // at its last commanded angle, not centred: centring is a steering
+            // input nobody asked for, and the brake still needs metres to stop,
+            // so snapping straight mid-corner would leave the bend tangentially
+            // (same reasoning as `RaycastVehicle`).
             self.speed_integral = 0.0;
             return Controls {
-                steer: 0.0,
+                steer: self.last_steer,
                 throttle: 0.0,
                 brake: 1.0,
             };
         }
         let steer = self.steer(&input);
+        self.last_steer = steer;
         let (throttle, brake) = self.longitudinal(&input, dt);
         Controls {
             steer,
@@ -172,15 +180,28 @@ mod tests {
     }
 
     #[test]
-    fn urgent_commands_full_brake_and_no_steer_even_mid_turn() {
+    fn urgent_full_brake_holds_the_wheel_rather_than_centring_it() {
         let mut d = Driver::default();
-        let mut input = straight(6.0, 6.0);
-        input.urgent = true;
-        input.desired_velocity = Vec3::new(3.0, 0.0, -3.0); // a turn is requested
-        let c = d.control(input, DT);
+        // A non-urgent turning tick commands a nonzero steer...
+        let turning = DriverInput {
+            desired_velocity: Vec3::new(-1.0, 0.0, -1.0),
+            lookahead: 5.0,
+            heading: Vec3::new(0.0, 0.0, -1.0),
+            speed: 4.0,
+            urgent: false,
+        };
+        let turned = d.control(turning, DT);
+        assert!(turned.steer > 0.0, "precondition: a turn is under way");
+        // ...and an immediately following reflex stop holds that angle, not 0.
+        let mut urgent = turning;
+        urgent.urgent = true;
+        let c = d.control(urgent, DT);
         assert_eq!(c.brake, 1.0);
         assert_eq!(c.throttle, 0.0);
-        assert_eq!(c.steer, 0.0);
+        assert_eq!(
+            c.steer, turned.steer,
+            "urgent must hold the last wheel angle, not centre it"
+        );
     }
 
     #[test]
