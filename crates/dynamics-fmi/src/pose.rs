@@ -12,8 +12,10 @@ pub struct Pose {
 }
 
 /// Read the bound pose outputs off the FMU. Values are FMI Float64, narrowed to
-/// the engine's `f32`.
-pub fn read_pose(fmu: &mut impl FmuInstance, outputs: &ResolvedOutputs) -> Result<Pose, FmuError> {
+/// the engine's `f32`. Takes `&mut dyn` so a boxed, type-erased instance (the
+/// per-entity FMU store in `movement`) can be read; a concrete `&mut T` still
+/// coerces in.
+pub fn read_pose(fmu: &mut dyn FmuInstance, outputs: &ResolvedOutputs) -> Result<Pose, FmuError> {
     Ok(Pose {
         position: Vec3::new(
             fmu.get_output(outputs.x)? as f32,

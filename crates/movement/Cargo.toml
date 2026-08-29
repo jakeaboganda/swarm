@@ -7,3 +7,4 @@ publish.workspace = true
 [dependencies]
 bevy = { workspace = true }
 bevy_rapier3d = { workspace = true }
+dynamics-fmi = { workspace = true }

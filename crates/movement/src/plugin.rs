@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::PhysicsSet;
 
 use crate::carlike::CarLike;
+use crate::fmu_vehicle::{drive_fmu_vehicles, FmuStore};
 use crate::fullvehicle::FullVehicle;
 use crate::holonomic::Holonomic;
 use crate::raycast_vehicle::drive_raycast_vehicles;
@@ -30,10 +31,14 @@ impl Plugin for MovementPlugin {
                 apply_movement_force::<CarLike>,
                 apply_movement_force::<FullVehicle>,
                 drive_raycast_vehicles,
+                drive_fmu_vehicles,
             )
                 .in_set(MovementSet::ApplyForce)
                 .before(PhysicsSet::StepSimulation),
         )
-        .add_systems(Update, face_velocity_direction);
+        .add_systems(Update, face_velocity_direction)
+        // The FMU handle store is `NonSend` (a loaded FMU is `!Send`); ensure it
+        // exists so `drive_fmu_vehicles` can take it even before any FMU spawns.
+        .init_non_send::<FmuStore>();
     }
 }

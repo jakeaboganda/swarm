@@ -7,6 +7,7 @@
 //! knowledge.
 
 mod carlike;
+mod fmu_vehicle;
 mod fullvehicle;
 mod holonomic;
 mod model;
@@ -17,6 +18,9 @@ mod tire;
 mod wheel;
 
 pub use carlike::CarLike;
+pub use fmu_vehicle::{
+    drive_fmu_vehicles, fmu_control_step, FmuStep, FmuStore, FmuVehicle, GroundSample,
+};
 pub use fullvehicle::FullVehicle;
 pub use holonomic::{seek_force, Holonomic};
 pub use model::{Actuation, BodyState, DesiredVelocity, MovementModel, PhysicalYaw};
