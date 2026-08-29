@@ -32,7 +32,7 @@ pub const GROUND_TRUTH_SENSOR: &str = "ground_truth";
 /// The driver-actuator inputs every FMU vehicle exposes, named by the FMU's
 /// own variable names. Mirrors `dynamics_fmi::binding::InputBinding` exactly,
 /// so the `protocol` -> `dynamics-fmi` map is 1:1.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FmuInputs {
     pub steer: String,
     pub throttle: String,
@@ -40,11 +40,13 @@ pub struct FmuInputs {
 }
 
 /// The ground inputs -- the one-way road query the FMU pushes against. v1 is
-/// single-point under the chassis. `height`/`normal_z` are required (a
+/// single-point under the chassis. `height`/`normal_z` are required here (a
 /// vehicle-dynamics FMU has no traction without a surface); `friction` is the
-/// one optional role, since not every FMU exposes it. Mirrors
-/// `dynamics_fmi::binding::GroundBinding`'s field names.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// one optional role, since not every FMU exposes it. Field names match
+/// `dynamics_fmi::binding::GroundBinding`, but that type makes all three
+/// `Option`: the fields required here convert into `Some(..)`. Requiring them
+/// in the schema fails a bad scenario at parse rather than deferring to load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FmuGround {
     pub height: String,
     pub normal_z: String,
@@ -54,7 +56,7 @@ pub struct FmuGround {
 
 /// The pose outputs stamped onto the kinematic body each tick. Mirrors
 /// `dynamics_fmi::binding::OutputBinding`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FmuOutputs {
     pub x: String,
     pub y: String,
@@ -63,11 +65,13 @@ pub struct FmuOutputs {
 }
 
 /// A scenario's role -> variable-name map for an `FmuVehicle` slot, plus the
-/// `.fmu` file path. Mirrors `dynamics_fmi::binding::BindingSpec` exactly (all
-/// variable names `String`), so slice 4's protocol -> dynamics-fmi map is 1:1.
-/// Required present iff the slot's `embodiment` is `FmuVehicle` (validated at
-/// load, server-side -- not here).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `.fmu` file path. Field-for-field it matches `dynamics_fmi::binding::
+/// BindingSpec` (all variable names `String`); the one difference is
+/// `ground.height`/`normal_z` are required here vs `Option` there (see
+/// `FmuGround`), so slice 4's conversion is mechanical (`Some(..)`), not
+/// type-identical. Required present iff the slot's `embodiment` is `FmuVehicle`
+/// (validated at load, server-side -- not here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FmuConfig {
     /// Path to the `.fmu` archive.
     pub path: String,
@@ -350,14 +354,22 @@ mod tests {
 
     #[test]
     fn fmu_config_ground_friction_omits_cleanly() {
-        // `ground.friction` is the one optional role; omitting it must still
-        // parse (the required `height`/`normal_z` stay mandatory).
-        let mut config = sample_fmu_config();
-        config.ground.friction = None;
-        let json = serde_json::to_string(&config).expect("serialize");
-        let back: FmuConfig = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(config, back);
-        assert_eq!(back.ground.friction, None);
+        // `ground.friction` is the one optional role. A binding that OMITS the
+        // key entirely (not `"friction": null`) must still parse, with the
+        // required `height`/`normal_z` present -- this absent-key path is what
+        // `#[serde(default)]` on the field actually guards (a serialize ->
+        // deserialize round-trip of `None` emits `null` and would pass even
+        // without the attribute, so it doesn't exercise this).
+        let json = r#"{
+            "path": "fmus/VanDerPol.fmu",
+            "inputs": { "steer": "delta", "throttle": "ax", "brake": "brk" },
+            "ground": { "height": "z_road", "normal_z": "n_z" },
+            "outputs": { "x": "X", "y": "Y", "z": "Z", "yaw": "psi" }
+        }"#;
+        let config: FmuConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.ground.friction, None);
+        assert_eq!(config.ground.height, "z_road");
+        assert_eq!(config.ground.normal_z, "n_z");
     }
 
     #[test]
