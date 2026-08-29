@@ -18,7 +18,9 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_rapier3d::prelude::{QueryFilter, ReadRapierContext, Velocity};
+use bevy_rapier3d::prelude::{
+    DefaultRapierContext, QueryFilter, RapierConfiguration, ReadRapierContext, Velocity,
+};
 use dynamics_fmi::{
     read_pose, Controls, Driver, DriverInput, FmuError, FmuInstance, Pose, ResolvedBinding,
     StepOutcome,
@@ -169,9 +171,18 @@ fn horizontal(v: Vec3) -> Vec3 {
 /// Uses `NonSendMut<FmuStore>`, which makes this a main-thread system -- exactly
 /// the confinement the `!Send` FMU handle needs. An entity with an `FmuVehicle`
 /// component but no handle in the store (not yet populated) is simply skipped.
+///
+/// Gated on Rapier's `physics_pipeline_active`: unlike the force-based
+/// embodiments (which only write `ExternalForce`, inert while the pipeline is
+/// off), this system advances the FMU's own clock (`do_step`) and writes the
+/// `Transform` directly, so without this gate an FMU vehicle would keep moving
+/// while the sim is meant to be frozen -- before the roster fills, or after the
+/// scenario ends (freeze-and-inspect). The server toggles the flag on run
+/// start/end.
 pub fn drive_fmu_vehicles(
     time: Res<Time>,
     rapier: ReadRapierContext,
+    config: Query<&RapierConfiguration, With<DefaultRapierContext>>,
     mut store: NonSendMut<FmuStore>,
     mut query: Query<(
         Entity,
@@ -181,6 +192,14 @@ pub fn drive_fmu_vehicles(
         &mut FmuVehicle,
     )>,
 ) {
+    // Frozen sim: don't advance any FMU or move its body.
+    if !config
+        .single()
+        .map(|c| c.physics_pipeline_active)
+        .unwrap_or(false)
+    {
+        return;
+    }
     let dt = time.delta_secs();
     let Ok(context) = rapier.single() else {
         return;

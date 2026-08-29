@@ -554,16 +554,32 @@ pub fn spawn_agent(
             // written straight into the Transform each tick, and `PhysicalYaw`
             // keeps `face_velocity_direction` from clobbering it. The `Driver`
             // starts fresh; the resolved binding is validated at load.
+            //
+            // The lane spawn pose (from `agent_spawn_transform`) is only a
+            // starting hint: `drive_fmu_vehicles` overwrites the Transform with
+            // the FMU's own pose output every tick, so the FMU is expected to
+            // emit world-frame coordinates (a scenario-authoring assumption).
             Some(binding) => entity.insert((
                 RigidBody::KinematicPositionBased,
                 LockedAxes::empty(),
                 PhysicalYaw,
+                // Grip for other dynamic bodies that bump this car-sized chassis;
+                // the shared bundle's frictionless `Min` setting is for planar
+                // movers and would zero out any contact's friction here.
+                Friction {
+                    coefficient: 0.8,
+                    combine_rule: CoefficientCombineRule::Average,
+                },
                 FmuVehicle::new(Driver::default(), binding),
             )),
-            // Never expected -- `scenario::validate_fmu` requires the config,
-            // and the caller resolves it before spawning. Fall back to a bare
-            // kinematic body rather than panic if it is somehow absent.
-            None => entity.insert(RigidBody::KinematicPositionBased),
+            // `scenario::validate_fmu` requires the config for this embodiment
+            // and `drain_transport` resolves it (or rejects the join) before
+            // spawning, so reaching here with no binding is a broken invariant,
+            // not recoverable input.
+            None => unreachable!(
+                "FmuVehicle spawned without a resolved binding; validate_fmu + \
+                 load-at-join guarantee it is present"
+            ),
         },
     };
     entity.id()

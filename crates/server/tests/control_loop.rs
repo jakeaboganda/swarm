@@ -13,6 +13,10 @@ use movement::{seek_force, DesiredVelocity, Holonomic};
 use protocol::messages::{
     ClientMessage, Operator, ReflexAction, SensorKind, ServerMessage, Waypoint,
 };
+use protocol::scenario::{
+    AgentSlot, ArenaConfig, Embodiment, FmuConfig, FmuGround, FmuInputs, FmuOutputs, Pace,
+    ScenarioConfig, TimeConfig,
+};
 use protocol::Vec3;
 use server::scenario_state::ScenarioState;
 use support::{rule, scenario, short_range_sensor, with_sensor, Sim};
@@ -70,7 +74,7 @@ fn external_force_is_overwritten_not_accumulated_across_ticks() {
              (accumulating would give roughly {step}x)",
             force.force
         );
-        // The clamp in `seek_force` is the whole point of a force ceiling;
+        // The clamp in `seek_force` is what makes the ceiling a ceiling;
         // accumulation escapes it because the sum is never re-clamped.
         assert!(force.force.length() <= model.brake_max_force + 1e-3);
     }
@@ -384,4 +388,76 @@ fn reflex_fired_carries_the_tick_and_plan_version_of_the_firing_step() {
     assert_eq!(tick, firing_tick);
     assert_eq!(version, plan_version);
     assert_eq!(action, ReflexAction::Brake);
+}
+
+/// A one-slot scenario whose single agent is an `FmuVehicle` bound to `fmu_path`.
+/// The binding names are placeholders -- these tests only exercise the load/bind
+/// failure path, which never gets far enough to touch them.
+fn fmu_scenario(name: &str, fmu_path: &str) -> ScenarioConfig {
+    ScenarioConfig {
+        arena: ArenaConfig {
+            width: 100.0,
+            depth: 100.0,
+        },
+        roster: vec![AgentSlot {
+            name: name.to_string(),
+            embodiment: Embodiment::FmuVehicle,
+            sensors: vec![],
+            color: None,
+            scale: None,
+            fmu: Some(FmuConfig {
+                path: fmu_path.to_string(),
+                inputs: FmuInputs {
+                    steer: "steer".into(),
+                    throttle: "throttle".into(),
+                    brake: "brake".into(),
+                },
+                ground: FmuGround {
+                    height: "z_road".into(),
+                    normal_z: "n_z".into(),
+                    friction: None,
+                },
+                outputs: FmuOutputs {
+                    x: "x".into(),
+                    y: "y".into(),
+                    z: "z".into(),
+                    yaw: "yaw".into(),
+                },
+            }),
+        }],
+        seed: 0,
+        map: None,
+        time: TimeConfig {
+            duration: None,
+            pace: Pace::Afap,
+        },
+    }
+}
+
+#[test]
+fn a_bad_fmu_config_rejects_the_join_without_ending_the_scenario() {
+    // An `FmuVehicle` slot whose `.fmu` cannot be loaded must fail the *join*
+    // cleanly -- an `Error` to the agent, the slot left pending -- and must NOT
+    // panic or end the scenario. A join failure is malformed input, not a
+    // disconnect. (A non-vehicle FMU that fails to *bind* takes the same path;
+    // both are unit-tested in `fmu_setup`. TODO: a happy-path end-to-end test
+    // awaits a committed vehicle-shaped FMU fixture -- VanDerPol cannot bind as
+    // a vehicle.)
+    let mut sim = Sim::new(fmu_scenario("ghost", "does/not/exist.fmu"));
+    let agent = sim.connect();
+    agent.send(ClientMessage::Join {
+        name: "ghost".into(),
+    });
+
+    sim.expect_message(&agent, "a clean FMU load error", |message| match message {
+        ServerMessage::Error { message } => message.contains("ghost").then_some(()),
+        _ => None,
+    });
+
+    // The slot is still unfilled: the scenario never started, and crucially
+    // never ended over a config error.
+    assert_eq!(sim.state(), ScenarioState::WaitingForRoster);
+    // Stepping on does not panic and does not end the scenario.
+    sim.step(5);
+    assert_eq!(sim.state(), ScenarioState::WaitingForRoster);
 }
