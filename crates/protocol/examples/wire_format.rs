@@ -50,6 +50,7 @@ fn main() {
                 sensors: Default::default(),
                 color: None,
                 scale: None,
+                fmu: None,
             },
             AgentSlot {
                 name: "car-2".into(),
@@ -57,6 +58,7 @@ fn main() {
                 sensors: Default::default(),
                 color: None,
                 scale: None,
+                fmu: None,
             },
         ],
         seed: 0,

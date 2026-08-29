@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-/// Movement model an agent's entity is embodied with. `FullVehicle` (full
-/// wheeled physics) is a future addition — this enum grows when it lands.
+/// Movement model an agent's entity is embodied with. Stays `Copy`: it is a
+/// bare discriminant, so any per-embodiment configuration rides its own slot
+/// field (see `AgentSlot::fmu` for `FmuVehicle`), never the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Embodiment {
@@ -16,12 +17,64 @@ pub enum Embodiment {
     /// suspension and tire grip, roll and pitch are real physics. Drives on the
     /// road's terrain (grade, banking). For the automotive world.
     RaycastVehicle,
+    /// Vehicle dynamics computed by an external FMI 3.0 co-simulation FMU. The
+    /// FMU integrates its own pose; the sim imposes it on a kinematic body. The
+    /// FMU path + variable binding ride `AgentSlot::fmu`, required for this
+    /// embodiment (validated at load, server-side).
+    FmuVehicle,
 }
 
 /// The reserved device name every agent can read ground truth from without
 /// declaring a sensor (the zero-friction safety-reflex source). A scenario
 /// `SensorDef` may not reuse this name.
 pub const GROUND_TRUTH_SENSOR: &str = "ground_truth";
+
+/// The driver-actuator inputs every FMU vehicle exposes, named by the FMU's
+/// own variable names. Mirrors `dynamics_fmi::binding::InputBinding` exactly,
+/// so the `protocol` -> `dynamics-fmi` map is 1:1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuInputs {
+    pub steer: String,
+    pub throttle: String,
+    pub brake: String,
+}
+
+/// The ground inputs -- the one-way road query the FMU pushes against. v1 is
+/// single-point under the chassis. `height`/`normal_z` are required (a
+/// vehicle-dynamics FMU has no traction without a surface); `friction` is the
+/// one optional role, since not every FMU exposes it. Mirrors
+/// `dynamics_fmi::binding::GroundBinding`'s field names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuGround {
+    pub height: String,
+    pub normal_z: String,
+    #[serde(default)]
+    pub friction: Option<String>,
+}
+
+/// The pose outputs stamped onto the kinematic body each tick. Mirrors
+/// `dynamics_fmi::binding::OutputBinding`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuOutputs {
+    pub x: String,
+    pub y: String,
+    pub z: String,
+    pub yaw: String,
+}
+
+/// A scenario's role -> variable-name map for an `FmuVehicle` slot, plus the
+/// `.fmu` file path. Mirrors `dynamics_fmi::binding::BindingSpec` exactly (all
+/// variable names `String`), so slice 4's protocol -> dynamics-fmi map is 1:1.
+/// Required present iff the slot's `embodiment` is `FmuVehicle` (validated at
+/// load, server-side -- not here).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuConfig {
+    /// Path to the `.fmu` archive.
+    pub path: String,
+    pub inputs: FmuInputs,
+    pub ground: FmuGround,
+    pub outputs: FmuOutputs,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSlot {
@@ -42,6 +95,11 @@ pub struct AgentSlot {
     /// puck. Does not apply to the raycast-vehicle chassis.
     #[serde(default)]
     pub scale: Option<f32>,
+    /// The `.fmu` path + variable binding, required iff `embodiment` is
+    /// `FmuVehicle` (validated at load, server-side -- not here). Omitted for
+    /// every other embodiment.
+    #[serde(default)]
+    pub fmu: Option<FmuConfig>,
 }
 
 /// A named perceiving device on an agent. A device is a perception *source*;
@@ -177,6 +235,28 @@ pub struct ScenarioConfig {
 mod tests {
     use super::*;
 
+    fn sample_fmu_config() -> FmuConfig {
+        FmuConfig {
+            path: "fmus/VanDerPol.fmu".into(),
+            inputs: FmuInputs {
+                steer: "delta".into(),
+                throttle: "ax".into(),
+                brake: "brk".into(),
+            },
+            ground: FmuGround {
+                height: "z_road".into(),
+                normal_z: "n_z".into(),
+                friction: Some("mu".into()),
+            },
+            outputs: FmuOutputs {
+                x: "X".into(),
+                y: "Y".into(),
+                z: "Z".into(),
+                yaw: "psi".into(),
+            },
+        }
+    }
+
     #[test]
     fn scenario_config_round_trips() {
         let config = ScenarioConfig {
@@ -191,6 +271,7 @@ mod tests {
                     sensors: vec![],
                     color: Some([0.9, 0.1, 0.1]),
                     scale: Some(2.5),
+                    fmu: None,
                 },
                 AgentSlot {
                     name: "car-2".into(),
@@ -216,6 +297,7 @@ mod tests {
                     ],
                     color: None,
                     scale: None,
+                    fmu: None,
                 },
                 AgentSlot {
                     name: "car-3".into(),
@@ -223,6 +305,15 @@ mod tests {
                     sensors: vec![],
                     color: None,
                     scale: None,
+                    fmu: None,
+                },
+                AgentSlot {
+                    name: "car-4".into(),
+                    embodiment: Embodiment::FmuVehicle,
+                    sensors: vec![],
+                    color: None,
+                    scale: None,
+                    fmu: Some(sample_fmu_config()),
                 },
             ],
             seed: 42,
@@ -235,6 +326,38 @@ mod tests {
         let json = serde_json::to_string_pretty(&config).expect("serialize");
         let back: ScenarioConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, back);
+    }
+
+    #[test]
+    fn omitted_fmu_defaults_to_none() {
+        // A slot with no `fmu` block (the common case: every non-FmuVehicle
+        // embodiment) parses to `None`.
+        let json = r#"{
+            "arena": { "width": 50.0, "depth": 50.0 },
+            "roster": [{ "name": "car-1", "embodiment": "holonomic" }]
+        }"#;
+        let config: ScenarioConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.roster[0].fmu, None);
+    }
+
+    #[test]
+    fn fmu_config_round_trips() {
+        let config = sample_fmu_config();
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: FmuConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(config, back);
+    }
+
+    #[test]
+    fn fmu_config_ground_friction_omits_cleanly() {
+        // `ground.friction` is the one optional role; omitting it must still
+        // parse (the required `height`/`normal_z` stay mandatory).
+        let mut config = sample_fmu_config();
+        config.ground.friction = None;
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: FmuConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(config, back);
+        assert_eq!(back.ground.friction, None);
     }
 
     #[test]

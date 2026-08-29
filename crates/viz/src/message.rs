@@ -9,7 +9,7 @@ use crate::scene::{SceneEvent, SceneInit};
 /// Bump it for any change to the shape of these types: nothing outside this
 /// repo consumes this wire, so the schema is broken cleanly rather than kept
 /// compatible, and the failure mode is a viewer that refuses to connect.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Everything the sim streams to a viewer. The scene layer (`SceneInit`,
 /// `Event`, `Frame`) is canonical/physical; `DebugFrame` is the optional
@@ -355,6 +355,19 @@ mod tests {
             decode::<ServerToViewer>(&encode(&debug)).expect("decode"),
             debug
         );
+    }
+
+    #[test]
+    fn fmu_vehicle_embodiment_round_trips() {
+        // FmuVehicle is drawn as a car, same tree shape as any other vehicle
+        // embodiment; only the `embodiment` tag differs.
+        let mut descriptor = sample_descriptor();
+        descriptor.kind = EntityKind::Agent {
+            embodiment: Embodiment::FmuVehicle,
+        };
+        let event = ServerToViewer::Event(SceneEvent::EntitySpawned(descriptor.clone()));
+        let back: ServerToViewer = decode(&encode(&event)).expect("decode");
+        assert_eq!(event, back);
     }
 
     #[test]

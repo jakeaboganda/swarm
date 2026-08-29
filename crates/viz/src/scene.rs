@@ -173,6 +173,9 @@ pub enum Embodiment {
     CarLike,
     FullVehicle,
     RaycastVehicle,
+    /// Vehicle dynamics computed by an external FMI 3.0 co-simulation FMU,
+    /// drawn as a car.
+    FmuVehicle,
 }
 
 /// What kind of thing an entity is. `Static` geometry never appears in
