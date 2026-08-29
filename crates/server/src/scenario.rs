@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use anyhow::{bail, Context, Result};
 use bevy::prelude::*;
-use protocol::scenario::{AgentSlot, ScenarioConfig, SensorSource, GROUND_TRUTH_SENSOR};
+use protocol::scenario::{
+    AgentSlot, Embodiment, ScenarioConfig, SensorSource, GROUND_TRUTH_SENSOR,
+};
 
 #[derive(Resource)]
 pub struct Roster(pub ScenarioConfig);
@@ -32,8 +34,33 @@ fn validate(config: &ScenarioConfig) -> Result<()> {
             bail!("duplicate roster name: {}", slot.name);
         }
         validate_sensors(slot)?;
+        validate_fmu(slot)?;
     }
     Ok(())
+}
+
+/// An `fmu` block is required for -- and only for -- an `FmuVehicle` slot. A
+/// missing one leaves the FMU embodiment with nothing to load; a stray one on
+/// any other embodiment is a config mistake (the binding would be silently
+/// ignored). The FMU is not loaded here (that needs the fmi runtime and happens
+/// at spawn); this is the cheap present-iff shape check at parse time.
+fn validate_fmu(slot: &AgentSlot) -> Result<()> {
+    match (slot.embodiment, slot.fmu.is_some()) {
+        (Embodiment::FmuVehicle, false) => {
+            bail!(
+                "agent '{}' is an fmu_vehicle but has no `fmu` config",
+                slot.name
+            )
+        }
+        (embodiment, true) if embodiment != Embodiment::FmuVehicle => {
+            bail!(
+                "agent '{}' has an `fmu` config but embodiment is {:?}, not fmu_vehicle",
+                slot.name,
+                embodiment
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Validate an agent's declared devices: unique, non-reserved names, and a
@@ -124,6 +151,7 @@ mod tests {
                     sensors: Default::default(),
                     color: None,
                     scale: None,
+                    fmu: None,
                 })
                 .collect(),
             seed: 0,
@@ -132,9 +160,56 @@ mod tests {
         }
     }
 
+    fn fmu_config() -> protocol::scenario::FmuConfig {
+        use protocol::scenario::{FmuConfig, FmuGround, FmuInputs, FmuOutputs};
+        FmuConfig {
+            path: "car.fmu".into(),
+            inputs: FmuInputs {
+                steer: "delta".into(),
+                throttle: "ax".into(),
+                brake: "brk".into(),
+            },
+            ground: FmuGround {
+                height: "z_road".into(),
+                normal_z: "n_z".into(),
+                friction: None,
+            },
+            outputs: FmuOutputs {
+                x: "X".into(),
+                y: "Y".into(),
+                z: "Z".into(),
+                yaw: "psi".into(),
+            },
+        }
+    }
+
     #[test]
     fn unique_roster_is_accepted() {
         assert!(validate(&config(&["car-1", "car-2"])).is_ok());
+    }
+
+    #[test]
+    fn an_fmu_vehicle_with_a_config_is_accepted() {
+        let mut c = config(&["car-1"]);
+        c.roster[0].embodiment = Embodiment::FmuVehicle;
+        c.roster[0].fmu = Some(fmu_config());
+        assert!(validate(&c).is_ok());
+    }
+
+    #[test]
+    fn an_fmu_vehicle_without_a_config_is_rejected() {
+        let mut c = config(&["car-1"]);
+        c.roster[0].embodiment = Embodiment::FmuVehicle;
+        c.roster[0].fmu = None;
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn an_fmu_config_on_a_non_fmu_embodiment_is_rejected() {
+        let mut c = config(&["car-1"]);
+        // Embodiment stays Holonomic; a stray fmu block is a config mistake.
+        c.roster[0].fmu = Some(fmu_config());
+        assert!(validate(&c).is_err());
     }
 
     #[test]

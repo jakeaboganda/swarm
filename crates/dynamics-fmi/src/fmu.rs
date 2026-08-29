@@ -48,14 +48,17 @@ pub struct Fmu {
 }
 
 impl Fmu {
-    /// Instance name passed to `fmi3InstantiateCoSimulation`.
-    const INSTANCE_NAME: &'static str = "dynamics-fmi";
-
     /// Load a `.fmu`, instantiate it for FMI 3.0 Co-Simulation, and run it
     /// through initialization mode so it is ready to step. Communication starts
     /// at `start_time` (usually 0.0) -- pass the matching `current_time` to the
-    /// first [`FmuInstance::do_step`].
-    pub fn load(path: impl AsRef<Path>, start_time: f64) -> Result<Self, LoadError> {
+    /// first [`FmuInstance::do_step`]. `instance_name` identifies this instance
+    /// in the FMU's own log/error messages; pass the agent/slot id so a message
+    /// from one of several FMU vehicles in a scenario is attributable.
+    pub fn load(
+        path: impl AsRef<Path>,
+        start_time: f64,
+        instance_name: &str,
+    ) -> Result<Self, LoadError> {
         let import: Fmi3Import = fmi::import::from_path(path)?;
         let model_description = build_model_description(import.model_description());
 
@@ -63,7 +66,7 @@ impl Fmu {
         // is in Step Mode directly, ready for do_step. early_return_allowed =
         // false: full communication steps (our v1 assumption).
         let mut instance = import.instantiate_cs(
-            Self::INSTANCE_NAME,
+            instance_name,
             false, // visible
             false, // logging_on
             false, // event_mode_used

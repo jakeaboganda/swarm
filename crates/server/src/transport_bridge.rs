@@ -1,8 +1,10 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{DefaultRapierContext, RapierConfiguration, Velocity};
+use movement::FmuStore;
 use protocol::messages::{
     AgentId, ClientMessage, EntityState, ServerMessage, StateSnapshot, Waypoint,
 };
+use protocol::scenario::Embodiment;
 use protocol::Vec3 as WireVec3;
 use transport::{ConnectionEvent, TransportHandle};
 
@@ -103,6 +105,9 @@ pub fn drain_transport(
     viz_res: Res<crate::viz_broadcast::Viz>,
     map_world: Res<MapWorld>,
     grace: Res<ReconnectGrace>,
+    // The FMU handle store is `NonSend` (a loaded FMU is `!Send`), so populating
+    // it at join makes this a main-thread system -- which it already is.
+    mut fmu_store: NonSendMut<FmuStore>,
     mut query: Query<(&Transform, &Velocity, &mut Plan, &mut Reflexes, &AgentName)>,
 ) {
     // The static road prior, delivered with every `Joined`. `None` in the arena
@@ -232,6 +237,43 @@ pub fn drain_transport(
                             .color
                             .map(|[r, g, b]| viz::Color { r, g, b });
                     let scale = roster.0.roster[index].scale.unwrap_or(1.0);
+                    // An FmuVehicle slot loads + resolves its FMU now, at spawn.
+                    // A missing/incompatible `.fmu` or an unresolvable binding is
+                    // a clean error sent back to the agent; the slot stays pending
+                    // (fixable + rejoinable) rather than half-spawning an entity
+                    // or panicking. `validate_fmu` already guarantees the config
+                    // is present for this embodiment.
+                    let (fmu_handle, fmu_binding) = if embodiment == Embodiment::FmuVehicle {
+                        match &roster.0.roster[index].fmu {
+                            Some(cfg) => match crate::fmu_setup::load_fmu_vehicle(cfg, &name) {
+                                Ok((fmu, binding)) => (Some(fmu), Some(binding)),
+                                Err(err) => {
+                                    transport.0.send(
+                                        connection,
+                                        ServerMessage::Error {
+                                            message: format!(
+                                                "FMU setup failed for '{name}': {err}"
+                                            ),
+                                        },
+                                    );
+                                    continue;
+                                }
+                            },
+                            None => {
+                                transport.0.send(
+                                    connection,
+                                    ServerMessage::Error {
+                                        message: format!(
+                                            "'{name}' is an fmu_vehicle with no fmu config"
+                                        ),
+                                    },
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        (None, None)
+                    };
                     let base = spawn_position(index, roster.0.roster.len());
                     let transform =
                         agent_spawn_transform(embodiment, base, map_world.0.as_ref(), scale, index);
@@ -245,7 +287,13 @@ pub fn drain_transport(
                         sensors,
                         color,
                         scale,
+                        fmu_binding,
                     );
+                    // The FMU handle is keyed by the spawned entity; dropping it
+                    // (on despawn) frees the instance (see `free_despawned_fmus`).
+                    if let Some(fmu) = fmu_handle {
+                        fmu_store.insert(entity, Box::new(fmu));
+                    }
                     registry.insert(connection, name.clone(), entity);
                     pending.0.retain(|pending_name| pending_name != &name);
 

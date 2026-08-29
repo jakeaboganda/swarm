@@ -1,6 +1,10 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use movement::{CarLike, DesiredVelocity, FullVehicle, Holonomic, PhysicalYaw, RaycastVehicle};
+use dynamics_fmi::{Driver, ResolvedBinding};
+use movement::{
+    CarLike, DesiredVelocity, FmuStore, FmuVehicle, FullVehicle, Holonomic, PhysicalYaw,
+    RaycastVehicle,
+};
 use protocol::map::{LaneData, LaneDirection, LaneKind as WireLaneKind, MapData};
 use protocol::scenario::{ArenaConfig, Embodiment, SensorDef, SensorSource};
 use transport::ConnectionId;
@@ -213,7 +217,12 @@ pub fn agent_spawn_transform(
     index: usize,
 ) -> Transform {
     let rest_half = (AGENT_RADIUS + AGENT_HALF_HEIGHT) * scale;
-    if !matches!(embodiment, Embodiment::RaycastVehicle) {
+    // An FMU vehicle is a car too: place it in a lane like the raycast vehicle,
+    // not dropped downroad as an obstacle.
+    if !matches!(
+        embodiment,
+        Embodiment::RaycastVehicle | Embodiment::FmuVehicle
+    ) {
         // A non-car in a road world is an obstacle: drop it onto the lane
         // downroad of the car (heavy scaled bodies can't reliably drive there
         // themselves). Arena world: its roster base, lifted clear of the ground.
@@ -369,6 +378,10 @@ pub fn spawn_agent(
     sensors: Vec<SensorDef>,
     color: Option<viz::Color>,
     scale: f32,
+    // The resolved FMU binding, present iff `embodiment` is `FmuVehicle`. The
+    // caller loads the FMU and inserts its handle into the `FmuStore` keyed by
+    // the returned `Entity`; this only builds the plain-data component.
+    fmu: Option<ResolvedBinding>,
 ) -> Entity {
     let color = color.unwrap_or(AGENT_COLOR);
     // The debug envelope shows the first simulated device (agents usually have
@@ -384,8 +397,13 @@ pub fn spawn_agent(
         });
     // A raycast vehicle is a box that rides on suspension; the planar
     // embodiments are capsules. The spawn pose is computed by the caller (see
-    // `agent_spawn_transform`, which places a car in its lane).
-    let is_car = matches!(embodiment, Embodiment::RaycastVehicle);
+    // `agent_spawn_transform`, which places a car in its lane). An FMU vehicle
+    // is also a car (same box collider + perception radius); its pose is stamped
+    // from the FMU, not the suspension rig.
+    let is_car = matches!(
+        embodiment,
+        Embodiment::RaycastVehicle | Embodiment::FmuVehicle
+    );
     // Perception/TTC size: a car is a ~1 m sphere; a planar body is its scaled
     // capsule radius. Threaded so an obstacle is perceived at its true size.
     let body_radius = if is_car {
@@ -528,8 +546,40 @@ pub fn spawn_agent(
                 combine_rule: CoefficientCombineRule::Average,
             },
         )),
+        Embodiment::FmuVehicle => match fmu {
+            // The FMU integrates its own pose; we impose it on a kinematic
+            // position-based body (overriding the shared bundle's `Dynamic`), so
+            // it shows up in perception/collision and shoves dynamic bodies but
+            // is never shoved. Rotation is unlocked because the FMU's yaw is
+            // written straight into the Transform each tick, and `PhysicalYaw`
+            // keeps `face_velocity_direction` from clobbering it. The `Driver`
+            // starts fresh; the resolved binding is validated at load.
+            Some(binding) => entity.insert((
+                RigidBody::KinematicPositionBased,
+                LockedAxes::empty(),
+                PhysicalYaw,
+                FmuVehicle::new(Driver::default(), binding),
+            )),
+            // Never expected -- `scenario::validate_fmu` requires the config,
+            // and the caller resolves it before spawning. Fall back to a bare
+            // kinematic body rather than panic if it is somehow absent.
+            None => entity.insert(RigidBody::KinematicPositionBased),
+        },
     };
     entity.id()
+}
+
+/// Frees an FMU instance from the `NonSend` [`FmuStore`] when its entity is
+/// despawned (scenario end / reconnect-slot cleanup / off-road), catching every
+/// despawn path in one place rather than each call site remembering to. Runs
+/// every frame so `RemovedComponents` events are drained before they age out.
+pub fn free_despawned_fmus(
+    mut removed: RemovedComponents<FmuVehicle>,
+    mut store: NonSendMut<FmuStore>,
+) {
+    for entity in removed.read() {
+        store.remove(entity);
+    }
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ const DT: f64 = 1.0 / 64.0;
 
 #[test]
 fn vanderpol_loads_and_advances() {
-    let mut fmu = Fmu::load(fixture(), 0.0).expect("load VanDerPol.fmu");
+    let mut fmu = Fmu::load(fixture(), 0.0, "vanderpol-smoke").expect("load VanDerPol.fmu");
 
     // x0 is a Float64 output that starts at 2.0 (per the model description).
     let x0 = fmu
@@ -75,7 +75,7 @@ fn vanderpol_loads_and_advances() {
 #[test]
 fn model_description_maps_types_and_causalities() {
     // Confirms real XML parsing + our schema mapping produced the right shapes.
-    let fmu = Fmu::load(fixture(), 0.0).expect("load");
+    let fmu = Fmu::load(fixture(), 0.0, "vanderpol-md").expect("load");
     let md = fmu.model_description();
 
     let mu = md.variable("mu").expect("mu");

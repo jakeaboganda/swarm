@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 protocol = { workspace = true }
 movement = { workspace = true }
+dynamics-fmi = { workspace = true }
 sensors = { workspace = true }
 transport = { workspace = true }
 viz = { workspace = true }

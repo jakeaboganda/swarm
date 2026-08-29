@@ -199,6 +199,10 @@ pub fn build_app(config: SimConfig) -> App {
         )
         // Register agents connecting on the perception port, in all states.
         .add_systems(Update, drain_perception_events)
+        // Free FMU handles for despawned vehicles, in all states (despawns
+        // happen both pre-start and while Running). Drains RemovedComponents
+        // every frame before the events age out.
+        .add_systems(Update, world::free_despawned_fmus)
         .add_systems(
             OnEnter(ScenarioState::Running),
             (activate_physics, broadcast_state),

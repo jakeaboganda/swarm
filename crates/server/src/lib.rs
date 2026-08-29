@@ -9,6 +9,7 @@ pub mod agent;
 pub mod app;
 pub mod arbitration;
 pub mod events;
+pub mod fmu_setup;
 pub mod inbound;
 pub mod perception_router;
 pub mod pulse;

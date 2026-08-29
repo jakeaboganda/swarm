@@ -54,6 +54,7 @@ pub fn scenario(names: &[&str]) -> ScenarioConfig {
                 sensors: vec![],
                 color: None,
                 scale: None,
+                fmu: None,
             })
             .collect(),
         seed: 0,

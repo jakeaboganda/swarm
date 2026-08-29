@@ -40,6 +40,7 @@ pub fn viz_embodiment(embodiment: protocol::scenario::Embodiment) -> viz::Embodi
         protocol::scenario::Embodiment::CarLike => viz::Embodiment::CarLike,
         protocol::scenario::Embodiment::FullVehicle => viz::Embodiment::FullVehicle,
         protocol::scenario::Embodiment::RaycastVehicle => viz::Embodiment::RaycastVehicle,
+        protocol::scenario::Embodiment::FmuVehicle => viz::Embodiment::FmuVehicle,
     }
 }
 
