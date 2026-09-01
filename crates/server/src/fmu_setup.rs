@@ -30,11 +30,12 @@ pub enum FmuSetupError {
 }
 
 /// Map the protocol `FmuConfig` onto `dynamics_fmi::BindingSpec`. Field names
-/// match one-for-one; the only shape difference is ground `height`/`normal_z`,
-/// which are required `String` in the schema and become `Some(..)` here (the
-/// `GroundBinding` treats all three ground roles as optional). `friction`
-/// passes straight through. This is the single place the two crates' names are
-/// tied together, so `binding_spec_maps_every_role` guards it.
+/// match one-for-one; the only shape difference is ground `height`, required
+/// `String` in the schema and wrapped in `Some(..)` here (the `GroundBinding`
+/// treats all three ground roles as optional). `normal_z` and `friction` are
+/// already `Option` in the schema and pass straight through. This is the single
+/// place the two crates' names are tied together, so `binding_spec_maps_every_role`
+/// guards it.
 pub fn to_binding_spec(cfg: &FmuConfig) -> BindingSpec {
     BindingSpec {
         inputs: InputBinding {
@@ -44,7 +45,7 @@ pub fn to_binding_spec(cfg: &FmuConfig) -> BindingSpec {
         },
         ground: GroundBinding {
             height: Some(cfg.ground.height.clone()),
-            normal_z: Some(cfg.ground.normal_z.clone()),
+            normal_z: cfg.ground.normal_z.clone(),
             friction: cfg.ground.friction.clone(),
         },
         outputs: OutputBinding {
@@ -102,7 +103,7 @@ mod tests {
             },
             ground: FmuGround {
                 height: "z_road".into(),
-                normal_z: "n_z".into(),
+                normal_z: Some("n_z".into()),
                 friction: friction.map(Into::into),
             },
             outputs: FmuOutputs {
@@ -120,10 +121,9 @@ mod tests {
         assert_eq!(spec.inputs.steer, "delta");
         assert_eq!(spec.inputs.throttle, "ax");
         assert_eq!(spec.inputs.brake, "brk");
-        // Required schema fields become Some(..).
+        // Required `height` becomes Some(..); optional normal_z/friction pass through.
         assert_eq!(spec.ground.height.as_deref(), Some("z_road"));
         assert_eq!(spec.ground.normal_z.as_deref(), Some("n_z"));
-        // Optional friction passes straight through.
         assert_eq!(spec.ground.friction.as_deref(), Some("mu"));
         assert_eq!(spec.outputs.x, "X");
         assert_eq!(spec.outputs.y, "Y");
@@ -135,9 +135,21 @@ mod tests {
     fn omitted_friction_maps_to_none() {
         let spec = to_binding_spec(&config("whatever.fmu", None));
         assert_eq!(spec.ground.friction, None);
-        // The required ground roles are still bound.
+        // `height` is always bound; normal_z here happens to be present.
         assert!(spec.ground.height.is_some());
         assert!(spec.ground.normal_z.is_some());
+    }
+
+    #[test]
+    fn omitted_normal_z_maps_to_none() {
+        // A planar FMU (Open-Car-Dynamics) has no surface-normal input, so a
+        // config with `normal_z: None` must map to `None` in the binding (not a
+        // dangling name that fails to resolve). `height` stays required.
+        let mut cfg = config("whatever.fmu", None);
+        cfg.ground.normal_z = None;
+        let spec = to_binding_spec(&cfg);
+        assert_eq!(spec.ground.normal_z, None);
+        assert!(spec.ground.height.is_some());
     }
 
     #[test]

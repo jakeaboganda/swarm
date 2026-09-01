@@ -34,7 +34,16 @@ impl Plugin for MovementPlugin {
                 drive_fmu_vehicles,
             )
                 .in_set(MovementSet::ApplyForce)
-                .before(PhysicsSet::StepSimulation),
+                // Before `SyncBackend`, not just `StepSimulation`: `SyncBackend`
+                // is where Bevy state is pushed INTO Rapier (a kinematic body's
+                // target pose, a dynamic body's forces). `drive_fmu_vehicles`
+                // writes the FMU pose straight onto a `KinematicPositionBased`
+                // Transform -- if that write lands after `SyncBackend`, Rapier
+                // steps to the pre-write target and `Writeback` clobbers the FMU
+                // pose, freezing the car at spawn. Running before `SyncBackend`
+                // also lets the force-based models set `ExternalForce` a tick
+                // earlier (correct, not just harmless).
+                .before(PhysicsSet::SyncBackend),
         )
         .add_systems(Update, face_velocity_direction)
         // The FMU handle store is `NonSend` (a loaded FMU is `!Send`); ensure it

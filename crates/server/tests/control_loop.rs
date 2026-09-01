@@ -414,7 +414,7 @@ fn fmu_scenario(name: &str, fmu_path: &str) -> ScenarioConfig {
                 },
                 ground: FmuGround {
                     height: "z_road".into(),
-                    normal_z: "n_z".into(),
+                    normal_z: None,
                     friction: None,
                 },
                 outputs: FmuOutputs {
@@ -434,15 +434,114 @@ fn fmu_scenario(name: &str, fmu_path: &str) -> ScenarioConfig {
     }
 }
 
+/// The committed Open-Car-Dynamics FMU fixture (a real vehicle-dynamics model
+/// wrapped as FMI 3.0 CS). Absolute path from this crate's manifest dir.
+const OCD_FMU: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/opencardynamics-fmu/opencardynamics.fmu"
+);
+
+/// A one-slot scenario driving the real OCD FMU. The binding uses OCD's actual
+/// variable names; `normal_z` is omitted (OCD, a planar model, has none).
+fn ocd_scenario(name: &str) -> ScenarioConfig {
+    ScenarioConfig {
+        arena: ArenaConfig {
+            width: 200.0,
+            depth: 200.0,
+        },
+        roster: vec![AgentSlot {
+            name: name.to_string(),
+            embodiment: Embodiment::FmuVehicle,
+            sensors: vec![],
+            color: None,
+            scale: None,
+            fmu: Some(FmuConfig {
+                path: OCD_FMU.to_string(),
+                inputs: FmuInputs {
+                    steer: "steer".into(),
+                    throttle: "throttle".into(),
+                    brake: "brake".into(),
+                },
+                ground: FmuGround {
+                    height: "ground_height".into(),
+                    normal_z: None,
+                    friction: Some("ground_friction".into()),
+                },
+                outputs: FmuOutputs {
+                    x: "x".into(),
+                    y: "y".into(),
+                    z: "z".into(),
+                    yaw: "yaw".into(),
+                },
+            }),
+        }],
+        seed: 0,
+        map: None,
+        time: TimeConfig {
+            duration: None,
+            pace: Pace::Afap,
+        },
+    }
+}
+
+#[test]
+fn an_fmu_vehicle_driven_by_open_car_dynamics_actually_moves() {
+    // End-to-end: the real OCD FMU loads + binds at join (so `join` gets
+    // `Joined`, not `Error`), and under a forward plan the model integrates and
+    // moves the kinematic body substantially. We assert only that the car is
+    // DRIVEN -- not that it tracks the waypoint or moves along a chosen axis:
+    // OCD emits its OWN frame (x-fwd, y-left, z-up) and the FmuVehicle path
+    // stamps that straight onto the Transform, so direction/turning are wrong
+    // until the frame is reconciled (a follow-up). This pins "OCD is genuinely
+    // driving the body in-sim".
+    let mut sim = Sim::new(ocd_scenario("ocd-car"));
+    let agent = sim.join("ocd-car"); // asserts Joined -- the FMU loaded + bound
+    sim.expect("the scenario to start", |sim| {
+        (sim.state() == ScenarioState::Running).then_some(())
+    });
+
+    // Drive straight ahead, fast, so the longitudinal controller commands real
+    // throttle from a standstill.
+    agent.send(ClientMessage::SubmitPlan {
+        waypoints: vec![waypoint(150.0, 0.0, 20.0)],
+    });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("ocd-car") == 1).then_some(())
+    });
+
+    // One tick to let the FMU stamp its first pose (OCD's absolute pose from its
+    // own origin), then measure displacement from there over the run.
+    sim.step(1);
+    let start = sim.position_of("ocd-car");
+    sim.step(60);
+    let mid = sim.position_of("ocd-car");
+    sim.step(60);
+    let end = sim.position_of("ocd-car");
+
+    let mid_d = (mid - start).length();
+    let end_d = (end - start).length();
+    // Observed frame behavior, recorded for the frame-reconciliation follow-up.
+    eprintln!("OCD drive: start={start:?} mid={mid:?} end={end:?} mid_d={mid_d} end_d={end_d}");
+
+    assert!(
+        end_d > 1.0,
+        "OCD FMU car barely moved ({end_d} m) -- the model is not being driven"
+    );
+    assert!(
+        end_d > mid_d,
+        "displacement did not grow ({mid_d} -> {end_d}) -- car not accelerating forward"
+    );
+}
+
 #[test]
 fn a_bad_fmu_config_rejects_the_join_without_ending_the_scenario() {
     // An `FmuVehicle` slot whose `.fmu` cannot be loaded must fail the *join*
     // cleanly -- an `Error` to the agent, the slot left pending -- and must NOT
     // panic or end the scenario. A join failure is malformed input, not a
     // disconnect. (A non-vehicle FMU that fails to *bind* takes the same path;
-    // both are unit-tested in `fmu_setup`. TODO: a happy-path end-to-end test
-    // awaits a committed vehicle-shaped FMU fixture -- VanDerPol cannot bind as
-    // a vehicle.)
+    // both are unit-tested in `fmu_setup`. The happy path -- a real vehicle FMU
+    // that loads + binds + drives -- is
+    // `an_fmu_vehicle_driven_by_open_car_dynamics_actually_moves` above.)
     let mut sim = Sim::new(fmu_scenario("ghost", "does/not/exist.fmu"));
     let agent = sim.connect();
     agent.send(ClientMessage::Join {

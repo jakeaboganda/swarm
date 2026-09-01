@@ -171,7 +171,7 @@ mod tests {
             },
             ground: FmuGround {
                 height: "z_road".into(),
-                normal_z: "n_z".into(),
+                normal_z: Some("n_z".into()),
                 friction: None,
             },
             outputs: FmuOutputs {
