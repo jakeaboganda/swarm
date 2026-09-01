@@ -1,0 +1,3 @@
+# Build outputs; the committed artifact is opencardynamics.fmu (tracked).
+build/
+_work/
