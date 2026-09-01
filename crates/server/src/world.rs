@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use dynamics_fmi::{Driver, ResolvedBinding};
+use dynamics_fmi::{Driver, FmuFrame, ResolvedBinding};
 use movement::{
     CarLike, DesiredVelocity, FmuStore, FmuVehicle, FullVehicle, Holonomic, PhysicalYaw,
     RaycastVehicle,
@@ -378,10 +378,13 @@ pub fn spawn_agent(
     sensors: Vec<SensorDef>,
     color: Option<viz::Color>,
     scale: f32,
-    // The resolved FMU binding, present iff `embodiment` is `FmuVehicle`. The
-    // caller loads the FMU and inserts its handle into the `FmuStore` keyed by
-    // the returned `Entity`; this only builds the plain-data component.
-    fmu: Option<ResolvedBinding>,
+    // The resolved FMU binding + its pose frame, present iff `embodiment` is
+    // `FmuVehicle`. The caller loads the FMU and inserts its handle into the
+    // `FmuStore` keyed by the returned `Entity`; this only builds the
+    // plain-data component. `transform` (the spawn pose already computed by
+    // `agent_spawn_transform`) doubles as the rebase anchor `drive_fmu_vehicles`
+    // composes the FMU's own pose onto.
+    fmu: Option<(ResolvedBinding, FmuFrame)>,
 ) -> Entity {
     let color = color.unwrap_or(AGENT_COLOR);
     // The debug envelope shows the first simulated device (agents usually have
@@ -555,23 +558,32 @@ pub fn spawn_agent(
             // keeps `face_velocity_direction` from clobbering it. The `Driver`
             // starts fresh; the resolved binding is validated at load.
             //
-            // The lane spawn pose (from `agent_spawn_transform`) is only a
-            // starting hint: `drive_fmu_vehicles` overwrites the Transform with
-            // the FMU's own pose output every tick, so the FMU is expected to
-            // emit world-frame coordinates (a scenario-authoring assumption).
-            Some(binding) => entity.insert((
-                RigidBody::KinematicPositionBased,
-                LockedAxes::empty(),
-                PhysicalYaw,
-                // Grip for other dynamic bodies that bump this car-sized chassis;
-                // the shared bundle's frictionless `Min` setting is for planar
-                // movers and would zero out any contact's friction here.
-                Friction {
-                    coefficient: 0.8,
-                    combine_rule: CoefficientCombineRule::Average,
-                },
-                FmuVehicle::new(Driver::default(), binding),
-            )),
+            // The FMU emits its OWN absolute pose from its OWN origin, in its
+            // OWN frame -- `drive_fmu_vehicles` remaps it (`frame`) and rebases
+            // it onto this spawn pose every tick, so the lane/arena placement
+            // computed by `agent_spawn_transform` is where the vehicle actually
+            // starts (and drives FROM), not just a discarded starting hint.
+            Some((binding, frame)) => {
+                let spawn_pos = transform.translation;
+                // The spawn transform is yaw-only (no pitch/roll: it comes from
+                // `looking_to(heading, Vec3::Y)` with a horizontal heading), so
+                // `YXZ` Euler decomposition's first angle is exactly the yaw.
+                let (spawn_yaw, _pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);
+                entity.insert((
+                    RigidBody::KinematicPositionBased,
+                    LockedAxes::empty(),
+                    PhysicalYaw,
+                    // Grip for other dynamic bodies that bump this car-sized
+                    // chassis; the shared bundle's frictionless `Min` setting is
+                    // for planar movers and would zero out any contact's
+                    // friction here.
+                    Friction {
+                        coefficient: 0.8,
+                        combine_rule: CoefficientCombineRule::Average,
+                    },
+                    FmuVehicle::new(Driver::default(), binding, frame, spawn_pos, spawn_yaw),
+                ))
+            }
             // `scenario::validate_fmu` requires the config for this embodiment
             // and `drain_transport` resolves it (or rejects the join) before
             // spawning, so reaching here with no binding is a broken invariant,

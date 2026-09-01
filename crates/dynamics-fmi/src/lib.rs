@@ -9,6 +9,7 @@
 mod binding;
 mod driver;
 mod fmu;
+mod frame;
 mod instance;
 mod model;
 mod pose;
@@ -19,6 +20,7 @@ pub use binding::{
 };
 pub use driver::{Controls, Driver, DriverConfig, DriverInput};
 pub use fmu::{Fmu, LoadError};
+pub use frame::{to_sim_local, FmuFrame};
 pub use instance::{FmuError, FmuInstance, StepOutcome, ValueReference};
 pub use model::{BaseType, Causality, ModelDescription, Variable};
 pub use pose::{read_pose, Pose};

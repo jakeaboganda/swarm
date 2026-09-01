@@ -14,8 +14,8 @@ use protocol::messages::{
     ClientMessage, Operator, ReflexAction, SensorKind, ServerMessage, Waypoint,
 };
 use protocol::scenario::{
-    AgentSlot, ArenaConfig, Embodiment, FmuConfig, FmuGround, FmuInputs, FmuOutputs, Pace,
-    ScenarioConfig, TimeConfig,
+    AgentSlot, ArenaConfig, Embodiment, FmuConfig, FmuFrame, FmuGround, FmuInputs, FmuOutputs,
+    Pace, ScenarioConfig, TimeConfig,
 };
 use protocol::Vec3;
 use server::scenario_state::ScenarioState;
@@ -423,6 +423,7 @@ fn fmu_scenario(name: &str, fmu_path: &str) -> ScenarioConfig {
                     z: "z".into(),
                     yaw: "yaw".into(),
                 },
+                frame: FmuFrame::SimYUp,
             }),
         }],
         seed: 0,
@@ -441,40 +442,57 @@ const OCD_FMU: &str = concat!(
     "/../../fixtures/opencardynamics-fmu/opencardynamics.fmu"
 );
 
-/// A one-slot scenario driving the real OCD FMU. The binding uses OCD's actual
-/// variable names; `normal_z` is omitted (OCD, a planar model, has none).
-fn ocd_scenario(name: &str) -> ScenarioConfig {
+/// A two-slot scenario: a plain holonomic "anchor" (so the OCD car lands at
+/// roster index 1, i.e. a NONZERO spawn x -- see `spawn_position` -- which is
+/// what makes the tick-1-teleport-to-origin regression distinguishable from a
+/// correct spawn-rebase; a single-slot roster spawns at x=0 either way) plus
+/// the real OCD FMU car. The binding uses OCD's actual variable names;
+/// `normal_z` is omitted (OCD, a planar model, has none); `frame` is
+/// `ocd_z_up` (OCD's x-fwd/y-left/z-up convention -- see `dynamics_fmi::
+/// FmuFrame`).
+fn ocd_scenario(anchor_name: &str, car_name: &str) -> ScenarioConfig {
     ScenarioConfig {
         arena: ArenaConfig {
             width: 200.0,
             depth: 200.0,
         },
-        roster: vec![AgentSlot {
-            name: name.to_string(),
-            embodiment: Embodiment::FmuVehicle,
-            sensors: vec![],
-            color: None,
-            scale: None,
-            fmu: Some(FmuConfig {
-                path: OCD_FMU.to_string(),
-                inputs: FmuInputs {
-                    steer: "steer".into(),
-                    throttle: "throttle".into(),
-                    brake: "brake".into(),
-                },
-                ground: FmuGround {
-                    height: "ground_height".into(),
-                    normal_z: None,
-                    friction: Some("ground_friction".into()),
-                },
-                outputs: FmuOutputs {
-                    x: "x".into(),
-                    y: "y".into(),
-                    z: "z".into(),
-                    yaw: "yaw".into(),
-                },
-            }),
-        }],
+        roster: vec![
+            AgentSlot {
+                name: anchor_name.to_string(),
+                embodiment: Embodiment::Holonomic,
+                sensors: vec![],
+                color: None,
+                scale: None,
+                fmu: None,
+            },
+            AgentSlot {
+                name: car_name.to_string(),
+                embodiment: Embodiment::FmuVehicle,
+                sensors: vec![],
+                color: None,
+                scale: None,
+                fmu: Some(FmuConfig {
+                    path: OCD_FMU.to_string(),
+                    inputs: FmuInputs {
+                        steer: "steer".into(),
+                        throttle: "throttle".into(),
+                        brake: "brake".into(),
+                    },
+                    ground: FmuGround {
+                        height: "ground_height".into(),
+                        normal_z: None,
+                        friction: Some("ground_friction".into()),
+                    },
+                    outputs: FmuOutputs {
+                        x: "x".into(),
+                        y: "y".into(),
+                        z: "z".into(),
+                        yaw: "yaw".into(),
+                    },
+                    frame: FmuFrame::OcdZUp,
+                }),
+            },
+        ],
         seed: 0,
         map: None,
         time: TimeConfig {
@@ -486,22 +504,55 @@ fn ocd_scenario(name: &str) -> ScenarioConfig {
 
 #[test]
 fn an_fmu_vehicle_driven_by_open_car_dynamics_actually_moves() {
-    // End-to-end: the real OCD FMU loads + binds at join (so `join` gets
-    // `Joined`, not `Error`), and under a forward plan the model integrates and
-    // moves the kinematic body substantially. We assert only that the car is
-    // DRIVEN -- not that it tracks the waypoint or moves along a chosen axis:
-    // OCD emits its OWN frame (x-fwd, y-left, z-up) and the FmuVehicle path
-    // stamps that straight onto the Transform, so direction/turning are wrong
-    // until the frame is reconciled (a follow-up). This pins "OCD is genuinely
-    // driving the body in-sim".
-    let mut sim = Sim::new(ocd_scenario("ocd-car"));
+    // End-to-end, slice C: the real OCD FMU loads + binds at join (so `join`
+    // gets `Joined`, not `Error`), starts at its LANE/ARENA SPAWN POSE (not
+    // teleported to the FMU's own origin), and under a forward plan drives in
+    // the plan's direction in SIM coordinates, staying near ground level.
+    //
+    // The car is roster slot 1 (a leading holonomic "anchor" fills slot 0), so
+    // its spawn x is nonzero -- see `ocd_scenario`'s doc for why a single-slot
+    // roster can't distinguish the tick-1-teleport-to-origin bug this test
+    // guards against (a single car's arena spawn x/z is 0 too).
+    let mut sim = Sim::new(ocd_scenario("anchor", "ocd-car"));
+    let _anchor = sim.join("anchor");
     let agent = sim.join("ocd-car"); // asserts Joined -- the FMU loaded + bound
     sim.expect("the scenario to start", |sim| {
         (sim.state() == ScenarioState::Running).then_some(())
     });
 
+    // The spawn pose `agent_spawn_transform` computed for this car (same
+    // function, same arguments the real spawn path uses) -- our ground truth
+    // for "did it start where it was placed", not the FMU's own origin.
+    let spacing = 3.0;
+    let index = 1usize;
+    let total = 2usize;
+    let offset = index as f32 - (total.saturating_sub(1) as f32) / 2.0;
+    let base = BevyVec3::new(offset * spacing, server::world::AGENT_RADIUS * 2.0, 0.0);
+    let expected_spawn =
+        server::world::agent_spawn_transform(Embodiment::FmuVehicle, base, None, 1.0, index);
+    let expected_forward = *expected_spawn.forward();
+
+    // One tick to let the FMU stamp its first pose, before any plan is
+    // submitted: this is the pure spawn-rebase check, uncontaminated by driven
+    // motion.
+    sim.step(1);
+    let spawned = sim.position_of("ocd-car");
+    eprintln!(
+        "OCD spawn: expected={:?} actual={spawned:?}",
+        expected_spawn.translation
+    );
+    assert!(
+        (spawned - expected_spawn.translation).length() < 1.0,
+        "car did not start at its spawn pose (expected {:?}, got {spawned:?}) -- \
+         looks like the tick-1 teleport-to-FMU-origin regression",
+        expected_spawn.translation
+    );
+
     // Drive straight ahead, fast, so the longitudinal controller commands real
-    // throttle from a standstill.
+    // throttle from a standstill. The plan is in world/sim coordinates; the
+    // car's spawn heading (whatever `agent_spawn_transform` gave it) points at
+    // it directly, so "drives in the plan's direction" and "drives along its
+    // own spawn-forward" are the same check here.
     agent.send(ClientMessage::SubmitPlan {
         waypoints: vec![waypoint(150.0, 0.0, 20.0)],
     });
@@ -509,19 +560,22 @@ fn an_fmu_vehicle_driven_by_open_car_dynamics_actually_moves() {
         (sim.plan_version("ocd-car") == 1).then_some(())
     });
 
-    // One tick to let the FMU stamp its first pose (OCD's absolute pose from its
-    // own origin), then measure displacement from there over the run.
-    sim.step(1);
-    let start = sim.position_of("ocd-car");
     sim.step(60);
     let mid = sim.position_of("ocd-car");
     sim.step(60);
     let end = sim.position_of("ocd-car");
 
-    let mid_d = (mid - start).length();
-    let end_d = (end - start).length();
-    // Observed frame behavior, recorded for the frame-reconciliation follow-up.
-    eprintln!("OCD drive: start={start:?} mid={mid:?} end={end:?} mid_d={mid_d} end_d={end_d}");
+    let mid_d = (mid - spawned).length();
+    let end_d = (end - spawned).length();
+    // Progress specifically along the car's own spawn-forward direction (the
+    // plan's direction) -- not just "moved somewhere", which a sideways or
+    // backwards slide would also satisfy.
+    let mid_forward = (mid - spawned).dot(expected_forward);
+    let end_forward = (end - spawned).dot(expected_forward);
+    eprintln!(
+        "OCD drive: spawned={spawned:?} mid={mid:?} end={end:?} mid_d={mid_d} end_d={end_d} \
+         mid_forward={mid_forward} end_forward={end_forward}"
+    );
 
     assert!(
         end_d > 1.0,
@@ -530,6 +584,38 @@ fn an_fmu_vehicle_driven_by_open_car_dynamics_actually_moves() {
     assert!(
         end_d > mid_d,
         "displacement did not grow ({mid_d} -> {end_d}) -- car not accelerating forward"
+    );
+    // SIGN-DEPENDENT: relies on `frame::to_sim_local`'s provisional axis-remap
+    // signs (OCD forward -> sim -Z) composing with the spawn heading to point
+    // the same way the plan does. If the orchestrator's empirical drive shows
+    // the car moving in the plan's OPPOSITE direction, flip the sign in
+    // `to_sim_local` (not here) and this assertion should then pass unchanged;
+    // if it instead needs a magnitude/threshold tweak, that's expected too.
+    assert!(
+        end_forward > 1.0,
+        "car did not progress along its own forward direction ({end_forward} m) -- \
+         it moved, but not toward the plan (sign-dependent on the OCD axis remap)"
+    );
+    assert!(
+        end_forward > mid_forward,
+        "forward progress did not grow ({mid_forward} -> {end_forward})"
+    );
+    // Sim-Y should stay near the spawn's ride height, not fly up/down: OCD's
+    // SINGLE_TRACK model has no heave DOF (see the OCD-FMU README), so a
+    // correct remap leaves world-Y essentially at the spawn height throughout.
+    // A gross drift here would mean OCD's up or lateral axis is leaking into
+    // sim-Y (the pre-slice-C symptom noted in the worklog).
+    assert!(
+        (mid.y - expected_spawn.translation.y).abs() < 2.0,
+        "mid-drive sim-Y drifted from ride height: {} vs {}",
+        mid.y,
+        expected_spawn.translation.y
+    );
+    assert!(
+        (end.y - expected_spawn.translation.y).abs() < 2.0,
+        "end-drive sim-Y drifted from ride height: {} vs {}",
+        end.y,
+        expected_spawn.translation.y
     );
 }
 

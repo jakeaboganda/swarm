@@ -67,6 +67,21 @@ pub struct FmuOutputs {
     pub yaw: String,
 }
 
+/// The coordinate frame an FMU vehicle emits its pose in. Mirrors
+/// `dynamics_fmi::FmuFrame` field-for-field; `protocol` depends on nothing else
+/// in the workspace, so it defines its own copy rather than depending on
+/// `dynamics-fmi` -- `server::fmu_setup` converts one to the other, guarded by
+/// a field-by-field test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FmuFrame {
+    /// Already the sim's Y-up frame (+Y up, forward -Z, left -X) -- identity.
+    #[default]
+    SimYUp,
+    /// Open-Car-Dynamics: x forward, y left, z up.
+    OcdZUp,
+}
+
 /// A scenario's role -> variable-name map for an `FmuVehicle` slot, plus the
 /// `.fmu` file path. Field-for-field it matches `dynamics_fmi::binding::
 /// BindingSpec` (all variable names `String`); the one difference is
@@ -81,6 +96,12 @@ pub struct FmuConfig {
     pub inputs: FmuInputs,
     pub ground: FmuGround,
     pub outputs: FmuOutputs,
+    /// The coordinate frame the FMU's pose outputs are in. Omitted = `SimYUp`
+    /// (an FMU that already emits sim-frame coordinates, e.g. a hand-authored
+    /// test fixture); a real vehicle-dynamics FMU (Open-Car-Dynamics) sets
+    /// `ocd_z_up`.
+    #[serde(default)]
+    pub frame: FmuFrame,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -261,6 +282,7 @@ mod tests {
                 z: "Z".into(),
                 yaw: "psi".into(),
             },
+            frame: FmuFrame::OcdZUp,
         }
     }
 
@@ -390,6 +412,20 @@ mod tests {
         assert_eq!(config.ground.normal_z, None);
         assert_eq!(config.ground.height, "ground_height");
         assert_eq!(config.ground.friction.as_deref(), Some("ground_friction"));
+    }
+
+    #[test]
+    fn omitted_frame_defaults_to_sim_y_up() {
+        // A binding that omits `frame` entirely (every FMU config before this
+        // field existed) must still parse, defaulting to the identity frame.
+        let json = r#"{
+            "path": "fmus/VanDerPol.fmu",
+            "inputs": { "steer": "delta", "throttle": "ax", "brake": "brk" },
+            "ground": { "height": "z_road" },
+            "outputs": { "x": "X", "y": "Y", "z": "Z", "yaw": "psi" }
+        }"#;
+        let config: FmuConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.frame, FmuFrame::SimYUp);
     }
 
     #[test]

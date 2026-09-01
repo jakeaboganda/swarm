@@ -246,7 +246,7 @@ pub fn drain_transport(
                     let (fmu_handle, fmu_binding) = if embodiment == Embodiment::FmuVehicle {
                         match &roster.0.roster[index].fmu {
                             Some(cfg) => match crate::fmu_setup::load_fmu_vehicle(cfg, &name) {
-                                Ok((fmu, binding)) => (Some(fmu), Some(binding)),
+                                Ok((fmu, binding, frame)) => (Some(fmu), Some((binding, frame))),
                                 Err(err) => {
                                     transport.0.send(
                                         connection,

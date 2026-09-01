@@ -12,7 +12,7 @@ use dynamics_fmi::{
     BindError, BindingSpec, Fmu, GroundBinding, InputBinding, LoadError, OutputBinding,
     ResolvedBinding,
 };
-use protocol::scenario::FmuConfig;
+use protocol::scenario::{FmuConfig, FmuFrame as ProtocolFrame};
 use thiserror::Error;
 
 /// Why an `FmuVehicle` slot could not be brought up. Both variants are clean,
@@ -57,15 +57,28 @@ pub fn to_binding_spec(cfg: &FmuConfig) -> BindingSpec {
     }
 }
 
+/// Map the protocol's `FmuFrame` onto `dynamics_fmi`'s own copy. Both are bare,
+/// dependency-free discriminants (see `FmuConfig::frame`'s doc for why two
+/// copies exist); this is the single place they are tied together, guarded by
+/// `to_frame_maps_every_variant`.
+pub fn to_frame(frame: ProtocolFrame) -> dynamics_fmi::FmuFrame {
+    match frame {
+        ProtocolFrame::SimYUp => dynamics_fmi::FmuFrame::SimYUp,
+        ProtocolFrame::OcdZUp => dynamics_fmi::FmuFrame::OcdZUp,
+    }
+}
+
 /// Load the `.fmu`, then resolve the converted binding against its interface.
 /// `instance_name` (the agent/slot id) identifies the instance in the FMU's own
-/// logs. Returns the live instance and its resolved binding, or a clean
+/// logs. Returns the live instance, its resolved binding, and the config's
+/// pose frame (converted to `dynamics_fmi`'s copy), or a clean
 /// [`FmuSetupError`]; the caller stores the instance in the `NonSend`
-/// `FmuStore` and puts the binding on the entity's `FmuVehicle` component.
+/// `FmuStore` and puts the binding + frame on the entity's `FmuVehicle`
+/// component.
 pub fn load_fmu_vehicle(
     cfg: &FmuConfig,
     instance_name: &str,
-) -> Result<(Fmu, ResolvedBinding), FmuSetupError> {
+) -> Result<(Fmu, ResolvedBinding, dynamics_fmi::FmuFrame), FmuSetupError> {
     let fmu = Fmu::load(&cfg.path, 0.0, instance_name).map_err(|source| FmuSetupError::Load {
         path: cfg.path.clone(),
         source,
@@ -77,13 +90,13 @@ pub fn load_fmu_vehicle(
             path: cfg.path.clone(),
             source,
         })?;
-    Ok((fmu, resolved))
+    Ok((fmu, resolved, to_frame(cfg.frame)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::scenario::{FmuGround, FmuInputs, FmuOutputs};
+    use protocol::scenario::{FmuFrame, FmuGround, FmuInputs, FmuOutputs};
 
     /// The committed FMI 3.0 Reference FMU (a pure Van der Pol oscillator). It
     /// has no `Input`-causality variables and no pose outputs, so it can never
@@ -112,6 +125,7 @@ mod tests {
                 z: "Z".into(),
                 yaw: "psi".into(),
             },
+            frame: FmuFrame::SimYUp,
         }
     }
 
@@ -150,6 +164,12 @@ mod tests {
         let spec = to_binding_spec(&cfg);
         assert_eq!(spec.ground.normal_z, None);
         assert!(spec.ground.height.is_some());
+    }
+
+    #[test]
+    fn to_frame_maps_every_variant() {
+        assert_eq!(to_frame(FmuFrame::SimYUp), dynamics_fmi::FmuFrame::SimYUp);
+        assert_eq!(to_frame(FmuFrame::OcdZUp), dynamics_fmi::FmuFrame::OcdZUp);
     }
 
     #[test]

@@ -161,7 +161,7 @@ mod tests {
     }
 
     fn fmu_config() -> protocol::scenario::FmuConfig {
-        use protocol::scenario::{FmuConfig, FmuGround, FmuInputs, FmuOutputs};
+        use protocol::scenario::{FmuConfig, FmuFrame, FmuGround, FmuInputs, FmuOutputs};
         FmuConfig {
             path: "car.fmu".into(),
             inputs: FmuInputs {
@@ -180,6 +180,7 @@ mod tests {
                 z: "Z".into(),
                 yaw: "psi".into(),
             },
+            frame: FmuFrame::SimYUp,
         }
     }
 

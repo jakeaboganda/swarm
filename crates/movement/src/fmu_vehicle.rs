@@ -22,8 +22,8 @@ use bevy_rapier3d::prelude::{
     DefaultRapierContext, QueryFilter, RapierConfiguration, ReadRapierContext, Velocity,
 };
 use dynamics_fmi::{
-    read_pose, Controls, Driver, DriverInput, FmuError, FmuInstance, Pose, ResolvedBinding,
-    StepOutcome,
+    read_pose, to_sim_local, Controls, Driver, DriverInput, FmuError, FmuFrame, FmuInstance, Pose,
+    ResolvedBinding, StepOutcome,
 };
 
 use crate::model::DesiredVelocity;
@@ -57,6 +57,19 @@ pub struct FmuVehicle {
     pub driver: Driver,
     /// Role -> FMI value references, resolved once at spawn.
     pub binding: ResolvedBinding,
+    /// The coordinate frame the FMU emits its pose in (see
+    /// `dynamics_fmi::FmuFrame`). `SimYUp` for an FMU that already speaks the
+    /// sim's frame; a real vehicle FMU (e.g. Open-Car-Dynamics) sets its own.
+    pub frame: FmuFrame,
+    /// Where this vehicle's lane/arena spawn placed it (world space). The FMU's
+    /// own pose is relative to ITS origin, not the sim's, so `drive_fmu_vehicles`
+    /// rebases every frame's remapped pose onto this rather than stamping the
+    /// FMU's raw output onto the Transform (which would teleport the body to
+    /// the FMU's origin on the first driven tick).
+    pub spawn_pos: Vec3,
+    /// The spawn heading (radians about +Y) the rebase composes onto the FMU's
+    /// (frame-remapped) local pose.
+    pub spawn_yaw: f32,
     /// The FMU's current communication point (s), accumulated from `dt`. We
     /// drive this off our own clock; `StepOutcome::last_successful_time` is only
     /// advisory (an FMU with a coarser internal step lags it).
@@ -68,10 +81,19 @@ pub struct FmuVehicle {
 }
 
 impl FmuVehicle {
-    pub fn new(driver: Driver, binding: ResolvedBinding) -> Self {
+    pub fn new(
+        driver: Driver,
+        binding: ResolvedBinding,
+        frame: FmuFrame,
+        spawn_pos: Vec3,
+        spawn_yaw: f32,
+    ) -> Self {
         Self {
             driver,
             binding,
+            frame,
+            spawn_pos,
+            spawn_yaw,
             elapsed: 0.0,
             terminated: false,
         }
@@ -164,6 +186,25 @@ pub fn fmu_control_step(
 /// Horizontal unit vector in the xz-plane, defaulting to +X when degenerate.
 fn horizontal(v: Vec3) -> Vec3 {
     Vec3::new(v.x, 0.0, v.z).normalize_or(Vec3::X)
+}
+
+/// Rebase an FMU's raw (frame-native) pose onto the vehicle's spawn pose: remap
+/// the FMU's own frame to sim-local (still relative to the FMU's own origin),
+/// then compose that local pose onto where the vehicle was placed at spawn.
+/// Without this, the FMU's absolute-from-its-own-origin pose gets stamped
+/// straight onto the Transform and the vehicle teleports to (roughly) world
+/// origin on the first driven tick, ignoring its lane/arena spawn placement.
+///
+/// Pulled out of `drive_fmu_vehicles` (a Bevy system, not unit-testable in
+/// isolation) so the rebase itself is testable in isolation -- see
+/// `ocd_rebase_is_not_the_raw_fmu_pose` below.
+pub fn rebase_fmu_pose(frame: FmuFrame, spawn_pos: Vec3, spawn_yaw: f32, raw: Pose) -> Pose {
+    let local = to_sim_local(frame, raw);
+    let spawn_rotation = Quat::from_rotation_y(spawn_yaw);
+    Pose {
+        position: spawn_pos + spawn_rotation * local.position,
+        yaw: spawn_yaw + local.yaw,
+    }
 }
 
 /// Steps every FMU vehicle and imposes its pose on the (kinematic) body.
@@ -271,8 +312,15 @@ pub fn drive_fmu_vehicles(
                 // returns before `dt`. If a future config allows it, the pose is
                 // at `last_successful_time` and advancing `elapsed` by the full
                 // `dt` would drift; revisit here then.
-                transform.translation = step.pose.position;
-                transform.rotation = Quat::from_rotation_y(step.pose.yaw);
+                //
+                // The FMU's pose is absolute but relative to ITS OWN origin, in
+                // ITS OWN frame -- remap it to a sim-local pose, then rebase onto
+                // the spawn pose so the vehicle starts where it was placed (in
+                // its lane) and OCD-drives FROM there, instead of teleporting to
+                // the FMU's origin on the first driven tick.
+                let sim_pose = rebase_fmu_pose(veh.frame, veh.spawn_pos, veh.spawn_yaw, step.pose);
+                transform.translation = sim_pose.position;
+                transform.rotation = Quat::from_rotation_y(sim_pose.yaw);
                 veh.elapsed += dt as f64;
             }
             Err(err) => {
@@ -522,6 +570,55 @@ mod tests {
             step.outcome.terminate_simulation,
             "a terminating FMU must be reported to the caller"
         );
+    }
+
+    #[test]
+    fn sim_y_up_rebase_is_spawn_plus_raw_when_yaw_is_zero() {
+        // Identity frame, no spawn rotation: rebase is a plain translation by
+        // spawn_pos, no remap.
+        let raw = Pose {
+            position: Vec3::new(5.0, 0.0, 0.0),
+            yaw: 0.2,
+        };
+        let spawn_pos = Vec3::new(10.0, 0.4, -3.0);
+        let out = rebase_fmu_pose(FmuFrame::SimYUp, spawn_pos, 0.0, raw);
+        assert_eq!(out.position, spawn_pos + raw.position);
+        assert_eq!(out.yaw, raw.yaw);
+    }
+
+    #[test]
+    fn ocd_rebase_is_not_the_raw_fmu_pose() {
+        // A vehicle that has driven 10 m of OCD-forward (its +x) from a
+        // nonzero, rotated spawn must land at spawn + (spawn-rotated, frame-
+        // remapped) advance -- neither the raw FMU pose nor a bare spawn-pos
+        // offset of it. This is the tick-1-teleport regression: before the
+        // rebase, `drive_fmu_vehicles` stamped `raw.position` straight onto the
+        // Transform, discarding spawn_pos entirely.
+        let raw = Pose {
+            position: Vec3::new(10.0, 0.0, 0.0), // 10 m OCD-forward
+            yaw: 0.0,
+        };
+        let spawn_pos = Vec3::new(1.5, 0.4, 0.0);
+        // 90 degrees left: spawn heading is sim -X (rotating -Z by +90 about Y).
+        let spawn_yaw = std::f32::consts::FRAC_PI_2;
+        let out = rebase_fmu_pose(FmuFrame::OcdZUp, spawn_pos, spawn_yaw, raw);
+
+        // Not the raw pose.
+        assert_ne!(out.position, raw.position);
+        // Not just spawn_pos + raw.position (that would be the identity-frame,
+        // unrotated bug -- the whole point of composing through spawn_rotation).
+        assert_ne!(out.position, spawn_pos + raw.position);
+
+        // OCD-forward remaps to sim -Z (`to_sim_local`), then spawn_yaw (+90 deg
+        // about Y) rotates -Z to -X, so the vehicle should end up 10 m in -X
+        // from its spawn position.
+        let expected = spawn_pos + Vec3::new(-10.0, 0.0, 0.0);
+        assert!(
+            (out.position - expected).length() < 1e-4,
+            "expected {expected:?}, got {:?}",
+            out.position
+        );
+        assert_eq!(out.yaw, spawn_yaw); // raw yaw is 0, so rebase is pure spawn_yaw.
     }
 
     #[test]
