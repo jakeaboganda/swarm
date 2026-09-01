@@ -77,5 +77,19 @@ This matches the `FmuConfig` binding a swarm scenario uses for an `FmuVehicle`.
   is a wheel angle in rad, clamped by `steering_actuator.angle_max_rad` (0.3).
 - **Per-wheel ground.** v1 feeds the single-point ground height/friction to all
   four wheels; per-wheel is the v2 the swarm ground raycast defers.
+- **`ground_height` is physically inert for this combo.** The `SINGLE_TRACK`
+  model is a planar bicycle model with no heave DOF: `z_height_road_m` is
+  accepted and threaded into `ExternalInfluences`, but the single-track equations
+  never read it (vertical tire load comes from static weight + load transfer, and
+  the aero heave input is hardcoded to 0). So the channel is wired but changing
+  `ground_height` has no effect until a model with a vertical DOF (double-track)
+  is used. `ground_friction` (`lambda_mue`) *does* feed the tire model.
+- **Multi-instance.** All model state is per-instance (owned by each `Instance`'s
+  `VehicleModel`), so several FMU vehicles spawned from one loaded `.so` run
+  independently with no cross-talk. The one process-wide static in the reachable
+  set (`param_management`'s `InitializationBackend::_storage`) stays empty because
+  this wrapper never calls `tam::pmg::init()`. If a future revision loads
+  per-instance parameter overrides via that call, it would write shared state
+  every instance reads -- design around it then.
 - **Portability.** Ships a single Linux x86_64 binary. Other platforms need a
   matching `binaries/<platform>/` entry (rebuild there).

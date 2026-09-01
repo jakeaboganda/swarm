@@ -62,7 +62,12 @@ struct Instance {
   double brake = 0.0;     // 0..1
   double ground_height_m = 0.0;
   double ground_friction = 1.0;
-  double time_s = 0.0;
+  // Accumulated internal (model) time, and the unconsumed communication-step
+  // remainder carried between do_steps. `step()` only advances in whole
+  // INTERNAL_STEP_S chunks, so we bank the leftover instead of rounding it away
+  // (rounding each call gave a steady ~2.4% fast clock at a 64 Hz tick).
+  double internal_time_s = 0.0;
+  double carry_s = 0.0;
   std::string name;
   fmi3LogMessageCallback log = nullptr;
   fmi3InstanceEnvironment env = nullptr;
@@ -72,6 +77,18 @@ using DataPerWheel = tam::types::common::DataPerWheel<double>;
 }  // namespace
 
 extern "C" {
+
+// Mandatory FMI 3.0 "Common Functions" -- every FMU must export these three
+// regardless of interface, so an external checker (FMPy, the FMI compliance
+// tool) or a `Common::reset()`/version query does not hit an undefined symbol.
+const char * fmi3GetVersion(void) { return fmi3Version; }
+
+fmi3Status fmi3SetDebugLogging(
+  fmi3Instance /*instance*/, fmi3Boolean /*loggingOn*/, size_t /*nCategories*/,
+  const fmi3String[] /*categories*/)
+{
+  return fmi3OK;  // this fixture logs nothing
+}
 
 fmi3Instance fmi3InstantiateCoSimulation(
   fmi3String instanceName, fmi3String /*instantiationToken*/, fmi3String /*resourcePath*/,
@@ -104,11 +121,26 @@ fmi3Status fmi3ExitInitializationMode(fmi3Instance instance)
   Instance * inst = static_cast<Instance *>(instance);
   // Apply the model's initial_state parameter defaults (at-rest, at origin).
   inst->veh.reset();
-  inst->time_s = 0.0;
+  inst->internal_time_s = 0.0;
+  inst->carry_s = 0.0;
   return fmi3OK;
 }
 
 fmi3Status fmi3Terminate(fmi3Instance /*instance*/) { return fmi3OK; }
+
+fmi3Status fmi3Reset(fmi3Instance instance)
+{
+  Instance * inst = static_cast<Instance *>(instance);
+  inst->veh.reset();
+  inst->steer_rad = 0.0;
+  inst->throttle = 0.0;
+  inst->brake = 0.0;
+  inst->ground_height_m = 0.0;
+  inst->ground_friction = 1.0;
+  inst->internal_time_s = 0.0;
+  inst->carry_s = 0.0;
+  return fmi3OK;
+}
 
 fmi3Status fmi3SetFloat64(
   fmi3Instance instance, const fmi3ValueReference valueReferences[], size_t nValueReferences,
@@ -118,6 +150,9 @@ fmi3Status fmi3SetFloat64(
   if (nValueReferences != nValues) {
     return fmi3Error;
   }
+  // Applied in order; an unknown vr mid-array returns after committing earlier
+  // ones (non-atomic). The swarm caller always sets one vr per call, so this is
+  // never exercised -- noted for any future multi-vr caller.
   for (size_t i = 0; i < nValueReferences; ++i) {
     switch (valueReferences[i]) {
       case VR_STEER:
@@ -198,15 +233,19 @@ fmi3Status fmi3DoStep(
   inst->veh.set_external_influences(ext);
 
   // Advance the ODE to cover the communication step. `step()` is a fixed
-  // INTERNAL_STEP_S advance, so take the whole number of sub-steps that fits.
-  long n = std::lround(communicationStepSize / INTERNAL_STEP_S);
-  if (n < 1) {
-    n = 1;
+  // INTERNAL_STEP_S advance, so take the whole number of sub-steps that fit and
+  // BANK the remainder (`carry_s`) for the next call -- rounding it away each
+  // time biased the physics clock ~2.4% fast at a 64 Hz tick.
+  inst->carry_s += communicationStepSize;
+  long n = static_cast<long>(std::floor(inst->carry_s / INTERNAL_STEP_S));
+  if (n < 0) {
+    n = 0;
   }
   for (long i = 0; i < n; ++i) {
     inst->veh.step();
   }
-  inst->time_s = currentCommunicationPoint + static_cast<double>(n) * INTERNAL_STEP_S;
+  inst->carry_s -= static_cast<double>(n) * INTERNAL_STEP_S;
+  inst->internal_time_s += static_cast<double>(n) * INTERNAL_STEP_S;
 
   if (eventHandlingNeeded != nullptr) {
     *eventHandlingNeeded = fmi3False;
@@ -218,8 +257,10 @@ fmi3Status fmi3DoStep(
     *earlyReturn = fmi3False;
   }
   if (lastSuccessfulTime != nullptr) {
-    // Advisory: lands on the internal 0.0008 s grid, not exactly current+step.
-    *lastSuccessfulTime = inst->time_s;
+    // Advisory: the model's true internal time, on the 0.0008 s grid -- lags the
+    // requested communication point by up to one internal step (the banked
+    // `carry_s`). The swarm side already treats this as advisory.
+    *lastSuccessfulTime = inst->internal_time_s;
   }
   return fmi3OK;
 }
