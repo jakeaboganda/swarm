@@ -1,0 +1,31 @@
+{
+  "arena": { "width": 200.0, "depth": 200.0 },
+  "map": "banked_oval",
+  "roster": [
+    {
+      "name": "car-1",
+      "embodiment": "fmu_vehicle",
+      "color": [0.95, 0.45, 0.1],
+      "fmu": {
+        "path": "fixtures/opencardynamics-dt-fmu/opencardynamics_dt.fmu",
+        "frame": "ocd_z_up",
+        "inputs": { "steer": "steer", "throttle": "throttle", "brake": "brake", "bank": "bank" },
+        "ground": { "height": "ground_height", "friction": "ground_friction" },
+        "outputs": { "x": "x", "y": "y", "z": "z", "yaw": "yaw", "roll": "roll", "pitch": "pitch" }
+      }
+    },
+    {
+      "name": "car-2",
+      "embodiment": "fmu_vehicle",
+      "color": [0.2, 0.6, 0.95],
+      "fmu": {
+        "path": "fixtures/opencardynamics-dt-fmu/opencardynamics_dt.fmu",
+        "frame": "ocd_z_up",
+        "inputs": { "steer": "steer", "throttle": "throttle", "brake": "brake", "bank": "bank" },
+        "ground": { "height": "ground_height", "friction": "ground_friction" },
+        "outputs": { "x": "x", "y": "y", "z": "z", "yaw": "yaw", "roll": "roll", "pitch": "pitch" }
+      }
+    }
+  ],
+  "time": { "pace": "realtime" }
+}

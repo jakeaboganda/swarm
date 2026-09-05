@@ -741,24 +741,154 @@ fn an_ocd_car_banks_on_the_canted_oval() {
     // lean (up-axis angle off vertical) as it reaches the banked curve.
     let start = sim.position_of("ocd-car");
     let level = {
-        let up = sim.component::<bevy::prelude::Transform>("ocd-car").rotation * BevyVec3::Y;
+        let up = sim
+            .component::<bevy::prelude::Transform>("ocd-car")
+            .rotation
+            * BevyVec3::Y;
         up.angle_between(BevyVec3::Y)
     };
     let mut max_tilt = 0f32;
     for _ in 0..600 {
         sim.step(1);
-        let up = sim.component::<bevy::prelude::Transform>("ocd-car").rotation * BevyVec3::Y;
+        let up = sim
+            .component::<bevy::prelude::Transform>("ocd-car")
+            .rotation
+            * BevyVec3::Y;
         max_tilt = max_tilt.max(up.angle_between(BevyVec3::Y));
     }
     let moved = (sim.position_of("ocd-car") - start).length();
     eprintln!("banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad");
 
-    assert!(level < 0.03, "car was not level on the start straight ({level} rad)");
+    assert!(
+        level < 0.03,
+        "car was not level on the start straight ({level} rad)"
+    );
     assert!(moved > 20.0, "car did not drive the oval ({moved} m)");
     // The oval banks to ~0.21 rad; conform tilts the car to the surface, so on a
     // curve it leans well past level.
     assert!(
         max_tilt > 0.08,
         "car never banked (max tilt {max_tilt} rad) -- road-conform is not tilting it"
+    );
+}
+
+/// Two double-track OCD cars on the banked oval, for the demo capture below.
+fn banked_ocd_scenario_2cars() -> ScenarioConfig {
+    let mut cfg = banked_ocd_scenario("car-1");
+    let mut car2 = cfg.roster[0].clone();
+    car2.name = "car-2".into();
+    cfg.roster.push(car2);
+    cfg
+}
+
+/// Capture helper (not a behavioural test -- hence `#[ignore]`): drives two OCD
+/// cars a couple of laps around the banked oval and writes a self-contained
+/// replay JSON for the demo artifact -- the track outline + exact bank profile
+/// (the single source of truth, `map::banked_oval`), plus each car's planar
+/// trajectory (x/z/yaw, the agent-observable state). The artifact recomputes the
+/// visible lean from the bank profile at each car's position. Run explicitly:
+///
+///   BANKED_CAPTURE_OUT=/tmp/banked_capture.json \
+///     cargo test -p server --test control_loop capture_banked_oval \
+///       -- --ignored --nocapture
+#[test]
+#[ignore = "capture helper: writes the demo replay JSON, not a behavioural test"]
+fn capture_banked_oval() {
+    use bevy::prelude::{EulerRot, Transform};
+
+    let out = std::env::var("BANKED_CAPTURE_OUT").unwrap_or_else(|_| "banked_capture.json".into());
+
+    let mut sim = Sim::new(banked_ocd_scenario_2cars());
+    // (name, lateral-offset m: negative = toward oval centre) -> two racing lines.
+    let cars = [
+        ("car-1", [0.95_f32, 0.45, 0.1], -2.0_f32),
+        ("car-2", [0.2, 0.6, 0.95], 2.0),
+    ];
+    let agents: Vec<_> = cars.iter().map(|(name, _, _)| sim.join(name)).collect();
+    sim.expect("the scenario to start", |s| {
+        (s.state() == ScenarioState::Running).then_some(())
+    });
+
+    let track = map::banked_oval();
+    let len = track.length();
+    let laps = 2u32;
+    let per_lap = 64u32;
+
+    // A lateral-offset lap plan per car: sample the centreline, shift sideways in
+    // the surface plane, repeat for each lap so the tracker drives the loop round.
+    for (i, (_, _, offset)) in cars.iter().enumerate() {
+        let mut wps = Vec::new();
+        for _ in 0..laps {
+            for k in 1..=per_lap {
+                let s = len * (k as f32) / (per_lap as f32);
+                let smp = track.sample_at(s);
+                let lateral = smp.up.cross(smp.heading).normalize_or_zero();
+                let p = smp.point + lateral * *offset;
+                wps.push(waypoint(p.x, p.z, 15.0));
+            }
+        }
+        agents[i].send(ClientMessage::SubmitPlan { waypoints: wps });
+    }
+    for (name, _, _) in &cars {
+        sim.expect("the plan to land", |s| {
+            (s.plan_version(name) == 1).then_some(())
+        });
+    }
+
+    // Record ~16 Hz (every 4th 64 Hz tick) for a couple of laps' worth of driving.
+    let dt = 1.0_f32 / 64.0;
+    let stride = 4usize;
+    let ticks = 2600usize;
+    let mut car_frames: Vec<Vec<serde_json::Value>> = vec![Vec::new(); cars.len()];
+    let mut t = 0.0_f32;
+    for step in 0..ticks {
+        sim.step(1);
+        t += dt;
+        if step % stride == 0 {
+            for (i, (name, _, _)) in cars.iter().enumerate() {
+                let tf = sim.component::<Transform>(name);
+                let (yaw, _, _) = tf.rotation.to_euler(EulerRot::YXZ);
+                car_frames[i].push(serde_json::json!({
+                    "t": t, "x": tf.translation.x, "z": tf.translation.z, "yaw": yaw,
+                }));
+            }
+        }
+    }
+
+    // The track outline + bank profile, sampled densely from the single source of
+    // truth. Up-normal too, so the artifact can render the surface tilt directly.
+    let track_samples: Vec<serde_json::Value> = (0..=240)
+        .map(|i| {
+            let s = (len * i as f32 / 240.0).min(len);
+            let smp = track.sample_at(s);
+            serde_json::json!({
+                "s": s, "x": smp.point.x, "z": smp.point.z, "bank": smp.bank,
+            })
+        })
+        .collect();
+
+    let cars_json: Vec<serde_json::Value> = cars
+        .iter()
+        .enumerate()
+        .map(|(i, (name, color, _))| {
+            serde_json::json!({ "name": name, "color": color, "frames": car_frames[i] })
+        })
+        .collect();
+
+    let doc = serde_json::json!({
+        "track": { "length": len, "samples": track_samples },
+        "cars": cars_json,
+        "sample_hz": 64.0 / stride as f32,
+        // Sanity: the oval's peak superelevation, so the artifact can label it.
+        "max_bank_rad": track_samples.iter()
+            .map(|s| s["bank"].as_f64().unwrap().abs())
+            .fold(0.0_f64, f64::max),
+    });
+    std::fs::write(&out, serde_json::to_string_pretty(&doc).unwrap())
+        .unwrap_or_else(|e| panic!("writing capture to {out}: {e}"));
+    eprintln!(
+        "wrote {out}: {} track samples, {} frames/car over {ticks} ticks",
+        doc["track"]["samples"].as_array().unwrap().len(),
+        car_frames[0].len(),
     );
 }
