@@ -748,16 +748,18 @@ fn an_ocd_car_banks_on_the_canted_oval() {
         up.angle_between(BevyVec3::Y)
     };
     let mut max_tilt = 0f32;
+    let mut min_y = f32::INFINITY;
     for _ in 0..600 {
         sim.step(1);
-        let up = sim
-            .component::<bevy::prelude::Transform>("ocd-car")
-            .rotation
-            * BevyVec3::Y;
+        let tf = sim.component::<bevy::prelude::Transform>("ocd-car");
+        let up = tf.rotation * BevyVec3::Y;
         max_tilt = max_tilt.max(up.angle_between(BevyVec3::Y));
+        min_y = min_y.min(tf.translation.y);
     }
     let moved = (sim.position_of("ocd-car") - start).length();
-    eprintln!("banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad");
+    eprintln!(
+        "banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad min_y={min_y}"
+    );
 
     assert!(
         level < 0.03,
@@ -769,6 +771,14 @@ fn an_ocd_car_banks_on_the_canted_oval() {
     assert!(
         max_tilt > 0.08,
         "car never banked (max tilt {max_tilt} rad) -- road-conform is not tilting it"
+    );
+    // The car rides the centreline here (surface at y=0), so conform must sit its
+    // chassis a ride height *above* the road, never buried in it. A regression
+    // that placed it at the bare surface height would sink it half underground.
+    let ride = server::world::car_ride_height();
+    assert!(
+        min_y > ride - 0.05,
+        "car sank into the road (min y {min_y}, expected >= ride height {ride})"
     );
 }
 

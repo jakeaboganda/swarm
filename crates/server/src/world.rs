@@ -165,7 +165,16 @@ pub fn conform_fmu_to_track(
         // Keep the OCD-driven heading (yaw), sit on the surface, tilt the body's
         // up-axis onto the road's surface normal -- the visible cant.
         let (yaw, _pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);
-        transform.translation.y = sample.point.y;
+        // Height of the banked surface *under the car*, not at the centreline: a
+        // car driving a racing line rides laterally off-centre, where the bank
+        // lifts the road. The surface is locally the tangent plane through the
+        // centreline sample with normal `up`, so solve that plane at the car's
+        // own (x,z). Then add the chassis ride height (the same one spawn uses),
+        // so the body sits ON the road instead of buried in it.
+        let n = sample.up;
+        let d = transform.translation - sample.point;
+        let surface_y = sample.point.y - (n.x * d.x + n.z * d.z) / n.y;
+        transform.translation.y = surface_y + car_ride_height();
         transform.rotation =
             Quat::from_rotation_arc(Vec3::Y, sample.up) * Quat::from_rotation_y(yaw);
         // Feed next tick's FMU bank input so OCD's own roll dynamics respond.
