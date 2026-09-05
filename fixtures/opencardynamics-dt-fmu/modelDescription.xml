@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fmiModelDescription
+  fmiVersion="3.0"
+  modelName="Open-Car-Dynamics double-track vehicle"
+  description="TUMFTM Open-Car-Dynamics (WHEEL_TORQUE x PT1 x DOUBLE_TRACK x MF52 x DEFAULT aero) wrapped as an FMI 3.0 Co-Simulation plant. Exposes roll/pitch and accepts a road bank/grade, injected as an external body force so the car's roll dynamics respond to a canted road."
+  generationTool="swarm fixtures/opencardynamics-dt-fmu"
+  instantiationToken="{6d2c0b3e-0c8a-4f1a-9a3f-0ca7dynamics02}">
+
+  <CoSimulation
+    modelIdentifier="opencardynamics_dt"
+    canHandleVariableCommunicationStepSize="true"
+    fixedInternalStepSize="8e-4"/>
+
+  <DefaultExperiment startTime="0" stepSize="0.015625"/>
+
+  <ModelVariables>
+    <!-- Inputs: driver actuators, single-point ground, and road bank/grade. -->
+    <Float64 name="steer" valueReference="1" causality="input" variability="continuous" start="0"
+             description="Steering angle (rad); OCD steering-actuator setpoint"/>
+    <Float64 name="throttle" valueReference="2" causality="input" variability="continuous" start="0"
+             description="Throttle 0..1 -> per-wheel drive torque"/>
+    <Float64 name="brake" valueReference="3" causality="input" variability="continuous" start="0"
+             description="Brake 0..1 -> per-wheel brake torque"/>
+    <Float64 name="ground_height" valueReference="4" causality="input" variability="continuous" start="0"
+             description="Road height under the chassis (m); applied to all wheels"/>
+    <Float64 name="ground_friction" valueReference="5" causality="input" variability="continuous" start="1"
+             description="Tire-road friction scaling (lambda_mue); applied to all wheels"/>
+    <Float64 name="bank" valueReference="6" causality="input" variability="continuous" start="0"
+             description="Road bank / superelevation angle at the car (rad); injected as a lateral body force"/>
+    <Float64 name="grade" valueReference="7" causality="input" variability="continuous" start="0"
+             description="Road longitudinal grade at the car (rad); injected as a longitudinal body force"/>
+    <!-- Outputs: full pose in OCD's own world frame (reconciled sim-side). -->
+    <Float64 name="x" valueReference="10" causality="output" variability="continuous" initial="calculated"
+             description="Position x (m), OCD world frame"/>
+    <Float64 name="y" valueReference="11" causality="output" variability="continuous" initial="calculated"
+             description="Position y (m), OCD world frame"/>
+    <Float64 name="z" valueReference="12" causality="output" variability="continuous" initial="calculated"
+             description="Heave z (m), OCD world frame"/>
+    <Float64 name="yaw" valueReference="13" causality="output" variability="continuous" initial="calculated"
+             description="Yaw / heading (rad) about the up axis, OCD world frame"/>
+    <Float64 name="roll" valueReference="14" causality="output" variability="continuous" initial="calculated"
+             description="Roll angle phi (rad); the body's lean, read from the model state"/>
+    <Float64 name="pitch" valueReference="15" causality="output" variability="continuous" initial="calculated"
+             description="Pitch angle theta (rad), read from the model state"/>
+  </ModelVariables>
+
+  <ModelStructure>
+    <Output valueReference="10"/>
+    <Output valueReference="11"/>
+    <Output valueReference="12"/>
+    <Output valueReference="13"/>
+    <Output valueReference="14"/>
+    <Output valueReference="15"/>
+  </ModelStructure>
+
+</fmiModelDescription>
