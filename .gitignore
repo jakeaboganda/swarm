@@ -2,6 +2,7 @@ DECISIONS.md
 PERSONAL_NOTES.md
 TEST_PLAN.md
 /target
+.cache/
 .claude/settings.local.json
 *.pyc
 .ruff_cache/

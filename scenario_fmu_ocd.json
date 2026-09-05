@@ -1,0 +1,30 @@
+{
+  "arena": { "width": 120.0, "depth": 120.0 },
+  "roster": [
+    {
+      "name": "car-1",
+      "embodiment": "fmu_vehicle",
+      "color": [0.95, 0.45, 0.1],
+      "fmu": {
+        "path": "fixtures/opencardynamics-fmu/opencardynamics.fmu",
+        "frame": "ocd_z_up",
+        "inputs": { "steer": "steer", "throttle": "throttle", "brake": "brake" },
+        "ground": { "height": "ground_height", "friction": "ground_friction" },
+        "outputs": { "x": "x", "y": "y", "z": "z", "yaw": "yaw" }
+      }
+    },
+    {
+      "name": "car-2",
+      "embodiment": "fmu_vehicle",
+      "color": [0.2, 0.6, 0.95],
+      "fmu": {
+        "path": "fixtures/opencardynamics-fmu/opencardynamics.fmu",
+        "frame": "ocd_z_up",
+        "inputs": { "steer": "steer", "throttle": "throttle", "brake": "brake" },
+        "ground": { "height": "ground_height", "friction": "ground_friction" },
+        "outputs": { "x": "x", "y": "y", "z": "z", "yaw": "yaw" }
+      }
+    }
+  ],
+  "time": { "pace": "realtime" }
+}
