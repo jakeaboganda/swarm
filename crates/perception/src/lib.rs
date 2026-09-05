@@ -1,6 +1,6 @@
 //! The sensor pathway: simulated, per-agent perception the sim pushes to
-//! agents. A separate pathway from both the agent control channel and viz —
-//! `provider → server-router → agent` — so the producer (analytic today, a
+//! agents. A separate pathway from both the agent control channel and viz --
+//! `provider → server-router → agent` -- so the producer (analytic today, a
 //! rendered-sensor provider later) stays swappable. JSON wire, mirroring the
 //! agent control channel, for language-agnostic clients.
 

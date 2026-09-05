@@ -125,7 +125,7 @@ pub fn follow_camera(
 }
 
 /// Shows "Following: <name>" while following, and names the camera view
-/// whenever it is not the default — a top-down overview is otherwise
+/// whenever it is not the default -- a top-down overview is otherwise
 /// indistinguishable from a broken camera.
 pub fn update_follow_label(
     follow: Res<FollowCam>,

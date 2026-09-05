@@ -14,7 +14,7 @@ const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What Bevy drains each frame. Reliable, must-deliver messages (scene-init,
 /// lifecycle events) go through an ordered queue; frames and debug frames
-/// are keep-latest — only the newest matters, so buffering can't grow.
+/// are keep-latest -- only the newest matters, so buffering can't grow.
 #[derive(Resource)]
 pub struct VizStream {
     pub reliable: mpsc::UnboundedReceiver<ServerToViewer>,
@@ -93,7 +93,7 @@ async fn serve(
     let mut ping = tokio::time::interval(PING_INTERVAL);
     let mut last_activity = Instant::now();
     // Diagnostic (set VIZ_DIAG=1): measure the interval between arriving
-    // frames — i.e. how evenly the server emits, before any display sampling.
+    // frames -- i.e. how evenly the server emits, before any display sampling.
     let diag = std::env::var("VIZ_DIAG").is_ok();
     let (mut last_frame, mut win, mut n, mut sum, mut mn, mut mx) = (
         None::<Instant>,

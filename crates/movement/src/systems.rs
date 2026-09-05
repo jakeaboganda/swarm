@@ -5,7 +5,7 @@ use crate::model::{BodyState, DesiredVelocity, MovementModel, PhysicalYaw};
 
 /// Drives physics for every entity with movement model `M`. Monomorphized
 /// per concrete component type (registered once per embodiment in
-/// `MovementPlugin`) rather than dispatched via `Box<dyn MovementModel>` —
+/// `MovementPlugin`) rather than dispatched via `Box<dyn MovementModel>` --
 /// keeps entities in contiguous per-archetype storage.
 pub fn apply_movement_force<M: MovementModel>(
     time: Res<Time>,
@@ -36,7 +36,7 @@ pub fn apply_movement_force<M: MovementModel>(
 
 /// Cosmetic only: rotates the rendered mesh to face the direction of
 /// travel. Physics rotation stays locked for the fake-yaw models (see
-/// `server`'s spawn setup) — entities don't need a facing direction to move,
+/// `server`'s spawn setup) -- entities don't need a facing direction to move,
 /// but visually gliding sideways reads as broken for a self-driving-car
 /// mental model. Skips `PhysicalYaw` bodies, whose orientation is real
 /// physics and must not be overwritten.

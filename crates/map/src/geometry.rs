@@ -4,7 +4,7 @@ use glam::Vec3;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pose {
     pub position: Vec3,
-    /// Unit tangent in the XZ (ground) plane — the direction of travel.
+    /// Unit tangent in the XZ (ground) plane -- the direction of travel.
     pub heading: Vec3,
 }
 
@@ -28,7 +28,7 @@ pub struct Polyline {
     points: Vec<Vec3>,
     /// Cumulative arc length at each point; `cumulative[0] == 0`.
     cumulative: Vec<f32>,
-    /// Per-vertex unit horizontal tangent — the angle bisector at interior
+    /// Per-vertex unit horizontal tangent -- the angle bisector at interior
     /// vertices, the lone segment direction at the ends. Interpolating these
     /// gives a heading that's continuous across vertices (no per-segment step),
     /// and their normals give a consistent lateral offset for lanes/meshes.
@@ -38,7 +38,7 @@ pub struct Polyline {
 impl Polyline {
     /// Build a polyline, or `None` if given fewer than two points. Importers
     /// baking **external** map data (which may be malformed) must use this and
-    /// surface the error, rather than crash — see [`Polyline::new`].
+    /// surface the error, rather than crash -- see [`Polyline::new`].
     pub fn try_new(points: Vec<Vec3>) -> Option<Self> {
         if points.len() < 2 {
             return None;
@@ -58,7 +58,7 @@ impl Polyline {
         })
     }
 
-    /// Build from trusted, in-code geometry. Panics on fewer than two points —
+    /// Build from trusted, in-code geometry. Panics on fewer than two points --
     /// that's a construction bug, not a runtime condition. Importers handling
     /// external files use [`Polyline::try_new`] instead.
     pub fn new(points: Vec<Vec3>) -> Self {

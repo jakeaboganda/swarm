@@ -112,7 +112,7 @@ pub fn build_app(config: SimConfig) -> App {
     let floor = floor_for(map_world.as_ref());
     let fixed_dt = Duration::from_secs_f64(1.0 / TICK_HZ);
     // realtime: drive Update at ~120 Hz (Fixed paces itself under it).
-    // afap: no sleep — go as fast as the CPU allows.
+    // afap: no sleep -- go as fast as the CPU allows.
     let loop_wait = if afap {
         Duration::ZERO
     } else {
@@ -121,7 +121,7 @@ pub fn build_app(config: SimConfig) -> App {
 
     let mut app = App::new();
     app
-        // Headless: no window or rendering — rendering lives in the viewer.
+        // Headless: no window or rendering -- rendering lives in the viewer.
         // A bounded run-loop drives the app instead of a window event loop.
         .add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(loop_wait)))
         // Pin the fixed step to TICK_HZ rather than inheriting Bevy's default.
@@ -201,7 +201,7 @@ pub fn build_app(config: SimConfig) -> App {
         // so a viewer connecting the same frame an agent joins learns of
         // that agent only via its scene-init, never also via a duplicate
         // EntitySpawned (a not-yet-ready viewer is skipped by the spawn
-        // broadcast). Frames stream only while Running — no dynamic state
+        // broadcast). Frames stream only while Running -- no dynamic state
         // to send otherwise.
         .add_systems(Update, (broadcast_spawns, drain_viz_events).chain())
         .add_systems(
@@ -236,7 +236,7 @@ pub fn build_app(config: SimConfig) -> App {
     if afap {
         // Advance virtual time by exactly one fixed step per Update, so the
         // Fixed accumulator releases one physics step per loop iteration
-        // regardless of wall-clock — the loop then runs at CPU speed. It also
+        // regardless of wall-clock -- the loop then runs at CPU speed. It also
         // makes a stepped app deterministic: one `update()` is one tick.
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(fixed_dt));
     }

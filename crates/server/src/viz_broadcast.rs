@@ -6,7 +6,7 @@ use crate::scenario::ArenaBounds;
 use crate::scenario_state::{ScenarioState, Tick};
 use crate::viz_nodes::{node_updates, to_viz_transform};
 
-/// Emit a viz frame every N physics ticks — ~32 Hz at the fixed tick.
+/// Emit a viz frame every N physics ticks -- ~32 Hz at the fixed tick.
 /// Gating on the tick (rather than a wall-clock timer) makes frames uniform
 /// in sim-time, so the viewer can interpolate on the frame `tick` cleanly.
 const TICKS_PER_FRAME: u64 = 2;
@@ -15,7 +15,7 @@ const TICKS_PER_FRAME: u64 = 2;
 #[derive(Resource)]
 pub struct Viz(pub viz::VizHandle);
 
-/// The static viz facts about an entity — everything in an
+/// The static viz facts about an entity -- everything in an
 /// `EntityDescriptor` except where its nodes are right now. Attached to walls,
 /// ground, and agents so the broadcast systems can describe the scene without
 /// knowing how any of it was built.
@@ -26,7 +26,7 @@ pub struct VizEntity {
     pub kind: viz::EntityKind,
     pub color: viz::Color,
     /// The entity's node tree: names, geometry, and how the nodes are nested.
-    /// The transforms in it are a starting pose only — every descriptor is
+    /// The transforms in it are a starting pose only -- every descriptor is
     /// sent with the live ones applied (see `descriptor`).
     pub root: viz::EntityNode,
     /// The agent's sensing region for the debug envelope overlay; `None` for

@@ -44,7 +44,7 @@ pub enum DetectionKind {
     Static,
 }
 
-/// Ground-truth input to `perceive` — one entity as the sim actually knows it.
+/// Ground-truth input to `perceive` -- one entity as the sim actually knows it.
 #[derive(Debug, Clone)]
 pub struct PerceivedEntity {
     pub id: String,
@@ -73,7 +73,7 @@ pub struct Detection {
 
 /// The impairment pipeline: cull `others` by range, then field of view, then
 /// line of sight (another entity blocking the view), then perturb the
-/// survivors' pose with Gaussian noise. Pure — the caller owns the RNG (and
+/// survivors' pose with Gaussian noise. Pure -- the caller owns the RNG (and
 /// thus the seed) and gathers the ground-truth `others`. All culls use true
 /// positions; noise is applied only to what survives.
 pub fn perceive(
@@ -93,7 +93,7 @@ pub fn perceive(
         }
         // Field of view: bearing from heading in the ground plane. Skipped for
         // a full-circle spec, or when the agent has no heading (no cone to
-        // define) — a still agent senses all around.
+        // define) -- a still agent senses all around.
         if spec.fov_half_angle < std::f32::consts::PI {
             if let (Some(h), Some(d)) = (heading, flatten_xz(offset)) {
                 if h.dot(d).clamp(-1.0, 1.0).acos() > spec.fov_half_angle {
@@ -113,7 +113,7 @@ pub fn perceive(
             }
         }
         // Line of sight: blocked if another entity sits across the sight line
-        // between us and this one. (Walls don't occlude yet — that needs
+        // between us and this one. (Walls don't occlude yet -- that needs
         // interior obstacles the world doesn't have.)
         let occluded = others.iter().any(|o| {
             o.id != entity.id && occludes(self_position, entity.position, o.position, o.radius)
@@ -123,7 +123,7 @@ pub fn perceive(
         }
         // Noise is drawn only for survivors, so a given entity's perturbation
         // depends on how many earlier entities in `others` were culled (by
-        // range, FOV, or occlusion) — not on the entity alone. That's fine:
+        // range, FOV, or occlusion) -- not on the entity alone. That's fine:
         // it's deterministic for a fixed `others` order + seed (the router
         // reseeds per (agent, device, tick)), and range/FOV already behaved
         // this way.
@@ -139,7 +139,7 @@ pub fn perceive(
     detections
 }
 
-/// Sight lines shorter than this (squared) are treated as zero-length — the
+/// Sight lines shorter than this (squared) are treated as zero-length -- the
 /// eye and target coincide, so nothing is "between" them.
 const MIN_SIGHT_LEN_SQ: f32 = 1e-9;
 /// How much of the segment, at each end, doesn't count as "between": a blocker
@@ -148,7 +148,7 @@ const MIN_SIGHT_LEN_SQ: f32 = 1e-9;
 const ENDPOINT_BAND: f32 = 1e-3;
 
 /// Whether a disc of `radius` at `blocker` lies across the ground-plane sight
-/// line from `eye` to `target` — i.e. its centre is within `radius` of the
+/// line from `eye` to `target` -- i.e. its centre is within `radius` of the
 /// segment and strictly between the endpoints (so a body beside the eye or at
 /// the target doesn't count).
 fn occludes(eye: Vec3, target: Vec3, blocker: Vec3, radius: f32) -> bool {
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn occluder_off_the_sight_line_does_not_block() {
-        // Same target, but the other body is well off the line — clear view.
+        // Same target, but the other body is well off the line -- clear view.
         let others = vec![
             ent("beside", Vec3::new(5.0, 0.0, 5.0), Vec3::ZERO),
             ent("target", Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO),
@@ -411,13 +411,13 @@ mod tests {
 
     #[test]
     fn occludes_blocker_off_to_the_side_does_not() {
-        // On the line at t=0.5 but 2 units off — well outside radius 0.5.
+        // On the line at t=0.5 but 2 units off -- well outside radius 0.5.
         assert!(!sight(5.0, 2.0, 0.5));
     }
 
     #[test]
     fn occludes_grazing_within_radius() {
-        // 0.4 off the line, radius 0.5 — just clips it.
+        // 0.4 off the line, radius 0.5 -- just clips it.
         assert!(sight(5.0, 0.4, 0.5));
     }
 

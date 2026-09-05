@@ -2,7 +2,7 @@
 //! right now.
 //!
 //! The sim owns every node transform; a viewer only draws a node where it is
-//! told. So the suspension arithmetic lives here, beside the rig it reads —
+//! told. So the suspension arithmetic lives here, beside the rig it reads --
 //! not in a viewer, which is where a stale copy of `suspension_rest` on the
 //! wire once drew the wheels 0.2 m above the ground.
 
@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use movement::{wheel_offset, RaycastVehicle, WheelState, Wheels};
 use viz::{EntityNode, Geometry, NodePath, NodeUpdate};
 
-/// Tyre section width (m). Cosmetic only — nothing in the physics has a notion
+/// Tyre section width (m). Cosmetic only -- nothing in the physics has a notion
 /// of how wide a wheel is, so it lives with the rest of what a viewer needs to
 /// draw rather than in the vehicle model.
 const WHEEL_WIDTH: f32 = 0.22;
@@ -25,7 +25,7 @@ fn upright_to_axle() -> Quat {
 /// the tire are doing.
 ///
 /// Position: the attach point, dropped by however much suspension is still
-/// extended — so compression *raises* the wheel relative to the body, because
+/// extended -- so compression *raises* the wheel relative to the body, because
 /// the body is what has come down. Rotation: steer about the body's up axis,
 /// spin about the axle, then the quarter turn that lays the axle across.
 pub fn wheel_pose(index: usize, vehicle: &RaycastVehicle, wheel: &WheelState) -> Transform {
@@ -55,7 +55,7 @@ pub fn to_viz_transform(transform: &Transform) -> viz::Transform {
     }
 }
 
-/// The four wheel children of a car's root node, in `viz::WHEEL_NODES` order —
+/// The four wheel children of a car's root node, in `viz::WHEEL_NODES` order --
 /// the same order the drive system and the debug diagnostics use.
 pub fn wheel_nodes(vehicle: &RaycastVehicle, wheels: &Wheels) -> Vec<EntityNode> {
     viz::WHEEL_NODES

@@ -25,7 +25,7 @@ pub enum ServerToViewer {
 
 /// Everything a viewer sends to the sim. Deliberately small: viz is a
 /// forward/observational pathway, so this is just a connect-time handshake.
-/// (Sensor data is a *separate* pathway, not viz — see DECISIONS.)
+/// (Sensor data is a *separate* pathway, not viz -- see DECISIONS.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ViewerToServer {
@@ -53,7 +53,7 @@ impl Default for Hello {
     }
 }
 
-/// Encodes a message to MessagePack — the wire format. Uses named fields so
+/// Encodes a message to MessagePack -- the wire format. Uses named fields so
 /// the bytes are self-describing and decodable from other languages
 /// (browser, Python).
 pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {

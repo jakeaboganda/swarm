@@ -96,7 +96,7 @@ pub fn arbitrate(
     ) in &mut query
     {
         // Ground-truth context: every other agent, exact, plus the walls. This
-        // is the reserved `ground_truth` device — a perfect, instant fail-safe.
+        // is the reserved `ground_truth` device -- a perfect, instant fail-safe.
         let mut gt_obstacles: Vec<Obstacle> = others
             .iter()
             .filter(|(other, _)| *other != entity)

@@ -87,7 +87,7 @@ fn spawn_position(index: usize, total: usize) -> Vec3 {
 /// Drains transport's channels each tick and applies their effect to the
 /// ECS world: spawning agents on `Join`, updating plans/reflexes, replying
 /// to `GetState`, and handling disconnects. Runs regardless of
-/// `ScenarioState` — `Join` and disconnects are meaningful in more than one
+/// `ScenarioState` -- `Join` and disconnects are meaningful in more than one
 /// state.
 #[allow(clippy::too_many_arguments)]
 pub fn drain_transport(
@@ -126,11 +126,11 @@ pub fn drain_transport(
                 .map(|(_, _, _, _, name)| name.0.clone())
                 .unwrap_or_else(|_| "unknown agent".to_string());
             match *state.get() {
-                // Mid-scenario: don't end immediately — give the agent a
+                // Mid-scenario: don't end immediately -- give the agent a
                 // grace window to reconnect. Its entity keeps coasting on
                 // its last plan/reflexes; `expire_reconnects` ends the
                 // scenario if the deadline passes. The entity is never
-                // despawned in this path, so viewers keep showing it —
+                // despawned in this path, so viewers keep showing it --
                 // frozen with the rest of the world once the scenario ends,
                 // which matches the freeze-and-inspect end state.
                 ScenarioState::Running => {
@@ -512,7 +512,7 @@ fn set_physics_active(
     match query.single_mut() {
         Ok(mut config) => config.physics_pipeline_active = active,
         // The default Rapier context is created in PreStartup, so a miss
-        // here means a plugin-ordering change broke an assumption — loud is
+        // here means a plugin-ordering change broke an assumption -- loud is
         // better than silently leaving physics in its prior state.
         Err(err) => warn!("could not set physics_pipeline_active={active}: {err}"),
     }

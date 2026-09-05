@@ -17,7 +17,7 @@ const TRAIL_MAX: usize = 240;
 /// would be an absurd ring dwarfing the arena).
 const MAX_ENVELOPE_RANGE: f32 = 500.0;
 /// The FOV prism is drawn this tall (~the arena wall height). The sensor culls
-/// only horizontally — it's vertically unbounded — so this is a drawing
+/// only horizontally -- it's vertically unbounded -- so this is a drawing
 /// extent, not a sensing limit: the prism's top and bottom are identical.
 const FOV_VOLUME_HEIGHT: f32 = 3.0;
 
@@ -26,10 +26,10 @@ const FOV_VOLUME_HEIGHT: f32 = 3.0;
 pub struct DebugData {
     pub plan: Vec<Vec3>,
     pub reflex_active: bool,
-    /// What this agent currently perceives (delayed, noised) — drawn as
+    /// What this agent currently perceives (delayed, noised) -- drawn as
     /// ghosts by `draw_detections`.
     pub detections: Vec<PerceivedBlip>,
-    /// Per-wheel diagnostics, in `viz::WHEEL_NODES` order — what `tint_wheels`
+    /// Per-wheel diagnostics, in `viz::WHEEL_NODES` order -- what `tint_wheels`
     /// colours the wheel nodes by.
     pub wheels: Vec<viz::WheelDebug>,
 }
@@ -241,7 +241,7 @@ pub fn toggle_overlays(keys: Res<ButtonInput<KeyCode>>, mut toggles: ResMut<Over
 
 /// Draws what each agent perceives: a line from the agent to each detected
 /// entity's noised ("ghost") position, a marker at the ghost, and a thin red
-/// connector from the ghost to the entity's true position — that gap *is* the
+/// connector from the ghost to the entity's true position -- that gap *is* the
 /// perception error (noise + latency). Entities the agent can't see have no
 /// ghost, so culling (range/FOV) reads as absence.
 pub fn draw_detections(
@@ -335,8 +335,8 @@ pub fn draw_sensor_envelope(
 
 /// Draws the FOV as an honest vertical prism: the horizontal wedge (apex at the
 /// agent, arc at true radial `range`) extruded straight up with parallel walls.
-/// The sensor culls only horizontally — all heights within range+bearing are
-/// seen — so there is no vertical FOV: top and bottom are identical, and the
+/// The sensor culls only horizontally -- all heights within range+bearing are
+/// seen -- so there is no vertical FOV: top and bottom are identical, and the
 /// prism rises a fixed height from the agent's own elevation rather than
 /// converging to a far plane.
 fn draw_fov_prism(

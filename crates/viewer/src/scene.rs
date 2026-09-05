@@ -527,7 +527,7 @@ pub fn advance_playback(
         clock.tick = target;
     } else {
         // Hold the buffer at BUFFER_TICKS by nudging playback speed a few
-        // percent toward the set-point — closed-loop, so latency stays fixed
+        // percent toward the set-point -- closed-loop, so latency stays fixed
         // instead of parking wherever a snap left it.
         let adjust = (error * CATCHUP_GAIN).clamp(-MAX_RATE_ADJUST, MAX_RATE_ADJUST);
         clock.tick += *smoothed_dt * clock.tick_rate * (1.0 + adjust);
@@ -552,7 +552,7 @@ pub fn advance_playback(
     }
 }
 
-/// Frames the camera on the whole arena — when its bounds arrive, when they
+/// Frames the camera on the whole arena -- when its bounds arrive, when they
 /// change between scenarios, when the view angle changes, and when follow mode
 /// is switched off and hands the camera back.
 pub fn frame_camera(

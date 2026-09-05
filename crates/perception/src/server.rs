@@ -13,7 +13,7 @@ use crate::message::{decode, encode, AgentToServer, Hello, ServerToAgent, PROTOC
 
 /// Per-agent queue depth. Bounded so a slow/dead agent can't grow memory:
 /// perception frames are dropped when full, which is fine because each frame
-/// is a complete snapshot — the next one resupplies the truth.
+/// is a complete snapshot -- the next one resupplies the truth.
 const QUEUE_CAPACITY: usize = 4;
 /// How long an accepted connection has to send its `Hello` before we drop it.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -49,7 +49,7 @@ struct AgentConn {
 
 type Registry = Arc<Mutex<HashMap<String, AgentConn>>>;
 
-/// Locks the registry, recovering from a poisoned mutex — one agent task
+/// Locks the registry, recovering from a poisoned mutex -- one agent task
 /// panicking must never take down the sim thread's next push.
 fn lock(registry: &Registry) -> MutexGuard<'_, HashMap<String, AgentConn>> {
     registry.lock().unwrap_or_else(PoisonError::into_inner)

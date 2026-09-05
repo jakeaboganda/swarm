@@ -2,7 +2,7 @@
 //! input first reaches the sim.
 //!
 //! Agents are external processes that "may be LLM-driven, and therefore slow
-//! and occasionally unreliable" — a plan can arrive carrying `NaN`, `inf`, a
+//! and occasionally unreliable" -- a plan can arrive carrying `NaN`, `inf`, a
 //! negative speed, or ten thousand waypoints, all of it valid JSON. These are
 //! the pure decisions taken on that input, extracted from `drain_transport` so
 //! they can be driven by tests.
@@ -10,7 +10,7 @@
 use protocol::messages::{ReflexRule, Waypoint};
 
 /// Cap on a single plan's waypoint count. A plan costs O(1) per tick (only the
-/// front waypoint is read), so this bounds memory, not tick time — hence a
+/// front waypoint is read), so this bounds memory, not tick time -- hence a
 /// generous limit: a route across a city-sized map samples into the thousands.
 pub const MAX_PLAN_WAYPOINTS: usize = 10_000;
 
@@ -21,7 +21,7 @@ pub const MAX_PLAN_WAYPOINTS: usize = 10_000;
 pub const MAX_REFLEX_RULES: usize = 64;
 
 /// Why an inbound payload was refused outright. The connection stays open and
-/// the agent gets the message as an `error` event — same contract as a
+/// the agent gets the message as an `error` event -- same contract as a
 /// malformed frame.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InboundError {
@@ -41,7 +41,7 @@ fn usable(waypoint: &Waypoint) -> bool {
 /// Unusable waypoints (non-finite position or speed) are dropped and negative
 /// speeds clamp to zero; an over-long plan is truncated at the cap, since a
 /// long plan is plausibly a legitimate long route. A *non-empty* plan with
-/// nothing usable left is refused rather than applied — silently replacing a
+/// nothing usable left is refused rather than applied -- silently replacing a
 /// working plan with an empty one would coast the vehicle on stale forces and
 /// look like a server bug. An empty submission is accepted as-is: that is the
 /// deliberate way to clear a plan.

@@ -47,7 +47,7 @@ fn condition_met(rule: &ReflexRule, reading: f32, currently_active: bool) -> boo
 /// Updates every rule's trigger state and returns the action of the
 /// highest-priority active rule, if any. Each rule reads its `measure` from
 /// the device it names (`rule.sensor`), resolved via `contexts` (keyed by
-/// device name — e.g. `ground_truth` or a scenario sensor). A rule naming a
+/// device name -- e.g. `ground_truth` or a scenario sensor). A rule naming a
 /// device with no context reads nothing and stays inactive. Ties are broken by
 /// registration order (earlier wins); priority is per-agent.
 pub fn evaluate(

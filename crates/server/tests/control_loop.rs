@@ -1,4 +1,4 @@
-//! The per-tick control loop's invariants — the `CLAUDE.md` "implementation
+//! The per-tick control loop's invariants -- the `CLAUDE.md` "implementation
 //! guardrails", which until now were held only by prose. Each of these is a
 //! correctness requirement that was found and fixed on paper; a regression in
 //! any of them is silent without a test.

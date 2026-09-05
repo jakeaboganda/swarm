@@ -173,7 +173,7 @@ impl PlanPath {
     /// Nearest point on the path to `position`, as an arc length, searched
     /// only within [`SEARCH_BACK`]/[`SEARCH_FORWARD`] of `from`.
     ///
-    /// The window is the whole point. A globally nearest point can be a lap
+    /// The window is not an optimisation. A globally nearest point can be a lap
     /// away on any circuit, or -- for a body not yet on its path -- the path's
     /// own end, which would read as "already arrived" and drop a plan the
     /// agent had just submitted. Searching forward from where the body

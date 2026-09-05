@@ -30,9 +30,9 @@ fn main() -> anyhow::Result<()> {
     let map = load_map(scenario.map.as_deref())?;
 
     // Pace (the scenario's `time.pace`, overridable by env `SIM_TIME`):
-    //   realtime (default) — the fixed step is paced to wall-clock, so one
+    //   realtime (default) -- the fixed step is paced to wall-clock, so one
     //     sim-second is one real second. Required for live viewing.
-    //   afap — "as fast as possible": the run-loop spins without sleeping and
+    //   afap -- "as fast as possible": the run-loop spins without sleeping and
     //     virtual time advances one fixed step per iteration, decoupled from
     //     wall-clock, so the sim runs at CPU speed (headless batch runs). A
     //     realtime viewer can't keep pace with this.

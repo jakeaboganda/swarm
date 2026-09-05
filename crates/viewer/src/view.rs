@@ -2,7 +2,7 @@
 //!
 //! Orthogonal to *what* it frames: `follow::follow_camera` owns the camera
 //! while a vehicle is followed and `scene::frame_camera` owns it otherwise, and
-//! both place it with the same offset — one in the vehicle's frame, one in the
+//! both place it with the same offset -- one in the vehicle's frame, one in the
 //! world's.
 
 use bevy::prelude::*;
@@ -66,7 +66,7 @@ impl CameraView {
 }
 
 /// Where the camera sits relative to what it frames, and which way is up on
-/// screen — both in the subject's own frame (forward `-Z`, right `+X`, up
+/// screen -- both in the subject's own frame (forward `-Z`, right `+X`, up
 /// `+Y`), so the caller rotates them by whatever basis it is framing in.
 pub fn view_placement(view: CameraView, distance: f32, height: f32) -> (Vec3, Vec3) {
     let (distance, height) = view.scaled(distance, height);
@@ -86,7 +86,7 @@ pub fn view_placement(view: CameraView, distance: f32, height: f32) -> (Vec3, Ve
 
 /// `1`-`5` select the front, rear, left, right and top views; pressing the one
 /// already active returns to the default. They apply whether or not a
-/// vehicle is followed — following just changes what the view is a view *of*.
+/// vehicle is followed -- following just changes what the view is a view *of*.
 pub fn view_input(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<CameraView>) {
     let pressed = [
         (KeyCode::Digit1, CameraView::Front),
@@ -105,7 +105,7 @@ pub fn view_input(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<CameraView>)
             chosen
         };
         // Assigning through `ResMut` always marks the resource changed, and
-        // the camera systems reframe on that — so only write a real change.
+        // the camera systems reframe on that -- so only write a real change.
         if *view != next {
             *view = next;
         }

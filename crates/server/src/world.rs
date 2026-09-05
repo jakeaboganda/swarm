@@ -357,7 +357,7 @@ pub fn spawn_road(commands: &mut Commands, road: &map::RoadNetwork) {
 
 /// Spawns the ground and four bounding walls as static physics bodies, each
 /// tagged with a `VizEntity` so viewers can render it. No meshes, camera, or
-/// light — the sim is headless; rendering lives in the viewer.
+/// light -- the sim is headless; rendering lives in the viewer.
 pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
     let half_width = arena.width / 2.0;
     let half_depth = arena.depth / 2.0;
@@ -431,7 +431,7 @@ pub fn spawn_arena(commands: &mut Commands, arena: &ArenaConfig) {
 
 /// Spawns one agent's entity: a dynamic, ground-constrained capsule body
 /// with the movement model matching its declared `embodiment`, tagged with a
-/// `VizEntity` for viewers. Rotation is fully locked — models steer
+/// `VizEntity` for viewers. Rotation is fully locked -- models steer
 /// kinematically; the visual yaw viewers render comes from `movement`'s
 /// `face_velocity_direction`, which sets the transmitted Transform rotation.
 // Spawning an agent genuinely needs all of these (world handle, identity,
@@ -572,7 +572,7 @@ pub fn spawn_agent(
             PhysicalYaw,
             // The capsule's own yaw (long-axis) inertia is tiny, so tire
             // torques would spin it instantly. Give it a sane yaw inertia and
-            // some yaw damping. Tuned by feel — see DECISIONS.
+            // some yaw damping. Tuned by feel -- see DECISIONS.
             ColliderMassProperties::MassProperties(MassProperties {
                 local_center_of_mass: Vec3::ZERO,
                 mass: 1.5,

@@ -6,7 +6,7 @@ use crate::model::{Actuation, BodyState, DesiredVelocity, MovementModel};
 // unit-tested directly. `Holonomic::drive` is a thin wrapper over it.
 
 /// Free horizontal movement: no minimum turn radius, no forward-only
-/// constraint. Steers via force toward the desired velocity — the only
+/// constraint. Steers via force toward the desired velocity -- the only
 /// embodiment implemented in v1.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Holonomic {

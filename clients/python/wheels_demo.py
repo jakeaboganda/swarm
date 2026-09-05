@@ -5,9 +5,9 @@ Every section of `maps/testtrack.xodr` targets something the vehicle model does
 transfer through a corner, understeer at the limit, and a decreasing-radius
 spiral. This client drives them in order at the *same commanded numbers every
 run*, so a difference on screen between two tuning passes is a difference in the
-physics and not a difference in how it was driven. That is the whole point of
-scripting it rather than routing: a route would come out slightly different each
-time and muddy the comparison.
+physics and not a difference in how it was driven. That is why it is scripted
+rather than routed: a route would come out slightly different each run and muddy
+the comparison.
 
 Run the server first (or use scripts/run.sh):
     cargo run --bin server -- scenario_wheels.json

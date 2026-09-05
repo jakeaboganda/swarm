@@ -1,7 +1,7 @@
 //! A real simulation, stood up on ephemeral ports and stepped by hand.
 //!
 //! `Sim` owns the tokio runtime, the three pathway servers, and the Bevy app
-//! that `server::build_app` assembles — the same graph the binary runs, minus
+//! that `server::build_app` assembles -- the same graph the binary runs, minus
 //! argument parsing. It always runs in *afap* pace, where virtual time
 //! advances exactly one fixed step per `update()`, so one `step()` is one
 //! physics tick and the tests are deterministic.
@@ -396,7 +396,7 @@ impl TestAgent {
         let _ = self.outbound.send(Message::text(text));
     }
 
-    /// Sends a raw frame — for payloads a `ClientMessage` can't express.
+    /// Sends a raw frame -- for payloads a `ClientMessage` can't express.
     pub fn send_raw(&self, frame: Message) {
         let _ = self.outbound.send(frame);
     }
@@ -444,7 +444,7 @@ impl Sim {
     }
 
     /// The delivered (delayed, noised) detections `agent` perceives through
-    /// `device` — the exact set reflex evaluation reads this frame.
+    /// `device` -- the exact set reflex evaluation reads this frame.
     pub fn delivered(&self, agent: &str, device: &str) -> Vec<sensors::Detection> {
         self.app
             .world()

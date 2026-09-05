@@ -14,7 +14,7 @@ use crate::scenario::ArenaBounds;
 use crate::scenario_state::Tick;
 use crate::world::Radius;
 
-/// Recompute perceived worlds every N physics ticks — ~32 Hz. Latency is
+/// Recompute perceived worlds every N physics ticks -- ~32 Hz. Latency is
 /// counted in these frames, so this also sets the latency quantum.
 const TICKS_PER_FRAME: u64 = 2;
 /// Cap on a device's latency ring buffer.

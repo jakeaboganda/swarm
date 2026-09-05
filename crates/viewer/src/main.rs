@@ -30,7 +30,7 @@ async fn main() {
     // with Runtime-D3) suspends the dGPU during the idle gaps FIFO leaves
     // between frames, and the ~250 ms resume latency shows up as a periodic
     // whole-process stall. Rendering uncapped never lets the GPU idle, so it
-    // stays clocked up — no vendor APIs or root needed. Motion stays smooth
+    // stays clocked up -- no vendor APIs or root needed. Motion stays smooth
     // regardless of the (now variable) frame rate because playback runs on the
     // sim-time render clock, not per-frame dt. Costs power/heat, hence opt-in.
     let present_mode = if std::env::var("VIZ_GPU_KEEPALIVE").is_ok() {
@@ -50,7 +50,7 @@ async fn main() {
         // Update continuously even when the window isn't focused. The
         // viewer renders an external live stream, and Bevy's default
         // (`WinitSettings::game`) drops an unfocused window into a reactive
-        // mode that only updates on input events — so without this, frames
+        // mode that only updates on input events -- so without this, frames
         // (drained in `apply_stream`, an Update system) would only advance
         // when the mouse moves over the window.
         .insert_resource(WinitSettings {

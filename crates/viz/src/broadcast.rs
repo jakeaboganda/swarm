@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::message::{encode, Hello, ServerToViewer, ViewerToServer, PROTOCOL_VERSION};
 
 /// Per-viewer *lossy* queue depth. Bounded so a slow or dead viewer can't
-/// grow memory — frames are dropped when it's full, which is fine for the
+/// grow memory -- frames are dropped when it's full, which is fine for the
 /// scene/debug frame stream: the next frame is a complete snapshot that
 /// resupplies the truth. Must-deliver messages use the reliable channel
 /// instead.
@@ -92,7 +92,7 @@ impl VizHandle {
         }
     }
 
-    /// Reliable broadcast to every ready viewer — for must-deliver messages
+    /// Reliable broadcast to every ready viewer -- for must-deliver messages
     /// (lifecycle events: spawn/despawn, scenario-state changes).
     pub fn broadcast_reliable(&self, message: &ServerToViewer) {
         let bytes = encode(message);
@@ -102,7 +102,7 @@ impl VizHandle {
         }
     }
 
-    /// Lossy broadcast to every ready viewer — for the scene frame stream.
+    /// Lossy broadcast to every ready viewer -- for the scene frame stream.
     /// Dropped for any viewer whose queue is full.
     pub fn broadcast_frame(&self, message: &ServerToViewer) {
         let bytes = encode(message);
@@ -194,7 +194,7 @@ async fn handle_viewer(
     let Some(hello) = read_handshake(&mut ws).await else {
         return;
     };
-    // Refuse a viewer speaking a schema we can't serve — better than
+    // Refuse a viewer speaking a schema we can't serve -- better than
     // streaming bytes it will misdecode.
     if hello.protocol_version != PROTOCOL_VERSION {
         return;
@@ -308,7 +308,7 @@ mod tests {
     }
 
     /// Connects a viewer, waits for its `ViewerConnected`, sends its
-    /// scene-init (marking it ready), and consumes that scene-init — so the
+    /// scene-init (marking it ready), and consumes that scene-init -- so the
     /// returned client is ready to receive the live stream.
     async fn connect_ready(handle: &mut VizHandle, hello: Hello) -> (Client, ViewerId) {
         let mut client = connect(handle.local_addr, hello).await;
@@ -481,8 +481,8 @@ mod tests {
     async fn a_poisoned_registry_still_serves_the_other_viewers() {
         // A viewer task panicking while holding the lock must not take the sim
         // thread down with it on the next broadcast -- viewers are passive and
-        // lifecycle-independent, and that is the whole point of the
-        // poison-recovering `lock`.
+        // lifecycle-independent, which is what the poison-recovering `lock`
+        // protects.
         let mut handle = spawn_test_server().await;
         let (mut client, _id) = connect_ready(&mut handle, Hello::default()).await;
 

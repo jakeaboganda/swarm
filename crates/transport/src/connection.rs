@@ -55,7 +55,7 @@ pub async fn handle_connection(
         .insert(id, out_tx);
     let _ = event_tx.send(ConnectionEvent::Connected(id));
 
-    // Delay the first tick by a full interval — `interval` would otherwise
+    // Delay the first tick by a full interval -- `interval` would otherwise
     // fire immediately and ping the client the instant it connects.
     let mut heartbeat = tokio::time::interval_at(
         tokio::time::Instant::now() + timings.heartbeat_interval,
@@ -88,7 +88,7 @@ pub async fn handle_connection(
                                 // Bounded channel: awaiting here applies
                                 // backpressure to a flooding client rather
                                 // than growing memory. An error means the
-                                // server dropped its receiver — shut down.
+                                // server dropped its receiver -- shut down.
                                 if inbound_tx.send(Inbound { connection: id, message }).await.is_err() {
                                     break;
                                 }

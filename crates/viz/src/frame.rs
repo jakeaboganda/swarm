@@ -39,9 +39,9 @@ pub struct NodeUpdate {
 pub const WHEEL_NODES: [&str; 4] = ["wheel.fl", "wheel.fr", "wheel.rl", "wheel.rr"];
 
 /// The debug layer: non-physical annotations a viewer may render or ignore
-/// — intent (the remaining plan) and diagnostics (reflex state). Sent as a
+/// -- intent (the remaining plan) and diagnostics (reflex state). Sent as a
 /// distinct message so scene-only consumers (recorders, USD export) can
-/// skip it. Trails are *not* here — a viewer derives those from the frame
+/// skip it. Trails are *not* here -- a viewer derives those from the frame
 /// stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DebugFrame {
@@ -56,7 +56,7 @@ pub struct EntityDebug {
     pub plan: Vec<Vec3>,
     /// Whether a reflex is currently overriding this entity's plan.
     pub reflex_active: bool,
-    /// What this agent currently perceives through its simulated sensors —
+    /// What this agent currently perceives through its simulated sensors --
     /// the delayed, noised set actually delivered on the sensor pathway.
     /// Debug overlay only (a viewer draws each as a "ghost"); empty for
     /// non-agents.

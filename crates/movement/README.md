@@ -18,7 +18,7 @@ force each tick. Independent of networking and scenario logic.
 - **`FullVehicle`** — single-track ("bicycle") dynamics: real physical yaw
   from a linear tire model (front/rear cornering forces + a yaw torque), so
   understeer/oversteer and sliding emerge instead of being scripted. A two-
-  layer split — a *driver* maps `DesiredVelocity` to steering/drive controls,
+  layer split: a *driver* maps `DesiredVelocity` to steering/drive controls,
   a *plant* maps those to forces. The one embodiment that opts into yaw as a
   real physical DOF.
 - **`DesiredVelocity`** — the shared control contract, written by `server`'s

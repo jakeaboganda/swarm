@@ -18,7 +18,7 @@ pub enum MovementSet {
 
 /// Registers movement dispatch for every embodiment. Adding a new one
 /// (e.g. `FullVehicle`) means adding one more `apply_movement_force::<M>`
-/// line here, nothing else — each is a separate monomorphized system that
+/// line here, nothing else -- each is a separate monomorphized system that
 /// only touches entities carrying that component.
 pub struct MovementPlugin;
 

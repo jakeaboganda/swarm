@@ -2,11 +2,11 @@
 
 Each agent orbits between a point on a big circle and its antipode, so every
 agent is perpetually driving through the middle at the same time as everyone
-else — a dense, continuous collision-avoidance stress test. Avoidance is
+else -- a dense, continuous collision-avoidance stress test. Avoidance is
 done *client-side*: the server's reflexes are brake-only (a safety net), so
 real steering comes from each agent re-planning every control tick against
 its neighbors (boids-style separation + a right-hand swirl bias to break
-head-on deadlocks). That's the intended split — agents are the brains, the
+head-on deadlocks). That's the intended split -- agents are the brains, the
 sim just follows the plan and enforces the reflex.
 
 Usage:
@@ -81,7 +81,7 @@ def steer(name, world, arena, goal):
 
     gx, gz = goal["xz"]
     dx, dz = gx - px, gz - pz
-    if math.hypot(dx, dz) < ARRIVE_R:  # reached it — head for the antipode
+    if math.hypot(dx, dz) < ARRIVE_R:  # reached it -- head for the antipode
         goal["xz"] = (-gx, -gz)
         gx, gz = goal["xz"]
         dx, dz = gx - px, gz - pz

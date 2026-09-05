@@ -4,7 +4,7 @@ use protocol::messages::SensorKind;
 use crate::context::{Obstacle, SensorContext};
 
 /// A named, pluggable sensor reading. Ground-truth implementations
-/// (below) are all v1 ships — the trait exists so sensor-simulation
+/// (below) are all v1 ships -- the trait exists so sensor-simulation
 /// (noise, limited range/field-of-view, latency) can slot in later as new
 /// implementations without changing the reflex-evaluation logic.
 pub trait Sensor {
@@ -58,7 +58,7 @@ pub fn sensor_for(kind: &SensorKind) -> Box<dyn Sensor> {
     }
 }
 
-/// Nearest-by-closing-time (not nearest-by-distance — these diverge: a far,
+/// Nearest-by-closing-time (not nearest-by-distance -- these diverge: a far,
 /// fast-closing obstacle can have a lower time-to-collision than a near,
 /// slow one). Treats both parties as spheres and solves for the smallest
 /// non-negative `t` at which their surfaces touch (center distance equals

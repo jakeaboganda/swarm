@@ -8,7 +8,7 @@ use crate::model::{Actuation, BodyState, DesiredVelocity, MovementModel};
 /// math bounded.
 const MIN_VX: f32 = 0.5;
 
-/// Actuator commands — the "pedals + wheel". The plant's only inputs (`u`).
+/// Actuator commands -- the "pedals + wheel". The plant's only inputs (`u`).
 #[derive(Clone, Copy, Debug)]
 pub struct Controls {
     /// Front road-wheel steer angle (radians). +ve steers toward the body's
@@ -50,10 +50,10 @@ pub struct FullVehicle {
     /// Rear cornering stiffness. Slightly stiffer than front → mild,
     /// stable understeer.
     pub c_r: f32,
-    /// Clamp on |lateral force| per axle — the crude stand-in for a tire
+    /// Clamp on |lateral force| per axle -- the crude stand-in for a tire
     /// grip limit (no friction circle yet).
     pub max_lateral: f32,
-    /// Current steering angle — the evolving actuator state.
+    /// Current steering angle -- the evolving actuator state.
     pub steer: f32,
 }
 

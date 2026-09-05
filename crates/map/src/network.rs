@@ -2,7 +2,7 @@ use glam::Vec3;
 
 use crate::geometry::{Polyline, Projection};
 
-/// An opaque lane identifier. **Not** a vector index into `RoadNetwork.lanes` —
+/// An opaque lane identifier. **Not** a vector index into `RoadNetwork.lanes` --
 /// an importer may assign arbitrary ids (e.g. from OpenDRIVE lane keys), so
 /// look lanes up with [`RoadNetwork::lane`], never by position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,7 +95,7 @@ impl RoadNetwork {
     }
 
     /// The driving lane whose centerline is nearest `point`, with the
-    /// projection onto it — the lane an agent/vehicle is in, and its
+    /// projection onto it -- the lane an agent/vehicle is in, and its
     /// lane-keeping error.
     pub fn nearest_lane(&self, point: Vec3) -> Option<(LaneId, Projection)> {
         self.driving_lanes()
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn lane_lookup_is_by_id_not_position() {
-        // Ids need not equal vec positions — an importer may assign arbitrary
+        // Ids need not equal vec positions -- an importer may assign arbitrary
         // ones. Position 0 holds id 17, position 1 holds id 4.
         let net = RoadNetwork {
             lanes: vec![

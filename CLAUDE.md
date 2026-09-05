@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for working in this repository. This file is self-contained by
-design — it does not assume `DECISIONS.md` (gitignored, local-only) is
+design: it does not assume `DECISIONS.md` (gitignored, local-only) is
 present. `DECISIONS.md` holds the *rationale* and rejected alternatives
 behind each choice below, for whoever wants the "why"; this file holds the
 facts and rules needed to work here day-to-day.
@@ -10,9 +10,9 @@ facts and rules needed to work here day-to-day.
 
 A playground for agentic driving: a 3D physics simulation that external agent
 processes (which may be LLM-driven, and therefore slow and occasionally
-unreliable) connect to and drive vehicles within — in a flat, walled **arena**,
-or on a real **road network** (a hand-authored road or a loaded OpenDRIVE map).
-It's a dev toy — an evolving project, not a fixed-spec deliverable. It grew from
+unreliable) connect to and drive vehicles within: a flat, walled **arena**,
+or a real **road network** (a hand-authored road or a loaded OpenDRIVE map).
+It's a dev toy: an evolving project, not a fixed-spec deliverable. It grew from
 a bare arena swarm into an agent-facing driving sandbox; both worlds coexist,
 selected per scenario.
 
@@ -26,16 +26,16 @@ selected per scenario.
   entities; viewers connect over a separate **WebSocket + MessagePack** stream
   (`viz`, `:4001`) to *observe*; and agents receive their **simulated
   perception** over a third stream (`perception`, JSON, `:4002`). Viewers are
-  passive and lifecycle-independent — connecting or dropping one never affects
+  passive and lifecycle-independent: connecting or dropping one never affects
   the sim.
 - **Agents are external processes**, connecting over **WebSocket + JSON**.
 - **Simulation is continuous real-time** (64Hz Bevy/Rapier tick),
   independent of agent think-time. Each agent has a current action that
-  stays in effect ("sticky") until replaced — the world never waits on a
+  stays in effect ("sticky") until replaced; the world never waits on a
   slow agent.
 - **The scenario owns time.** A scenario's optional `time` block sets its
   run **duration** (in sim-seconds; omitted = unbounded, ends only on
-  disconnect) and its **pace** — `realtime` (one sim-second per wall-second,
+  disconnect) and its **pace**: `realtime` (one sim-second per wall-second,
   for live viewing) or `afap` (ticks at CPU speed for headless batch runs;
   same sim-time, reached sooner in wall-clock). The physics tick rate
   (64Hz) is a fixed engine invariant, not scenario-owned. The `SIM_TIME`
@@ -45,7 +45,7 @@ selected per scenario.
   agent `Subscribe`s and the server pushes a `Tick { tick, dt, plan_version }`
   pulse carrying the sim-seconds elapsed since that agent's last pulse; the
   agent `Ack { tick }`s to release the next. It's **one-in-flight and never
-  blocks the sim** — a fast agent approaches the 64Hz ceiling, a slow one
+  blocks the sim**: a fast agent approaches the 64Hz ceiling, a slow one
   gets fewer pulses with a larger `dt` (which is authoritative; the rate is
   best-effort). An agent that never subscribes just keeps polling `get_state`
   as before.
@@ -54,32 +54,32 @@ selected per scenario.
     The server *tracks* it: each tick it measures how far along the path the
     body has got, aims at a point interpolated a speed-scaled lookahead
     **ahead of that**, and steers there at the speed the plan asked for. The
-    waypoints are **never consumed** -- they stay exactly as submitted until
-    the path is driven or a reflex drops it -- so an agent that re-plans
+    waypoints are **never consumed**: they stay exactly as submitted until
+    the path is driven or a reflex drops it, so an agent that re-plans
     freely never finds its own path and the server's idea of it drifting
     apart. Deciding *where* and *how fast* is the agent's; the server only
     executes.
   - **Reflexes**: declarative, agent-registered rules
     (`sensor` `measure` `operator` `threshold` → `action`) evaluated
-    entirely server-side, every tick. `sensor` names a **device** to read —
+    entirely server-side, every tick. `sensor` names a **device** to read:
     the always-available `ground_truth` (perfect, instant), or a scenario-
-    equipped **simulated** device (see below) — and `measure` is the
+    equipped **simulated** device (see below). `measure` is the
     predicate (`time_to_collision`/…). So a reflex can react to impaired
     perception, not just the truth. They override plan-following when
-    triggered — zero round-trip latency, since they never wait on the agent.
+    triggered, at zero round-trip latency, since they never wait on the agent.
     Each rule carries an agent-assigned `priority` (higher wins on conflict;
     ties broken by registration order).
 - **The world runs as a scenario**, not an open join-anytime space: a
   fixed roster of expected agents is declared upfront in a JSON scenario
   file, the server waits until every slot has connected, then runs. If any
-  connected agent becomes unavailable, the *entire* scenario ends —
+  connected agent becomes unavailable, the *entire* scenario ends:
   physics freezes in place (for inspection), remaining agents are
   notified, and the process keeps running until manually killed.
 - **Physics is ground-constrained**: gravity on, **roll and pitch locked**
   (no tipping/rolling) by default. `Holonomic` and `CarLike` also lock yaw and
   steer via horizontal forces only. The invariant relaxes for embodiments that
   opt in: `FullVehicle` unlocks **yaw** as a physical DOF (its heading is real
-  physics — tire-slip lateral forces + a yaw torque — not a cosmetic facing);
+  physics (tire-slip lateral forces + a yaw torque), not a cosmetic facing);
   `RaycastVehicle` unlocks **roll and pitch** too, so it leans on banking and
   follows the road's grade (see `DECISIONS.md`, "Higher-fidelity vehicle
   dynamics"). Movement model is a **pluggable, per-entity** component/trait
@@ -87,14 +87,14 @@ selected per scenario.
   `RaycastVehicle` ship). Force-based models implement
   `drive(&mut self, desired, body, dt) -> Actuation` (a force plus a yaw
   torque), carrying state that evolves over time (a car's steering angle); the
-  raycast vehicle is the exception — it applies its own per-wheel suspension /
+  raycast vehicle is the exception: it applies its own per-wheel suspension /
   drive / grip forces directly (it doesn't fit the `drive` seam).
 - **Sensors are first-class, world-equipped devices.** Each agent's roster
-  slot declares `sensors: Vec<SensorDef>` — named devices, each `ground_truth`
+  slot declares `sensors: Vec<SensorDef>`: named devices, each `ground_truth`
   or `simulated` (with a `spec`: range, FOV half-angle, position/velocity
   Gaussian noise, latency). Reflex rules reference a device by name; the
   reserved `ground_truth` device is always available without declaration.
-  Trust is the *device's* property, not the rule's — a rule is a dumb
+  Trust is the *device's* property, not the rule's; a rule is a dumb
   `measure op threshold`. The `sensors` crate holds both the predicate
   readings (`time_to_collision`/`distance_to`/`speed`, ground-truth math
   unchanged) and the impairment pipeline (`perceive`: range+FOV cull then
@@ -106,10 +106,10 @@ selected per scenario.
 - **Perception is its own pathway** (`perception` crate, `:4002`): the sim
   computes each agent's per-device perceived world once per tick (before
   reflex arbitration, so a `Simulated` reflex reads exactly what was
-  delivered) and pushes it to any agent listening — one frame per simulated
+  delivered) and pushes it to any agent listening, one frame per simulated
   device. `provider → server-router → agent`, provider-agnostic (analytic
   today, a rendered-sensor provider later). Ground-truth devices are
-  reflex-only fail-safes — never streamed (an agent never *sees* ground
+  reflex-only fail-safes, never streamed (an agent never *sees* ground
   truth). The **viz** debug layer separately carries a *human-only*
   perception overlay (see below); no agent consumes sensor data from viz.
 - **The world is arena or road**, chosen by the scenario's optional `map`
@@ -121,13 +121,13 @@ selected per scenario.
   polylines at load, so consumers only ever sample points.
 - **Roads are a known prior; traffic is perceived.** In a road world the static
   map is **delivered to the agent at join** (the `joined` message's `map`: lane
-  centerlines, widths, and the connectivity graph) — perfect and free. Dynamic
+  centerlines, widths, and the connectivity graph), perfect and free. Dynamic
   obstacles are still perceived through the impaired `:4002` pathway. An agent
   lays a lane-following path from the delivered map, or asks the server to
   **route**: `request_route{from,to,speed}` runs `map`'s Dijkstra router over the
   connectivity graph (lane successors through junctions + lane-change neighbors)
   and returns a plan with the agent's speed stamped on. The plan (and its speed)
-  stays the agent's — the server only does the mechanical pathfinding.
+  stays the agent's; the server only does the mechanical pathfinding.
 
 ## Crate layout
 
@@ -135,8 +135,8 @@ Cargo workspace, ten crates:
 
 - **`protocol`** — shared `serde` types for the *agent* pathway: WebSocket
   messages (`join`, plan submission, reflex-rule registration, `request_route`,
-  `subscribe`/`ack` for the step clock; `get_state`/snapshot, `joined` — which
-  carries the delivered `map` in a road world — `reflex_fired`/`route`/`tick`/
+  `subscribe`/`ack` for the step clock; `get_state`/snapshot, `joined` (which
+  carries the delivered `map` in a road world), `reflex_fired`/`route`/`tick`/
   `scenario_ended`/`error` events), and the scenario JSON schema (arena +
   optional `map` + agent roster + per-agent `SensorDef`s + `seed` + optional
   `time` block). Depends on nothing else in the workspace.
@@ -154,9 +154,9 @@ Cargo workspace, ten crates:
   `protocol`.
 - **`viz`** — the *visualization* pathway (`:4001`): the semantic scene wire
   types (MessagePack, versioned) and the WebSocket broadcast server that fans
-  them out to viewers. An entity is a **tree of nodes** — each a local
+  them out to viewers. An entity is a **tree of nodes**: each a local
   transform, optional `Geometry` (primitives, a baked mesh, or an asset URI)
-  and children — so a car is a body with four wheel children, and a frame
+  and children. So a car is a body with four wheel children, and a frame
   carries only the nodes that moved, addressed by path. The **sim computes
   every node transform**: a viewer draws where it is told and composes nothing.
   Its debug layer also carries human-only diagnostics: a perception overlay
@@ -179,7 +179,7 @@ Cargo workspace, ten crates:
   sections, and road/lane/junction connectivity. Depends on `map` + `roxmltree`;
   geometry cross-checked against the reference C++ libOpenDRIVE.
 - **`server`** — the headless simulation: loads the scenario, builds the
-  world (flat **arena**, or a **road** world — the road's trimesh collider +
+  world (flat **arena**, or a **road** world: the road's trimesh collider +
   raycast-vehicle agents, from `demo_road` or an imported `.xodr`), runs Rapier
   physics, dispatches movement per entity, computes per-device perceived worlds,
   resolves reflex-vs-plan arbitration each tick, tracks each agent's plan
@@ -188,7 +188,7 @@ Cargo workspace, ten crates:
   perception broadcasts. Owns the tokio
   runtime; Bevy runs on the main thread. Split lib + bin: `app::build_app`
   assembles the whole system graph, and the binary is process concerns only
-  (argument parsing, the runtime, binding the three servers) — so a test can
+  (argument parsing, the runtime, binding the three servers), so a test can
   stand the real sim up on ephemeral ports and step it one tick at a time.
 - **`viewer`** — the reference 3D visualizer binary: a Bevy app that
   subscribes to the `viz` stream and renders the scene + debug overlays
@@ -206,7 +206,7 @@ Cargo workspace, ten crates:
   surface errors (e.g. `map-opendrive`'s `ImportError`); the
   `server` and `viewer` binaries may use `anyhow` for top-level error
   bubbling. Avoid `unwrap`/`expect` outside tests, except
-  for genuinely infallible cases — and those get a short comment saying
+  for genuinely infallible cases, and those get a short comment saying
   why. Panics are for programmer-error invariant violations, not for
   expected/recoverable conditions (malformed agent input, disconnects,
   scenario JSON errors all fall into the latter).
@@ -216,7 +216,7 @@ Cargo workspace, ten crates:
   can't be unit-tested directly, extract the decision into a pure function
   and drive *that* with tests (as `arbitration::planar_seek` and
   `AwaitingReconnect` are).
-- **Testing**: required for the pure/deterministic logic crates —
+- **Testing**: required for the pure/deterministic logic crates:
   `protocol`/`viz`/`perception` (serialization round-trips), `movement`
   (seek-controller math), `sensors` (predicate evaluation, perception
   culling/noise, hysteresis, priority/tiebreak, device resolution), `map`
@@ -228,30 +228,30 @@ Cargo workspace, ten crates:
   silent client, a flooding one, a peer that never finishes its handshake).
   `server` is not unit-tested for ECS wiring, but its **invariants** are, from
   the outside: `crates/server/tests/` builds the real app via `build_app` on
-  ephemeral ports and drives it through the real agent pathway — the scenario
+  ephemeral ports and drives it through the real agent pathway: the scenario
   lifecycle, the control-loop guardrails below, and same-binary determinism.
   Untrusted agent input is tested at the pure boundary (`inbound`). `viewer`
   stays excluded from the *requirement* to have tests (rendering is verified by
-  looking at the screen) -- but the gate runs whatever tests it does have, so
+  looking at the screen), but the gate runs whatever tests it does have, so
   anything pure that lands there (camera placement, wheel tinting) is not
   silently skipped.
 - **Dependencies**: free to add anything already implied by this file
   (`bevy`, `bevy_rapier3d`, `tokio`, `tokio-tungstenite`, `serde`/
-  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree` — the
-  last for the OpenDRIVE importer) without asking. Anything outside that set —
-  a new crate not implied by an existing decision — gets flagged before adding,
+  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree`; the
+  last for the OpenDRIVE importer) without asking. Anything outside that set
+  (a new crate not implied by an existing decision) gets flagged before adding,
   even if minor.
 - **Commit messages**: must follow [Conventional Commits](https://www.conventionalcommits.org/)
   (`type(scope): summary`, e.g. `feat(sensors): add hysteresis to
   time_to_collision`).
 - **Doc comments**: clear and straight to the point. No flowery or
-  roundabout phrasing. The audience is developers without much time —
+  roundabout phrasing. The audience is developers without much time:
   say the one thing they need to know and stop.
 
 ## Implementation guardrails
 
 These came out of a pre-implementation design review and are correctness
-requirements, not style preferences — getting them wrong reintroduces bugs
+requirements, not style preferences; getting them wrong reintroduces bugs
 that were already found and fixed on paper:
 
 - `bevy_rapier3d`'s `ExternalForce` must be **overwritten, not
@@ -263,17 +263,17 @@ that were already found and fixed on paper:
   and a plan-version id**, so an agent can tell whether an event refers to
   its current plan or one already superseded.
 - `time_to_collision` is **nearest-by-closing-time** (not
-  nearest-by-distance — these diverge), **includes static walls**, and
+  nearest-by-distance; these diverge), **includes static walls**, and
   requires **hysteresis** on the threshold (e.g. fires at `< N`, clears at
   `< N + 0.5`) to avoid chattering at the boundary.
 - `brake`/`stop_and_hold` use a **separate, higher `max_force` ceiling**
-  than ordinary path-following — they must not share the cruising
+  than ordinary path-following; they must not share the cruising
   controller's force limit.
 - Scenario-end detection uses a **heartbeat** (ping ~2s / timeout ~6s), not
   bare socket-close, plus a **short reconnect grace window** (~5-10s)
   before declaring the scenario over.
 - A malformed agent message gets an `error` event reply; the **connection
-  stays open** — it is never treated as a disconnect (which would
+  stays open**: it is never treated as a disconnect (which would
   otherwise end the whole scenario over a JSON typo).
 - A new connection arriving after a scenario has already frozen is
   accepted and immediately gets the same `scenario_ended` reply.
@@ -306,7 +306,7 @@ is enormous); `server` links alone with a reduced job count. CI runs exactly
 
 The last two steps are the Python client side: `shotgun`'s self-test (the
 co-driver toolkit's maths), and a check that every client in
-`clients/python/*.py` byte-compiles *and imports* -- importing is what
+`clients/python/*.py` byte-compiles *and imports*; importing is what
 resolves `from shotgun import lane_plan`, so a renamed helper fails in the
 gate instead of in front of a running sim.
 

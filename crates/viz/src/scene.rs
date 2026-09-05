@@ -46,7 +46,7 @@ pub enum Geometry {
         normals: Vec<Vec3>,
         indices: Vec<u32>,
     },
-    /// A *reference* to a model file, never its bytes — resolving it is the
+    /// A *reference* to a model file, never its bytes -- resolving it is the
     /// viewer's business, and nothing resolves one yet. A viewer that cannot
     /// load `uri` draws a `scale`-sized box instead, so it shows something.
     Asset {
@@ -66,7 +66,7 @@ pub struct NodePath(pub String);
 impl NodePath {
     const SEPARATOR: char = '/';
 
-    /// The entity's root node — the one whose transform is its world pose.
+    /// The entity's root node -- the one whose transform is its world pose.
     pub fn root() -> Self {
         Self(String::new())
     }
@@ -106,7 +106,7 @@ pub struct EntityNode {
     /// Empty for the root; otherwise unique among its siblings, since it is
     /// how the node is addressed (see [`NodePath`]).
     pub name: String,
-    /// Relative to the parent — or, for the root, the entity's world pose.
+    /// Relative to the parent -- or, for the root, the entity's world pose.
     pub transform: Transform,
     pub geometry: Option<Geometry>,
     pub children: Vec<EntityNode>,
@@ -217,7 +217,7 @@ pub struct EntityDescriptor {
 
 /// The few numbers a viewer needs to draw an agent's sensing region: max
 /// range, horizontal FOV half-angle, and vertical FOV half-angle (radians;
-/// `>= PI` means unbounded on that axis — full 360° horizontally, or a
+/// `>= PI` means unbounded on that axis -- full 360° horizontally, or a
 /// vertically-unbounded wedge). Kept viz-local so viz doesn't depend on the
 /// sensor crates' full `SensorSpec`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -243,7 +243,7 @@ pub struct SceneInit {
     /// what it declared in `Hello`.
     pub protocol_version: u32,
     pub tick: u64,
-    /// Ticks per second — how a frame's `tick` maps to real time, so a
+    /// Ticks per second -- how a frame's `tick` maps to real time, so a
     /// viewer can interpolate on a sim-time clock rather than jittery
     /// message-arrival times.
     pub tick_rate: f32,

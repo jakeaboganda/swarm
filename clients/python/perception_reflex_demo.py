@@ -1,13 +1,13 @@
-"""Shows a safety reflex firing on SIMULATED perception — too late.
+"""Shows a safety reflex firing on SIMULATED perception -- too late.
 
 Two identical chasers charge down separate lanes at a stationary target, each
 armed with the same "stop if time-to-collision < threshold" reflex:
 
-  * gt-chaser reads the reserved `ground_truth` device — it sees the target
+  * gt-chaser reads the reserved `ground_truth` device -- it sees the target
     from any distance and stops with a clear margin.
   * sim-chaser reads a `radar` device the scenario made short-range (6 units).
-    It doesn't perceive the target until it's almost on top of it — far too
-    late to stop — so it rear-ends it.
+    It doesn't perceive the target until it's almost on top of it -- far too
+    late to stop -- so it rear-ends it.
 
 Same rule, same speed, same threshold. The only difference is which device the
 reflex reads, and that's a property of the sensor, not the rule.
@@ -107,7 +107,7 @@ def summary():
         print(f"{chaser:<11} via {device:<16} stopped {g} units from its target "
               f"({fires[chaser]} reflex fires)")
     print("\ngt-chaser saw the target early and stopped short; sim-chaser's short-range")
-    print("radar revealed it too late to stop — the same reflex, a worse sensor.")
+    print("radar revealed it too late to stop -- the same reflex, a worse sensor.")
 
 
 async def main():
@@ -121,7 +121,7 @@ async def main():
     for t in ("gt-target", "sim-target"):
         await ws[t].send(plan(TARGET_X, LANE[t], 5.0))
 
-    # Chasers line up at the far end of their lane (no reflex yet — the agents
+    # Chasers line up at the far end of their lane (no reflex yet -- the agents
     # spawn clustered, so an armed stop_and_hold would trip on a neighbor).
     for c in ("gt-chaser", "sim-chaser"):
         await ws[c].send(plan(START_X, LANE[c], LANE_SPEED))

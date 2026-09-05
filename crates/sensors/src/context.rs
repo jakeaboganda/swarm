@@ -1,6 +1,6 @@
 use glam::Vec3;
 
-/// A collidable thing a `TimeToCollision` reading is computed against —
+/// A collidable thing a `TimeToCollision` reading is computed against --
 /// another entity, or a static wall (represented with `velocity: Vec3::ZERO`
 /// and a `radius` covering the nearest point on the wall). Gathered fresh
 /// each tick by `server`'s ECS queries; this crate only ever sees the plain

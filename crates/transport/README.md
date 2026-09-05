@@ -2,7 +2,7 @@
 
 The async networking bridge: a tokio WebSocket server that connects
 external agent processes to the synchronous Bevy world. Knows nothing about
-scenarios or rosters — it only moves messages. Depends on `protocol`.
+scenarios or rosters; it only moves messages. Depends on `protocol`.
 
 ## Contents
 
@@ -17,5 +17,5 @@ scenarios or rosters — it only moves messages. Depends on `protocol`.
 
 Each connection runs one task handling the handshake, heartbeat ping/pong
 with timeout, and JSON (de)serialization. A malformed message gets an
-`Error` reply and the connection stays open — it is never treated as a
+`Error` reply and the connection stays open: it is never treated as a
 disconnect.

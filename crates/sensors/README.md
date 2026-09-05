@@ -22,7 +22,7 @@ shapes.
   the survivors' pose with Gaussian noise (`Rng` is a hand-rolled seeded
   splitmix64 + Box–Muller, so runs are reproducible; latency lives in
   `server`'s delivery buffer, not here). A `simulated` sensor is then just an
-  ordinary reading over the perceived obstacle set — no per-sensor code.
+  ordinary reading over the perceived obstacle set, with no per-sensor code.
 - **`evaluate` / `ActiveRule`** — resolves an agent's reflex rules into at
   most one action. Each rule names a device (`rule.sensor`) and a predicate
   (`rule.measure`); `evaluate` looks the device up in a

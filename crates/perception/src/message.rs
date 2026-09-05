@@ -40,12 +40,12 @@ pub struct Detection {
     pub radius: f32,
 }
 
-/// Impaired scalar readings computed over the same detected set — the
+/// Impaired scalar readings computed over the same detected set -- the
 /// existing named sensors, read through the agent's degraded perception.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Scalars {
     /// Time-to-collision over detected obstacles. `None` when no collision is
-    /// predicted (would be infinite) — JSON has no infinity.
+    /// predicted (would be infinite) -- JSON has no infinity.
     pub time_to_collision: Option<f32>,
     /// The agent's own speed.
     pub speed: f32,
@@ -77,7 +77,7 @@ pub enum ServerToAgent {
     Perception(PerceptionFrame),
 }
 
-/// Encodes a message as a JSON string — the wire format is text frames, like
+/// Encodes a message as a JSON string -- the wire format is text frames, like
 /// the agent control channel, so clients decode with a plain JSON parser.
 pub fn encode<T: Serialize>(message: &T) -> String {
     serde_json::to_string(message).expect("perception messages always serialize")

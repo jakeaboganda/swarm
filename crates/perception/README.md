@@ -3,10 +3,10 @@
 The sensor pathway: simulated, **per-agent** perception the sim pushes to
 agents, on its own WebSocket port (`:4002` by default). A separate channel
 from both the agent control protocol and viz, so the producer stays
-swappable — `provider → server-router → agent`. Today's provider is the
+swappable: `provider → server-router → agent`. Today's provider is the
 analytic one in `server` (ground truth → impairment); a rendered-sensor
 provider (camera/LiDAR) is a later impl of the same boundary. Independent of
-`protocol` and `viz` — its own JSON wire types only.
+`protocol` and `viz`; its own JSON wire types only.
 
 ## Wire model
 
@@ -29,7 +29,7 @@ reflex fail-safe an agent never sees.
 ## Server
 
 `spawn(PerceptionConfig) -> PerceptionHandle` starts the router. Unlike viz's
-identical broadcast, delivery is **routed by agent name** — `handle.send(name,
+identical broadcast, delivery is **routed by agent name**: `handle.send(name,
 frame)` pushes to just that agent (lossy: dropped if its queue is full). A
 `PerceptionEvent` stream reports agents connecting/leaving so `server` knows
 who to route to; a same-name reconnect is disambiguated by a connection token

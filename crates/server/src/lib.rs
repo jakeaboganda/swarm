@@ -1,7 +1,7 @@
 //! The headless simulation: ECS + physics, the scenario lifecycle, and the
 //! three pathways (agent transport, viz, perception) wired into a Bevy app.
 //!
-//! The binary in `main.rs` is process concerns only — argument parsing, the
+//! The binary in `main.rs` is process concerns only -- argument parsing, the
 //! tokio runtime, and binding the servers. Everything else lives here, so
 //! integration tests can build the same app on ephemeral ports and step it.
 
