@@ -14,12 +14,14 @@
 //! - avoid lane curvature tighter than the half-width, or the `surface_mesh`
 //!   ribs can self-intersect (the tessellator doesn't yet guard against it).
 
+mod banked_oval;
 mod build;
 mod geometry;
 mod mesh;
 mod network;
 mod route;
 
+pub use banked_oval::{banked_oval, BankedTrack, RoadSample};
 pub use build::demo_road;
 pub use geometry::{Polyline, Pose, Projection};
 pub use mesh::{Mesh, MeshError};
