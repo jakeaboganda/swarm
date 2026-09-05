@@ -38,6 +38,11 @@ pub fn to_sim_local(frame: FmuFrame, pose: Pose) -> Pose {
             Pose {
                 position: Vec3::new(-p.y, p.z, -p.x),
                 yaw: OCD_YAW_SIGN * pose.yaw,
+                // Body roll/pitch carry through unchanged -- they are small body
+                // angles the conform system applies (or the road bank dominates);
+                // an exact frame remap of them is a refinement, not needed here.
+                roll: pose.roll,
+                pitch: pose.pitch,
             }
         }
     }
@@ -52,6 +57,8 @@ mod tests {
         let pose = Pose {
             position: Vec3::new(1.0, 2.0, 3.0),
             yaw: 0.4,
+            roll: 0.0,
+            pitch: 0.0,
         };
         assert_eq!(to_sim_local(FmuFrame::SimYUp, pose), pose);
     }
@@ -64,6 +71,8 @@ mod tests {
             Pose {
                 position: Vec3::new(10.0, 0.0, 0.0),
                 yaw: 0.0,
+                roll: 0.0,
+                pitch: 0.0,
             },
         );
         assert_eq!(out.position, Vec3::new(0.0, 0.0, -10.0));
@@ -77,6 +86,8 @@ mod tests {
             Pose {
                 position: Vec3::new(0.0, 5.0, 0.0),
                 yaw: 0.0,
+                roll: 0.0,
+                pitch: 0.0,
             },
         );
         assert_eq!(out.position, Vec3::new(-5.0, 0.0, 0.0));
@@ -90,6 +101,8 @@ mod tests {
             Pose {
                 position: Vec3::new(0.0, 0.0, 2.0),
                 yaw: 0.0,
+                roll: 0.0,
+                pitch: 0.0,
             },
         );
         assert_eq!(out.position, Vec3::new(0.0, 2.0, 0.0));
@@ -103,6 +116,8 @@ mod tests {
             Pose {
                 position: Vec3::ZERO,
                 yaw: 0.3,
+                roll: 0.0,
+                pitch: 0.0,
             },
         );
         assert_eq!(out.yaw, 0.3);

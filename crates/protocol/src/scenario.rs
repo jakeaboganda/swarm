@@ -37,6 +37,12 @@ pub struct FmuInputs {
     pub steer: String,
     pub throttle: String,
     pub brake: String,
+    /// Optional road bank (superelevation) at the car, in radians. Fed by the
+    /// server's road-conform when the world is a banked track, so a 3D-capable
+    /// FMU (e.g. the double-track OCD model) can respond to a canted road.
+    /// Omitted for FMUs that do not model it.
+    #[serde(default)]
+    pub bank: Option<String>,
 }
 
 /// The ground inputs -- the one-way road query the FMU pushes against. v1 is
@@ -65,6 +71,13 @@ pub struct FmuOutputs {
     pub y: String,
     pub z: String,
     pub yaw: String,
+    /// Optional body roll + pitch (radians), for an FMU that integrates them as
+    /// real DOF (e.g. the double-track OCD model). Omitted for planar FMUs; the
+    /// pose then carries roll = pitch = 0.
+    #[serde(default)]
+    pub roll: Option<String>,
+    #[serde(default)]
+    pub pitch: Option<String>,
 }
 
 /// The coordinate frame an FMU vehicle emits its pose in. Mirrors
@@ -270,6 +283,7 @@ mod tests {
                 steer: "delta".into(),
                 throttle: "ax".into(),
                 brake: "brk".into(),
+                bank: Some("road_bank".into()),
             },
             ground: FmuGround {
                 height: "z_road".into(),
@@ -281,6 +295,8 @@ mod tests {
                 y: "Y".into(),
                 z: "Z".into(),
                 yaw: "psi".into(),
+                roll: Some("phi".into()),
+                pitch: Some("theta".into()),
             },
             frame: FmuFrame::OcdZUp,
         }
@@ -375,6 +391,23 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let back: FmuConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, back);
+    }
+
+    #[test]
+    fn fmu_config_bank_roll_pitch_omit_cleanly() {
+        // A planar FMU omits the bank input and the roll/pitch outputs entirely
+        // (not `null`) -- the absent-key path `#[serde(default)]` guards. They
+        // must parse to `None`, leaving the required roles present.
+        let json = r#"{
+            "path": "fmus/plane.fmu",
+            "inputs": { "steer": "s", "throttle": "t", "brake": "b" },
+            "ground": { "height": "h" },
+            "outputs": { "x": "x", "y": "y", "z": "z", "yaw": "psi" }
+        }"#;
+        let cfg: FmuConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(cfg.inputs.bank, None);
+        assert_eq!(cfg.outputs.roll, None);
+        assert_eq!(cfg.outputs.pitch, None);
     }
 
     #[test]

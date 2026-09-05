@@ -78,6 +78,15 @@ pub struct FmuVehicle {
     /// is frozen and the FMU is never stepped again (stepping a terminated FMI
     /// instance is an unsupported state transition), until `server` despawns it.
     pub terminated: bool,
+    /// Road bank (superelevation, rad) at the vehicle, written by the server's
+    /// road-conform each tick and fed into the FMU's bank input (if bound) on the
+    /// next step, so a 3D FMU responds to a canted road. 0 on flat ground.
+    pub road_bank: f32,
+    /// The FMU's own body roll + pitch (rad) read back each step (0 for a planar
+    /// FMU). The road bank is the dominant visible cant; these are the model's
+    /// suspension lean on top.
+    pub ocd_roll: f32,
+    pub ocd_pitch: f32,
 }
 
 impl FmuVehicle {
@@ -96,6 +105,9 @@ impl FmuVehicle {
             spawn_yaw,
             elapsed: 0.0,
             terminated: false,
+            road_bank: 0.0,
+            ocd_roll: 0.0,
+            ocd_pitch: 0.0,
         }
     }
 }
@@ -153,6 +165,7 @@ pub fn fmu_control_step(
     fmu: &mut dyn FmuInstance,
     input: DriverInput,
     ground: GroundSample,
+    bank: f32,
     time: f64,
     dt: f32,
 ) -> Result<FmuStep, FmuError> {
@@ -162,6 +175,11 @@ pub fn fmu_control_step(
     fmu.set_input(binding.inputs.steer, controls.steer as f64)?;
     fmu.set_input(binding.inputs.throttle, controls.throttle as f64)?;
     fmu.set_input(binding.inputs.brake, controls.brake as f64)?;
+
+    // Road bank (only if the FMU exposes it).
+    if let Some(vr) = binding.inputs.bank {
+        fmu.set_input(vr, bank as f64)?;
+    }
 
     // Ground query (only the roles this FMU actually exposes).
     if let Some(vr) = binding.ground.height {
@@ -204,6 +222,8 @@ pub fn rebase_fmu_pose(frame: FmuFrame, spawn_pos: Vec3, spawn_yaw: f32, raw: Po
     Pose {
         position: spawn_pos + spawn_rotation * local.position,
         yaw: spawn_yaw + local.yaw,
+        roll: local.roll,
+        pitch: local.pitch,
     }
 }
 
@@ -289,12 +309,14 @@ pub fn drive_fmu_vehicles(
         // (shared) can be passed together; copy the time out first.
         let veh = &mut *vehicle;
         let time_now = veh.elapsed;
+        let bank = veh.road_bank;
         match fmu_control_step(
             &mut veh.driver,
             &veh.binding,
             fmu.as_mut(),
             input,
             ground,
+            bank,
             time_now,
             dt,
         ) {
@@ -321,6 +343,10 @@ pub fn drive_fmu_vehicles(
                 let sim_pose = rebase_fmu_pose(veh.frame, veh.spawn_pos, veh.spawn_yaw, step.pose);
                 transform.translation = sim_pose.position;
                 transform.rotation = Quat::from_rotation_y(sim_pose.yaw);
+                // Store the FMU's own body roll/pitch for the road-conform (which
+                // owns the final orientation on a banked track); 0 for a planar FMU.
+                veh.ocd_roll = sim_pose.roll;
+                veh.ocd_pitch = sim_pose.pitch;
                 veh.elapsed += dt as f64;
             }
             Err(err) => {
@@ -401,6 +427,7 @@ mod tests {
                 steer: STEER,
                 throttle: THROTTLE,
                 brake: BRAKE,
+                bank: None,
             },
             ground: ResolvedGround {
                 height: Some(HEIGHT),
@@ -412,6 +439,8 @@ mod tests {
                 y: OUT_Y,
                 z: OUT_Z,
                 yaw: OUT_YAW,
+                roll: None,
+                pitch: None,
             },
         }
     }
@@ -454,6 +483,7 @@ mod tests {
             cruise_input(),
             ground(),
             0.0,
+            0.0,
             1.0 / 64.0,
         )
         .expect("step");
@@ -485,6 +515,7 @@ mod tests {
             cruise_input(),
             ground(),
             0.0,
+            0.0,
             1.0 / 64.0,
         )
         .expect("step");
@@ -511,6 +542,7 @@ mod tests {
             cruise_input(),
             ground(),
             0.0,
+            0.0,
             1.0 / 64.0,
         )
         .expect("step");
@@ -535,6 +567,7 @@ mod tests {
             &mut fmu,
             input,
             ground(),
+            0.0,
             0.0,
             1.0 / 64.0,
         )
@@ -563,6 +596,7 @@ mod tests {
             cruise_input(),
             ground(),
             0.0,
+            0.0,
             1.0 / 64.0,
         )
         .expect("step");
@@ -579,6 +613,8 @@ mod tests {
         let raw = Pose {
             position: Vec3::new(5.0, 0.0, 0.0),
             yaw: 0.2,
+            roll: 0.0,
+            pitch: 0.0,
         };
         let spawn_pos = Vec3::new(10.0, 0.4, -3.0);
         let out = rebase_fmu_pose(FmuFrame::SimYUp, spawn_pos, 0.0, raw);
@@ -597,6 +633,8 @@ mod tests {
         let raw = Pose {
             position: Vec3::new(10.0, 0.0, 0.0), // 10 m OCD-forward
             yaw: 0.0,
+            roll: 0.0,
+            pitch: 0.0,
         };
         let spawn_pos = Vec3::new(1.5, 0.4, 0.0);
         // 90 degrees left: spawn heading is sim -X (rotating -Z by +90 about Y).
@@ -647,6 +685,7 @@ mod tests {
             &mut fmu,
             cruise_input(),
             ground(),
+            0.0,
             0.0,
             1.0 / 64.0,
         );

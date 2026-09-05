@@ -10,7 +10,7 @@ use std::time::Duration;
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use bevy_rapier3d::prelude::{NoUserData, RapierPhysicsPlugin};
+use bevy_rapier3d::prelude::{NoUserData, PhysicsSet, RapierPhysicsPlugin};
 use protocol::scenario::ScenarioConfig;
 
 use crate::agent::{AgentRegistry, AwaitingReconnect, PendingRoster};
@@ -57,10 +57,16 @@ pub fn load_map(spec: Option<&str>) -> anyhow::Result<Option<map::RoadNetwork>> 
     let network = match spec {
         None => return Ok(None),
         Some("demo") => map::demo_road(),
+        // The banked oval's flat routing network (agents lap it); the canted
+        // surface (collider + viz) is built separately from `banked_mesh()` in
+        // `setup_world`, and `BankedTrackRes` carries the bank for the conform.
+        Some("banked_oval") => map::banked_oval().network,
         Some(path) if path.ends_with(".xodr") => map_opendrive::load_file(path)
             .map_err(|e| anyhow::anyhow!("loading map {path:?}: {e}"))?,
         Some(other) => {
-            anyhow::bail!("unknown map {other:?}: use \"demo\" or a path ending in .xodr")
+            anyhow::bail!(
+                "unknown map {other:?}: use \"demo\", \"banked_oval\", or a path ending in .xodr"
+            )
         }
     };
     // The road becomes one static trimesh collider at startup, inside a Bevy
@@ -88,6 +94,11 @@ pub fn build_app(config: SimConfig) -> App {
     } = config;
 
     let perception_seed = scenario.seed;
+    // The banked oval carries a bank profile the flat `RoadNetwork` can't; build
+    // the full `BankedTrack` here so `setup_world` can spawn its canted mesh and
+    // `conform_fmu_to_track` can sample it. `map_world` already holds the same
+    // track's flat routing network (from `load_map`).
+    let banked_track = (scenario.map.as_deref() == Some("banked_oval")).then(map::banked_oval);
     let pending_roster = PendingRoster(scenario.roster.iter().map(|s| s.name.clone()).collect());
     let arena_bounds = ArenaBounds {
         half_width: scenario.arena.width / 2.0,
@@ -124,6 +135,7 @@ pub fn build_app(config: SimConfig) -> App {
         .insert_resource(Roster(scenario))
         .insert_resource(arena_bounds)
         .insert_resource(world::MapWorld(map_world))
+        .insert_resource(world::BankedTrackRes(banked_track))
         .insert_resource(pending_roster)
         .insert_resource(AgentRegistry::default())
         .insert_resource(AwaitingReconnect::default())
@@ -176,6 +188,15 @@ pub fn build_app(config: SimConfig) -> App {
                 .after(arbitration::arbitrate)
                 .run_if(in_state(ScenarioState::Running)),
         )
+        // Drape FMU vehicles onto the banked surface: after the FMU writes its
+        // flat pose (MovementSet::ApplyForce), before Rapier reads the kinematic
+        // target (SyncBackend). A no-op without a banked track.
+        .add_systems(
+            FixedUpdate,
+            world::conform_fmu_to_track
+                .after(movement::MovementSet::ApplyForce)
+                .before(PhysicsSet::SyncBackend),
+        )
         // Viz broadcast. `broadcast_spawns` runs before `drain_viz_events`
         // so a viewer connecting the same frame an agent joins learns of
         // that agent only via its scene-init, never also via a duplicate
@@ -225,9 +246,16 @@ pub fn build_app(config: SimConfig) -> App {
 
 /// Builds the world at startup: the road map if the scenario selected one,
 /// otherwise the flat arena.
-fn setup_world(mut commands: Commands, roster: Res<Roster>, map: Res<world::MapWorld>) {
-    match &map.0 {
-        Some(road) => world::spawn_road(&mut commands, road),
-        None => world::spawn_arena(&mut commands, &roster.0.arena),
+fn setup_world(
+    mut commands: Commands,
+    roster: Res<Roster>,
+    map: Res<world::MapWorld>,
+    banked: Res<world::BankedTrackRes>,
+) {
+    match (&banked.0, &map.0) {
+        // A banked track: its canted mesh is the collider/viz.
+        (Some(track), _) => world::spawn_banked_road(&mut commands, track),
+        (None, Some(road)) => world::spawn_road(&mut commands, road),
+        (None, None) => world::spawn_arena(&mut commands, &roster.0.arena),
     }
 }

@@ -42,6 +42,7 @@ pub fn to_binding_spec(cfg: &FmuConfig) -> BindingSpec {
             steer: cfg.inputs.steer.clone(),
             throttle: cfg.inputs.throttle.clone(),
             brake: cfg.inputs.brake.clone(),
+            bank: cfg.inputs.bank.clone(),
         },
         ground: GroundBinding {
             height: Some(cfg.ground.height.clone()),
@@ -53,6 +54,8 @@ pub fn to_binding_spec(cfg: &FmuConfig) -> BindingSpec {
             y: cfg.outputs.y.clone(),
             z: cfg.outputs.z.clone(),
             yaw: cfg.outputs.yaw.clone(),
+            roll: cfg.outputs.roll.clone(),
+            pitch: cfg.outputs.pitch.clone(),
         },
     }
 }
@@ -113,6 +116,7 @@ mod tests {
                 steer: "delta".into(),
                 throttle: "ax".into(),
                 brake: "brk".into(),
+                bank: Some("road_bank".into()),
             },
             ground: FmuGround {
                 height: "z_road".into(),
@@ -124,6 +128,8 @@ mod tests {
                 y: "Y".into(),
                 z: "Z".into(),
                 yaw: "psi".into(),
+                roll: Some("phi".into()),
+                pitch: Some("theta".into()),
             },
             frame: FmuFrame::SimYUp,
         }

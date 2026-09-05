@@ -411,6 +411,7 @@ fn fmu_scenario(name: &str, fmu_path: &str) -> ScenarioConfig {
                     steer: "steer".into(),
                     throttle: "throttle".into(),
                     brake: "brake".into(),
+                    bank: None,
                 },
                 ground: FmuGround {
                     height: "z_road".into(),
@@ -422,6 +423,8 @@ fn fmu_scenario(name: &str, fmu_path: &str) -> ScenarioConfig {
                     y: "y".into(),
                     z: "z".into(),
                     yaw: "yaw".into(),
+                    roll: None,
+                    pitch: None,
                 },
                 frame: FmuFrame::SimYUp,
             }),
@@ -477,6 +480,7 @@ fn ocd_scenario(anchor_name: &str, car_name: &str) -> ScenarioConfig {
                         steer: "steer".into(),
                         throttle: "throttle".into(),
                         brake: "brake".into(),
+                        bank: None,
                     },
                     ground: FmuGround {
                         height: "ground_height".into(),
@@ -488,6 +492,8 @@ fn ocd_scenario(anchor_name: &str, car_name: &str) -> ScenarioConfig {
                         y: "y".into(),
                         z: "z".into(),
                         yaw: "yaw".into(),
+                        roll: None,
+                        pitch: None,
                     },
                     frame: FmuFrame::OcdZUp,
                 }),
@@ -645,4 +651,114 @@ fn a_bad_fmu_config_rejects_the_join_without_ending_the_scenario() {
     // Stepping on does not panic and does not end the scenario.
     sim.step(5);
     assert_eq!(sim.state(), ScenarioState::WaitingForRoster);
+}
+
+/// The committed double-track OCD FMU (roll/pitch outputs + a bank input),
+/// wrapped for the banked-track demo.
+const OCD_DT_FMU: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/opencardynamics-dt-fmu/opencardynamics_dt.fmu"
+);
+
+/// A banked-oval scenario with one FmuVehicle bound to the double-track OCD FMU,
+/// binding its bank input + roll/pitch outputs so the car conforms to (and its
+/// dynamics respond to) the canted road.
+fn banked_ocd_scenario(name: &str) -> ScenarioConfig {
+    ScenarioConfig {
+        arena: ArenaConfig {
+            width: 400.0,
+            depth: 400.0,
+        },
+        roster: vec![AgentSlot {
+            name: name.to_string(),
+            embodiment: Embodiment::FmuVehicle,
+            sensors: vec![],
+            color: None,
+            scale: None,
+            fmu: Some(FmuConfig {
+                path: OCD_DT_FMU.to_string(),
+                inputs: FmuInputs {
+                    steer: "steer".into(),
+                    throttle: "throttle".into(),
+                    brake: "brake".into(),
+                    bank: Some("bank".into()),
+                },
+                ground: FmuGround {
+                    height: "ground_height".into(),
+                    normal_z: None,
+                    friction: Some("ground_friction".into()),
+                },
+                outputs: FmuOutputs {
+                    x: "x".into(),
+                    y: "y".into(),
+                    z: "z".into(),
+                    yaw: "yaw".into(),
+                    roll: Some("roll".into()),
+                    pitch: Some("pitch".into()),
+                },
+                frame: FmuFrame::OcdZUp,
+            }),
+        }],
+        seed: 0,
+        map: Some("banked_oval".into()),
+        time: TimeConfig {
+            duration: None,
+            pace: Pace::Afap,
+        },
+    }
+}
+
+#[test]
+fn an_ocd_car_banks_on_the_canted_oval() {
+    // End-to-end slice 3: the double-track OCD FMU drives the banked oval and the
+    // road-conform drapes it onto the canted surface, so on a banked curve the
+    // car's up-axis tilts off vertical (it leans into the bank). Sign-agnostic
+    // (angle magnitude), so it holds regardless of the bank-force sign the
+    // orchestrator settles.
+    let mut sim = Sim::new(banked_ocd_scenario("ocd-car"));
+    let agent = sim.join("ocd-car"); // FMU loads + binds (roll/pitch/bank too)
+    sim.expect("the scenario to start", |sim| {
+        (sim.state() == ScenarioState::Running).then_some(())
+    });
+
+    // Route a lap of the oval from the track centerline, so the car drives off
+    // the start straight and into a banked curve.
+    let track = map::banked_oval();
+    let len = track.length();
+    let n = 32u32;
+    let waypoints: Vec<_> = (1..=n)
+        .map(|i| {
+            let p = track.sample_at(len * (i as f32) / (n as f32)).point;
+            waypoint(p.x, p.z, 16.0)
+        })
+        .collect();
+    agent.send(ClientMessage::SubmitPlan { waypoints });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("ocd-car") == 1).then_some(())
+    });
+
+    // On the start straight the car sits ~level; drive on and record the largest
+    // lean (up-axis angle off vertical) as it reaches the banked curve.
+    let start = sim.position_of("ocd-car");
+    let level = {
+        let up = sim.component::<bevy::prelude::Transform>("ocd-car").rotation * BevyVec3::Y;
+        up.angle_between(BevyVec3::Y)
+    };
+    let mut max_tilt = 0f32;
+    for _ in 0..600 {
+        sim.step(1);
+        let up = sim.component::<bevy::prelude::Transform>("ocd-car").rotation * BevyVec3::Y;
+        max_tilt = max_tilt.max(up.angle_between(BevyVec3::Y));
+    }
+    let moved = (sim.position_of("ocd-car") - start).length();
+    eprintln!("banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad");
+
+    assert!(level < 0.03, "car was not level on the start straight ({level} rad)");
+    assert!(moved > 20.0, "car did not drive the oval ({moved} m)");
+    // The oval banks to ~0.21 rad; conform tilts the car to the surface, so on a
+    // curve it leans well past level.
+    assert!(
+        max_tilt > 0.08,
+        "car never banked (max tilt {max_tilt} rad) -- road-conform is not tilting it"
+    );
 }

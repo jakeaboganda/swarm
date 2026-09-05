@@ -168,6 +168,7 @@ mod tests {
                 steer: "delta".into(),
                 throttle: "ax".into(),
                 brake: "brk".into(),
+                bank: None,
             },
             ground: FmuGround {
                 height: "z_road".into(),
@@ -179,6 +180,8 @@ mod tests {
                 y: "Y".into(),
                 z: "Z".into(),
                 yaw: "psi".into(),
+                roll: None,
+                pitch: None,
             },
             frame: FmuFrame::SimYUp,
         }

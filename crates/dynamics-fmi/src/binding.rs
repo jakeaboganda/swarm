@@ -10,6 +10,10 @@ pub struct InputBinding {
     pub steer: String,
     pub throttle: String,
     pub brake: String,
+    /// Optional road bank (superelevation, rad) at the car -- fed by the server
+    /// on a banked track so a 3D FMU can respond to a canted road. `None` for an
+    /// FMU that does not model it.
+    pub bank: Option<String>,
 }
 
 /// Optional ground inputs -- the one-way road query the FMU pushes against. v1
@@ -29,6 +33,10 @@ pub struct OutputBinding {
     pub y: String,
     pub z: String,
     pub yaw: String,
+    /// Optional body roll + pitch (rad) for an FMU that integrates them as real
+    /// DOF; `None` for a planar FMU (pose roll = pitch = 0).
+    pub roll: Option<String>,
+    pub pitch: Option<String>,
 }
 
 /// A scenario's role -> variable-name map for an FMU vehicle. Slice 3's
@@ -47,6 +55,8 @@ pub struct ResolvedInputs {
     pub steer: ValueReference,
     pub throttle: ValueReference,
     pub brake: ValueReference,
+    /// Unbound (`None`) unless the FMU exposes a bank input.
+    pub bank: Option<ValueReference>,
 }
 
 /// Resolved ground inputs; unbound roles stay `None`.
@@ -64,6 +74,9 @@ pub struct ResolvedOutputs {
     pub y: ValueReference,
     pub z: ValueReference,
     pub yaw: ValueReference,
+    /// Unbound (`None`) for a planar FMU; then the pose carries roll/pitch = 0.
+    pub roll: Option<ValueReference>,
+    pub pitch: Option<ValueReference>,
 }
 
 /// A [`BindingSpec`] with every role resolved to its value reference. Built
@@ -122,6 +135,7 @@ impl BindingSpec {
                 steer: resolve(md, "steer", &self.inputs.steer, Causality::Input)?,
                 throttle: resolve(md, "throttle", &self.inputs.throttle, Causality::Input)?,
                 brake: resolve(md, "brake", &self.inputs.brake, Causality::Input)?,
+                bank: resolve_opt(md, "bank", &self.inputs.bank, Causality::Input)?,
             },
             ground: ResolvedGround {
                 height: resolve_opt(md, "ground.height", &self.ground.height, Causality::Input)?,
@@ -143,6 +157,8 @@ impl BindingSpec {
                 y: resolve(md, "y", &self.outputs.y, Causality::Output)?,
                 z: resolve(md, "z", &self.outputs.z, Causality::Output)?,
                 yaw: resolve(md, "yaw", &self.outputs.yaw, Causality::Output)?,
+                roll: resolve_opt(md, "roll", &self.outputs.roll, Causality::Output)?,
+                pitch: resolve_opt(md, "pitch", &self.outputs.pitch, Causality::Output)?,
             },
         };
         self.check_no_duplicates(&resolved)?;
@@ -160,6 +176,7 @@ impl BindingSpec {
             ("brake", self.inputs.brake.as_str(), r.inputs.brake),
         ];
         for (role, name, vr) in [
+            ("bank", self.inputs.bank.as_deref(), r.inputs.bank),
             (
                 "ground.height",
                 self.ground.height.as_deref(),
@@ -175,6 +192,8 @@ impl BindingSpec {
                 self.ground.friction.as_deref(),
                 r.ground.friction,
             ),
+            ("roll", self.outputs.roll.as_deref(), r.outputs.roll),
+            ("pitch", self.outputs.pitch.as_deref(), r.outputs.pitch),
         ] {
             if let (Some(name), Some(vr)) = (name, vr) {
                 bound.push((role, name, vr));
@@ -274,6 +293,7 @@ mod tests {
                 steer: "delta".into(),
                 throttle: "ax".into(),
                 brake: "brk".into(),
+                bank: None,
             },
             ground: GroundBinding {
                 height: Some("z_road".into()),
@@ -284,6 +304,8 @@ mod tests {
                 y: "Y".into(),
                 z: "Z".into(),
                 yaw: "psi".into(),
+                roll: None,
+                pitch: None,
             },
         }
     }
@@ -315,9 +337,12 @@ mod tests {
                 x: 10,
                 y: 11,
                 z: 12,
-                yaw: 13
+                yaw: 13,
+                roll: None,
+                pitch: None,
             }
         );
+        assert_eq!(r.inputs.bank, None);
     }
 
     #[test]
