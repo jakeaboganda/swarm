@@ -159,6 +159,10 @@ pub struct FmuStep {
 /// *bound* ground roles are written (an FMU that exposes no `friction` input has
 /// `None` there). The `StepOutcome` is returned, never swallowed: a terminating
 /// or early-returning FMU is the caller's to handle.
+// Each argument is a distinct input to one FMU step (driver, binding, instance,
+// plan-derived input, ground, bank, time, dt); grouping them into a struct would
+// be ceremony that hides what the step actually consumes.
+#[allow(clippy::too_many_arguments)]
 pub fn fmu_control_step(
     driver: &mut Driver,
     binding: &ResolvedBinding,
