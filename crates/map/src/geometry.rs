@@ -97,22 +97,30 @@ impl Polyline {
         }
     }
 
-    /// Position at arc length `s` (clamped to `[0, length]`).
-    pub fn point_at(&self, s: f32) -> Vec3 {
+    /// The segment index containing arc length `s`, and the fractional position
+    /// `t` in `[0, 1]` within it, both clamped to a valid segment. The one place
+    /// arc length becomes a `(vertex i, vertex i+1, t)` lerp -- shared by every
+    /// by-arc-length sampler (position, heading, and a lane's per-vertex bank),
+    /// so they can't disagree about where `s` lands.
+    pub(crate) fn locate(&self, s: f32) -> (usize, f32) {
         let s = s.clamp(0.0, self.length());
         let i = self.segment(s);
-        self.points[i].lerp(self.points[i + 1], self.local_t(i, s))
+        (i, self.local_t(i, s))
+    }
+
+    /// Position at arc length `s` (clamped to `[0, length]`).
+    pub fn point_at(&self, s: f32) -> Vec3 {
+        let (i, t) = self.locate(s);
+        self.points[i].lerp(self.points[i + 1], t)
     }
 
     /// Position and horizontal heading at arc length `s`. The heading
     /// interpolates the per-vertex tangents, so it's continuous across vertices
     /// (a path-tracking controller sees no per-segment step).
     pub fn pose_at(&self, s: f32) -> Pose {
-        let s = s.clamp(0.0, self.length());
-        let i = self.segment(s);
-        let t = self.local_t(i, s);
+        let (i, t) = self.locate(s);
         Pose {
-            position: self.point_at(s),
+            position: self.points[i].lerp(self.points[i + 1], t),
             heading: self.tangents[i]
                 .lerp(self.tangents[i + 1], t)
                 .normalize_or_zero(),
@@ -250,5 +258,21 @@ mod tests {
     #[test]
     fn left_normal_of_plus_x_is_minus_z() {
         assert!(left_normal(Vec3::X).abs_diff_eq(Vec3::new(0.0, 0.0, -1.0), 1e-5));
+    }
+
+    #[test]
+    fn locate_finds_segment_and_fraction() {
+        let l = line(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0]]);
+        // Mid first segment.
+        assert_eq!(l.locate(5.0), (0, 0.5));
+        // Mid second segment (arc length 15 of 20).
+        let (i, t) = l.locate(15.0);
+        assert_eq!(i, 1);
+        assert!((t - 0.5).abs() < 1e-5, "t {t}");
+        // Clamps below and above the polyline.
+        assert_eq!(l.locate(-3.0), (0, 0.0));
+        let (i, t) = l.locate(100.0);
+        assert_eq!(i, 1);
+        assert!((t - 1.0).abs() < 1e-5, "t {t}");
     }
 }

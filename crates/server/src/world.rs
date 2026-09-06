@@ -704,6 +704,7 @@ mod tests {
             direction: map::Direction::Forward,
             center: map::Polyline::new(vec![Vec3::ZERO, Vec3::new(length, 0.0, 0.0)]),
             width,
+            bank: Vec::new(),
             successors: Vec::new(),
             predecessors: Vec::new(),
             neighbors: Vec::new(),

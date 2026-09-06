@@ -113,6 +113,7 @@ mod tests {
                     Vec3::new(10.0, 0.0, 0.0),
                 ]),
                 width: 4.0,
+                bank: Vec::new(),
                 successors: Vec::new(),
                 predecessors: Vec::new(),
                 neighbors: Vec::new(),

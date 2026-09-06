@@ -137,6 +137,10 @@ pub fn banked_oval() -> BankedTrack {
             direction: Direction::Forward,
             center: center.clone(),
             width: WIDTH,
+            // Flat here on purpose: until the retire-BankedTrack migration, the
+            // cant lives in this bundle's `bank` profile + banked mesh, not on
+            // the lane (see the module docs).
+            bank: Vec::new(),
             // A closed loop: driving off the exit end re-enters the same lane.
             successors: vec![LaneId(0)],
             predecessors: vec![LaneId(0)],

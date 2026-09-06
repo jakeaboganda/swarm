@@ -1,11 +1,15 @@
 //! A small, pure-Rust OpenDRIVE (`.xodr`) importer that bakes a road into
 //! `map::RoadNetwork`. It implements `line`, `arc`, `spiral` (clothoid),
-//! `paramPoly3`, and `poly3` reference geometry; an elevation profile; per-lane
-//! widths; `laneOffset`; multiple lane sections; and **drive-direction lane
-//! connectivity** -- road/lane `<link>`s and `<junction>`s resolved into each
-//! `Lane`'s `successors`/`predecessors` (see `links`). Not yet: a higher-level
-//! routing/pathfinding API over the graph (see the DECISIONS "roll our own"
-//! note). Anything richer is future work.
+//! `paramPoly3`, and `poly3` reference geometry; an elevation profile;
+//! `<lateralProfile>` **superelevation** (a cross-section roll about the
+//! reference line, baked into each lane's `bank` and its centerline height via a
+//! reference-line pivot); per-lane widths; `laneOffset`; multiple lane sections;
+//! and **drive-direction lane connectivity** -- road/lane `<link>`s and
+//! `<junction>`s resolved into each `Lane`'s `successors`/`predecessors` (see
+//! `links`). Not yet: `<lateralProfile>` `<shape>` (a per-`t` cross-section
+//! profile -- crowning/camber), and a higher-level routing/pathfinding API over
+//! the graph (see the DECISIONS "roll our own" note). Anything richer is future
+//! work.
 //!
 //! ## Coordinate mapping
 //! OpenDRIVE is right-handed **Z-up** (reference line in the X-Y plane, `hdg`
@@ -357,6 +361,12 @@ fn parse_road(road: roxmltree::Node, out: &mut Vec<Lane>, topo: &mut Topology) {
     let elevations = child(road, "elevationProfile")
         .map(|n| cubics_in(n, "elevation", "s"))
         .unwrap_or_default();
+    // Superelevation: a roll of the whole cross-section about the reference
+    // line, a cubic in road-s. Same `Cubic`/`active` machinery as elevation;
+    // applied per lane by the reference-line pivot in `sample_lane`.
+    let superelevations = child(road, "lateralProfile")
+        .map(|n| cubics_in(n, "superelevation", "s"))
+        .unwrap_or_default();
     // laneOffset shifts the whole lane cross-section laterally off lane 0 (lane
     // widening, merges, a centerline that isn't the road reference). It adds to
     // every lane's offset, so it must be applied or all lanes are mis-placed.
@@ -404,6 +414,7 @@ fn parse_road(road: roxmltree::Node, out: &mut Vec<Lane>, topo: &mut Topology) {
             s_end,
             &geoms,
             &elevations,
+            &superelevations,
             &lane_offsets,
             out,
             topo,
@@ -422,6 +433,7 @@ fn emit_section(
     s_end: f64,
     geoms: &[GeomRec],
     elevations: &[Cubic],
+    superelevations: &[Cubic],
     lane_offsets: &[Cubic],
     out: &mut Vec<Lane>,
     topo: &mut Topology,
@@ -463,6 +475,19 @@ fn emit_section(
     right.sort_by_key(|l| -l.id); // -1, -2, -3, ...
 
     let sample_s = sample_positions(s_start, s_end);
+    // The bank profile is a road-level property (the cross-section's roll about
+    // the reference line), identical for every lane in the section, sampled
+    // parallel to `sample_s`. Collapse an all-flat profile to empty -- the
+    // "flat lane" sentinel -- so unbanked roads stay byte-identical.
+    let bank: Vec<f32> = sample_s
+        .iter()
+        .map(|&s| active(superelevations, s).map(|e| e.eval(s)).unwrap_or(0.0) as f32)
+        .collect();
+    let bank = if bank.iter().all(|b| b.abs() < 1e-9) {
+        Vec::new()
+    } else {
+        bank
+    };
     for side in [&left, &right] {
         // Left lanes (positive id) offset toward +t and travel against +s;
         // right lanes (negative id) offset toward -t and travel with +s.
@@ -483,6 +508,7 @@ fn emit_section(
             let points = sample_lane(
                 geoms,
                 elevations,
+                superelevations,
                 lane_offsets,
                 s_start,
                 lane,
@@ -513,6 +539,9 @@ fn emit_section(
                 direction,
                 center,
                 width: width_at(lane, 0.0) as f32,
+                // Road-level roll, shared across the section's lanes; parallel to
+                // the sampled centerline. Empty when the road is flat.
+                bank: bank.clone(),
                 // Filled by links::resolve once all lanes are registered.
                 successors: Vec::new(),
                 predecessors: Vec::new(),
@@ -538,6 +567,7 @@ fn emit_section(
 fn sample_lane(
     geoms: &[GeomRec],
     elevations: &[Cubic],
+    superelevations: &[Cubic],
     lane_offsets: &[Cubic],
     section_s: f64,
     lane: &LaneDef,
@@ -558,12 +588,20 @@ fn sample_lane(
             let g = geom_at(geoms, s);
             let (x, y, hdg) = g.pose(s);
             let elev = active(elevations, s).map(|e| e.eval(s)).unwrap_or(0.0);
+            // Reference-line pivot: superelevation rolls the cross-section about
+            // the reference line by phi, so a point at lateral t rides up by
+            // t·sin phi (positive t = left edge, raised for phi > 0) and its
+            // horizontal reach shrinks to t·cos phi. phi = 0 leaves this the
+            // pure-horizontal offset it was.
+            let phi = active(superelevations, s).map(|e| e.eval(s)).unwrap_or(0.0);
+            let (sin_phi, cos_phi) = phi.sin_cos();
+            let t_h = t * cos_phi;
             // ref -> our frame, then offset along the left-hand normal.
             // left_normal(our tangent) = (-sin hdg, 0, -cos hdg).
             Vec3::new(
-                (x - t * hdg.sin()) as f32,
-                elev as f32,
-                (-y - t * hdg.cos()) as f32,
+                (x - t_h * hdg.sin()) as f32,
+                (elev + t * sin_phi) as f32,
+                (-y - t_h * hdg.cos()) as f32,
             )
         })
         .collect()
@@ -977,5 +1015,537 @@ mod tests {
     fn empty_or_junk_is_an_error() {
         assert!(load_str("<OpenDRIVE></OpenDRIVE>").is_err());
         assert!(load_str("not xml at all <<<").is_err());
+    }
+
+    // A flat straight (no lateralProfile) must leave the bank profile empty --
+    // the "flat lane" sentinel -- so imported flat roads are unchanged.
+    #[test]
+    fn no_lateral_profile_leaves_bank_empty() {
+        let net = load_str(STRAIGHT).expect("import");
+        assert!(net.lanes[0].bank.is_empty(), "a flat road carries no bank");
+        assert_eq!(net.lanes[0].bank_at(10.0), 0.0);
+    }
+
+    // A straight, level road banked at a constant 0.1 rad, one lane each side.
+    // Reference-line pivot: the left (+t) lane rides up by ~t·sin φ, the right
+    // (−t) lane drops by the same, and both read the same bank angle φ.
+    const SUPERELEV_CONST: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="se" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.1" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left><lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane></left>
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn constant_superelevation_pivots_about_the_reference_line() {
+        let net = load_str(SUPERELEV_CONST).expect("import");
+        let left = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Backward)
+            .expect("a left lane");
+        let right = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Forward)
+            .expect("a right lane");
+
+        // Both lanes read the surface roll angle, ~0.1 rad, everywhere.
+        assert!(
+            (left.bank_at(10.0) - 0.1).abs() < 1e-4,
+            "{}",
+            left.bank_at(10.0)
+        );
+        assert!(
+            (right.bank_at(10.0) - 0.1).abs() < 1e-4,
+            "{}",
+            right.bank_at(10.0)
+        );
+        assert!(!left.bank.is_empty(), "a banked lane carries a profile");
+
+        // Lane centers sit half a lane-width off the reference (t = ±1.75), so
+        // the pivot raises the left by 1.75·sin0.1 and drops the right likewise.
+        let expect = 1.75 * 0.1_f32.sin();
+        let ly = left.center.point_at(10.0).y;
+        let ry = right.center.point_at(10.0).y;
+        assert!((ly - expect).abs() < 0.02, "left y {ly}, want {expect}");
+        assert!((ry + expect).abs() < 0.02, "right y {ry}, want {}", -expect);
+        // Positive φ raises the left edge: left above right.
+        assert!(ly > ry, "left {ly} should ride above right {ry}");
+
+        // Horizontal offset shrinks by cos φ (the lane leans in, not straight
+        // out): |z| a touch under 1.75.
+        let lz = left.center.point_at(10.0).z.abs();
+        assert!(lz < 1.75 && lz > 1.75 * 0.1_f32.cos() - 0.02, "z {lz}");
+    }
+
+    // Superelevation ramping in along s: φ(s) = 0.01·s, so the bank grows.
+    const SUPERELEV_RAMP: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="ser" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.0" b="0.01" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn ramped_superelevation_grows_along_s() {
+        let net = load_str(SUPERELEV_RAMP).expect("import");
+        let lane = &net.lanes[0];
+        // φ(5)=0.05, φ(15)=0.15 -- monotonic increase, matching the cubic.
+        assert!(
+            (lane.bank_at(5.0) - 0.05).abs() < 5e-3,
+            "{}",
+            lane.bank_at(5.0)
+        );
+        assert!(
+            (lane.bank_at(15.0) - 0.15).abs() < 5e-3,
+            "{}",
+            lane.bank_at(15.0)
+        );
+        assert!(lane.bank_at(15.0) > lane.bank_at(5.0));
+    }
+
+    // Two left lanes (id 1 inner, id 2 outer) on a road banked +0.1 rad. The
+    // headline reference-line-pivot case: the outer lane, further from the
+    // reference line, rides measurably higher than the inner one.
+    const SUPERELEV_TWO_LEFT: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="se2" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.1" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+          <lane id="2" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </left>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn outer_lane_of_a_banked_road_rides_higher() {
+        let net = load_str(SUPERELEV_TWO_LEFT).expect("import");
+        // Inner lane center t = 1.75, outer t = 5.25 (one full width further out).
+        // Both climb by t·sin0.1; the outer sits ~3.5·sin0.1 ≈ 0.35 m above.
+        let mut ys: Vec<f32> = net
+            .lanes
+            .iter()
+            .map(|l| l.center.point_at(10.0).y)
+            .collect();
+        ys.sort_by(|a, b| a.total_cmp(b));
+        let inner_y = 1.75 * 0.1_f32.sin();
+        let outer_y = 5.25 * 0.1_f32.sin();
+        assert!((ys[0] - inner_y).abs() < 0.02, "inner y {}", ys[0]);
+        assert!((ys[1] - outer_y).abs() < 0.02, "outer y {}", ys[1]);
+        assert!(
+            ys[1] - ys[0] > 0.3,
+            "outer lane {} should ride well above inner {}",
+            ys[1],
+            ys[0]
+        );
+    }
+
+    // Negative superelevation rolls the other way: the right (−t) edge lifts and
+    // the left (+t) edge drops -- the mirror of the positive case, pinning sign.
+    const SUPERELEV_NEG: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sen" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="-0.1" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left><lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane></left>
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn negative_superelevation_raises_the_right_edge() {
+        let net = load_str(SUPERELEV_NEG).expect("import");
+        let left = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Backward)
+            .expect("a left lane");
+        let right = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Forward)
+            .expect("a right lane");
+        // φ = −0.1: the right lane now rides above the left (mirror of +φ).
+        assert!(
+            right.center.point_at(10.0).y > left.center.point_at(10.0).y,
+            "right {} should ride above left {} for negative bank",
+            right.center.point_at(10.0).y,
+            left.center.point_at(10.0).y
+        );
+        // The stored angle carries the sign.
+        assert!(
+            (left.bank_at(10.0) + 0.1).abs() < 1e-4,
+            "{}",
+            left.bank_at(10.0)
+        );
+    }
+
+    // ===================================================================
+    // Independent test pass (Deliverable 1): stress the pivot beyond the
+    // straight/level/single-offset cases the implementer already covered.
+    // ===================================================================
+
+    // A straight-then-90-degree-left-arc road (the STRAIGHT_ARC shape) with a
+    // constant 0.15 rad superelevation. Bank must bake finite, sane geometry all
+    // the way around the curve and read the surface roll at any station.
+    const SUPERELEV_ARC: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sa" length="87.12" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="40.0"><line/></geometry>
+      <geometry s="40.0" x="40.0" y="0.0" hdg="0.0" length="47.12"><arc curvature="0.03333"/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.15" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left><lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane></left>
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn superelevation_on_a_banked_arc() {
+        let net = load_str(SUPERELEV_ARC).expect("import");
+        let left = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Backward)
+            .expect("a left lane");
+        let right = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Forward)
+            .expect("a right lane");
+
+        // Every baked centerline point is finite (no NaN/inf from the arc math).
+        for lane in [left, right] {
+            assert!(!lane.bank.is_empty(), "banked lane carries a profile");
+            for &b in &lane.bank {
+                assert!(b.is_finite(), "bank entry not finite: {b}");
+            }
+            for p in lane.center.points() {
+                assert!(p.is_finite(), "centerline point not finite: {p:?}");
+            }
+        }
+
+        // Read the roll at several stations, including well into the arc
+        // (s=20 straight, s=60 arc, near the very end). Constant profile => 0.15
+        // everywhere, on both lanes.
+        for &s in &[0.0_f32, 20.0, 60.0, 85.0] {
+            assert!(
+                (left.bank_at(s) - 0.15).abs() < 1e-3,
+                "left bank_at({s}) = {}",
+                left.bank_at(s)
+            );
+            assert!(
+                (right.bank_at(s) - 0.15).abs() < 1e-3,
+                "right bank_at({s}) = {}",
+                right.bank_at(s)
+            );
+        }
+
+        // Reference-line pivot: with constant t (=+/-1.75) and constant phi, the
+        // banked height is constant along the whole road, arc included. The left
+        // (+t) lane rides up by 1.75*sin0.15, the right (-t) down by the same.
+        let expect = 1.75 * 0.15_f32.sin();
+        for &s in &[20.0_f32, 60.0, 85.0] {
+            let ly = left.center.point_at(s).y;
+            let ry = right.center.point_at(s).y;
+            assert!(
+                (ly - expect).abs() < 0.05,
+                "left y@{s} = {ly}, want {expect}"
+            );
+            assert!((ry + expect).abs() < 0.05, "right y@{s} = {ry}");
+            assert!(ly > ry, "left {ly} should ride above right {ry} @ s={s}");
+        }
+    }
+
+    // Superelevation composed with an elevation grade: the road climbs at 4% AND
+    // banks at 0.1 rad. A lane's height must be grade(s) + t*sin(phi) -- the two
+    // add, neither clobbers the other.
+    const SUPERELEV_PLUS_GRADE: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sg" length="40.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="40.0"><line/></geometry>
+    </planView>
+    <elevationProfile>
+      <elevation s="0.0" a="0.0" b="0.04" c="0.0" d="0.0"/>
+    </elevationProfile>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.1" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left><lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane></left>
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn superelevation_composes_with_elevation_grade() {
+        let net = load_str(SUPERELEV_PLUS_GRADE).expect("import");
+        let left = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Backward)
+            .expect("a left lane");
+        let right = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Forward)
+            .expect("a right lane");
+        let cant = 1.75 * 0.1_f32.sin();
+        for &s in &[10.0_f32, 20.0, 30.0] {
+            let grade = 0.04 * s; // elevation cubic: a=0, b=0.04
+                                  // Left (+t) rides above the grade line, right (-t) below it, by the
+                                  // same cant -- the grade is the midline of the two.
+            let ly = left.center.point_at(s).y;
+            let ry = right.center.point_at(s).y;
+            assert!(
+                (ly - (grade + cant)).abs() < 0.02,
+                "left y@{s} = {ly}, want {}",
+                grade + cant
+            );
+            assert!(
+                (ry - (grade - cant)).abs() < 0.02,
+                "right y@{s} = {ry}, want {}",
+                grade - cant
+            );
+            // The mean of the two lanes recovers the grade (bank cancels).
+            assert!(((ly + ry) / 2.0 - grade).abs() < 0.02, "grade midline @{s}");
+        }
+    }
+
+    // Superelevation + laneOffset: the +2.0 laneOffset shifts the whole
+    // cross-section, and the pivot must apply to the *shifted* t. Right lane -1
+    // (own offset -1.75) with laneOffset +2.0 lands at t = +0.25, so its height
+    // is the small POSITIVE 0.25*sin(phi) -- not -1.75*sin(phi) (own offset only)
+    // nor +2.0*sin(phi) (laneOffset only).
+    const SUPERELEV_PLUS_OFFSET: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="so" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.1" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneOffset s="0.0" a="2.0" b="0.0" c="0.0" d="0.0"/>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn superelevation_pivots_about_the_offset_shifted_cross_section() {
+        let net = load_str(SUPERELEV_PLUS_OFFSET).expect("import");
+        let lane = &net.lanes[0];
+        let t = 2.0 - 1.75; // laneOffset + own (right) offset = +0.25
+        let want_y = t * 0.1_f32.sin();
+        let y = lane.center.point_at(10.0).y;
+        assert!(
+            (y - want_y).abs() < 5e-3,
+            "y = {y}, want {want_y} (pivot on shifted t=+0.25, not own -1.75 nor offset +2.0)"
+        );
+        // Height is clearly positive: had the pivot used the lane's own -1.75,
+        // it would be negative (~ -0.175).
+        assert!(
+            y > 0.0,
+            "shifted t is +0.25 -> height must be positive, got {y}"
+        );
+        // Horizontal reach shrinks by cos(phi): |z| = t*cos0.1 ~= 0.2487.
+        let z = lane.center.point_at(10.0).z;
+        assert!(
+            (z - (-(t * 0.1_f32.cos()))).abs() < 5e-3,
+            "z = {z}, want {}",
+            -(t * 0.1_f32.cos())
+        );
+    }
+
+    // Importing the same banked map twice must yield byte-identical bank vectors
+    // and centerline points (no ordering / float nondeterminism).
+    #[test]
+    fn banked_import_is_deterministic() {
+        let a = load_str(SUPERELEV_ARC).expect("import a");
+        let b = load_str(SUPERELEV_ARC).expect("import b");
+        assert_eq!(a.lanes.len(), b.lanes.len());
+        for (la, lb) in a.lanes.iter().zip(b.lanes.iter()) {
+            assert_eq!(la.bank, lb.bank, "bank vectors differ between imports");
+            assert_eq!(
+                la.center.points(),
+                lb.center.points(),
+                "centerline points differ between imports"
+            );
+        }
+    }
+
+    // A very large roll near pi/2: sin ~= 1 (height ~= t), cos ~= 0 (horizontal
+    // reach collapses). Must stay finite and read back the angle -- no blow-up.
+    const SUPERELEV_STEEP: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="st" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="1.5" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn steep_superelevation_stays_finite() {
+        let net = load_str(SUPERELEV_STEEP).expect("import");
+        let lane = &net.lanes[0];
+        assert!(
+            (lane.bank_at(10.0) - 1.5).abs() < 1e-3,
+            "{}",
+            lane.bank_at(10.0)
+        );
+        let p = lane.center.point_at(10.0);
+        assert!(p.is_finite(), "point not finite at steep bank: {p:?}");
+        // t = -1.75; height ~= -1.75*sin1.5 ~= -1.746, |z| ~= 1.75*cos1.5 ~= 0.124.
+        assert!((p.y - (-1.75 * 1.5_f32.sin())).abs() < 0.02, "y {}", p.y);
+        assert!(
+            p.z.abs() < 0.2,
+            "horizontal reach should collapse, z {}",
+            p.z
+        );
+    }
+
+    // An explicit zero superelevation (a="0.0") must still collapse to the empty
+    // "flat lane" sentinel, exactly like no lateralProfile at all.
+    const SUPERELEV_EXPLICIT_ZERO: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sz" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="0.0" a="0.0" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn explicit_zero_superelevation_collapses_to_empty() {
+        let net = load_str(SUPERELEV_EXPLICIT_ZERO).expect("import");
+        assert!(
+            net.lanes[0].bank.is_empty(),
+            "an all-zero profile must collapse to the flat sentinel"
+        );
+        assert_eq!(net.lanes[0].bank_at(10.0), 0.0);
+        // And its centerline height is pure horizontal (z = -1.75, y = 0).
+        let p = net.lanes[0].center.point_at(10.0);
+        assert!(p.y.abs() < 1e-4, "flat road, y {}", p.y);
+    }
+
+    // A superelevation record that starts at s=10 on a 20 m road: stations before
+    // s=10 fall back to 0 (no active record), stations after read the profile.
+    const SUPERELEV_LATE_START: &str = r#"<?xml version="1.0"?>
+<OpenDRIVE>
+  <road name="sl" length="20.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="0.0" hdg="0.0" length="20.0"><line/></geometry>
+    </planView>
+    <lateralProfile>
+      <superelevation s="10.0" a="0.1" b="0.0" c="0.0" d="0.0"/>
+    </lateralProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <right><lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane></right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>"#;
+
+    #[test]
+    fn superelevation_starting_late_leaves_early_stations_flat() {
+        let net = load_str(SUPERELEV_LATE_START).expect("import");
+        let lane = &net.lanes[0];
+        // Profile is kept (later stations are banked), not collapsed.
+        assert!(!lane.bank.is_empty());
+        // Before the record: flat.
+        assert!(
+            lane.bank_at(2.0).abs() < 1e-4,
+            "early bank {}",
+            lane.bank_at(2.0)
+        );
+        assert!(
+            lane.center.point_at(2.0).y.abs() < 1e-3,
+            "early height should be flat, y {}",
+            lane.center.point_at(2.0).y
+        );
+        // After the record starts: banked ~0.1.
+        assert!(
+            (lane.bank_at(18.0) - 0.1).abs() < 1e-3,
+            "late bank {}",
+            lane.bank_at(18.0)
+        );
+        assert!(
+            lane.center.point_at(18.0).y < -0.1,
+            "late height should be banked (t=-1.75), y {}",
+            lane.center.point_at(18.0).y
+        );
     }
 }

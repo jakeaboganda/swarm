@@ -33,6 +33,17 @@ pub struct Lane {
     pub center: Polyline,
     /// Constant lane width (per-vertex widths can come later).
     pub width: f32,
+    /// Per-centerline-vertex superelevation angle (radians, signed), parallel to
+    /// `center.points()`. Positive raises the **+offset** edge -- the left-hand
+    /// normal of the centerline's *stored* tangent (its geometry direction), which
+    /// for a `Backward` lane is opposite its travel direction. Consumers deriving
+    /// a surface normal must roll about `center.tangents()`, not travel, or a
+    /// backward lane's normal disagrees with its own (correct) baked heights.
+    /// Empty means a flat lane (bank ≡ 0); any non-empty profile must have exactly
+    /// `center.points().len()` entries. The centerline points already carry the
+    /// banked *height* (reference-line pivot); this angle is the surface tilt the
+    /// mesh cant and the FMU conform read.
+    pub bank: Vec<f32>,
     /// Lanes reachable by driving off this lane's exit (travel-direction) end.
     /// May fan out (a junction) or be empty (a dead end / unlinked lane). Built
     /// by an importer from road/lane links and junctions; empty otherwise.
@@ -50,6 +61,24 @@ pub struct Lane {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RoadNetwork {
     pub lanes: Vec<Lane>,
+}
+
+impl Lane {
+    /// Superelevation angle (radians, signed) at arc length `s`, interpolated
+    /// between vertices; zero everywhere on a flat lane. Positive raises the
+    /// left edge -- see [`Lane::bank`].
+    pub fn bank_at(&self, s: f32) -> f32 {
+        if self.bank.is_empty() {
+            return 0.0;
+        }
+        debug_assert_eq!(
+            self.bank.len(),
+            self.center.points().len(),
+            "a non-empty bank profile must be parallel to the centerline"
+        );
+        let (i, t) = self.center.locate(s);
+        self.bank[i] + (self.bank[i + 1] - self.bank[i]) * t
+    }
 }
 
 impl RoadNetwork {
@@ -119,6 +148,7 @@ mod tests {
             direction: Direction::Forward,
             center: Polyline::new(points.iter().map(|p| Vec3::from_array(*p)).collect()),
             width: 3.5,
+            bank: Vec::new(),
             successors: Vec::new(),
             predecessors: Vec::new(),
             neighbors: Vec::new(),
@@ -178,5 +208,64 @@ mod tests {
                                                 // nearest_lane's returned id round-trips through lane().
         let (id, _) = net.nearest_lane(Vec3::new(0.5, 0.0, 0.0)).unwrap();
         assert!(net.lane(id).is_some());
+    }
+
+    // --- bank_at sampling (independent test pass) ----------------------------
+
+    // A flat lane (empty bank) reads 0 everywhere and never panics, including at
+    // and past the ends and below zero.
+    #[test]
+    fn bank_at_of_a_flat_lane_is_zero_and_never_panics() {
+        let l = lane(0, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]]);
+        assert!(l.bank.is_empty());
+        for s in [-10.0, -0.0, 0.0, 1.0, 2.0, 4.0, 4.0001, 1000.0] {
+            assert_eq!(l.bank_at(s), 0.0, "flat bank_at({s})");
+        }
+    }
+
+    // A non-empty profile interpolates linearly between vertices and clamps past
+    // both ends. Centerline at x = 0, 2, 4 (two 2 m segments); bank = 0, 0.1,
+    // 0.2 -- so bank_at grows linearly with s and flattens outside [0, 4].
+    #[test]
+    fn bank_at_interpolates_between_vertices_and_clamps() {
+        let l = Lane {
+            bank: vec![0.0, 0.1, 0.2],
+            ..lane(0, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
+        };
+        // Exactly on vertices.
+        assert!((l.bank_at(0.0) - 0.0).abs() < 1e-6, "{}", l.bank_at(0.0));
+        assert!((l.bank_at(2.0) - 0.1).abs() < 1e-6, "{}", l.bank_at(2.0));
+        assert!((l.bank_at(4.0) - 0.2).abs() < 1e-6, "{}", l.bank_at(4.0));
+        // Midway through each segment -> the midpoint value.
+        assert!((l.bank_at(1.0) - 0.05).abs() < 1e-6, "{}", l.bank_at(1.0));
+        assert!((l.bank_at(3.0) - 0.15).abs() < 1e-6, "{}", l.bank_at(3.0));
+        // Past the far end clamps to the last vertex; below zero to the first.
+        assert!(
+            (l.bank_at(100.0) - 0.2).abs() < 1e-6,
+            "{}",
+            l.bank_at(100.0)
+        );
+        assert!(
+            (l.bank_at(-100.0) - 0.0).abs() < 1e-6,
+            "{}",
+            l.bank_at(-100.0)
+        );
+        // Exactly at length and just past it must not panic and stay clamped.
+        let len = l.center.length();
+        assert!((l.bank_at(len) - 0.2).abs() < 1e-6);
+        assert!((l.bank_at(len + 5.0) - 0.2).abs() < 1e-6);
+    }
+
+    // The stored sign is preserved (a negative bank stays negative through
+    // interpolation and clamping).
+    #[test]
+    fn bank_at_preserves_a_negative_profile() {
+        let l = Lane {
+            bank: vec![-0.2, -0.1, 0.0],
+            ..lane(0, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
+        };
+        assert!((l.bank_at(0.0) + 0.2).abs() < 1e-6, "{}", l.bank_at(0.0));
+        assert!((l.bank_at(1.0) + 0.15).abs() < 1e-6, "{}", l.bank_at(1.0));
+        assert!((l.bank_at(-5.0) + 0.2).abs() < 1e-6, "clamp low");
     }
 }
