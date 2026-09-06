@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Quat, Vec3};
 
 use crate::geometry::left_normal;
 use crate::network::RoadNetwork;
@@ -60,7 +60,9 @@ impl Mesh {
 impl RoadNetwork {
     /// Tessellate every driving lane into one surface mesh-- a quad strip per
     /// lane, each rib offset +/-width/2 from the centerline along the per-vertex
-    /// (bisector) normal, carrying the centerline's elevation. Winding is
+    /// cross axis, carrying the centerline's elevation. On a superelevated lane
+    /// the cross axis is tilted about the tangent by the local `bank`, so the
+    /// outer edge of a banked curve rides above the inner one. Winding is
     /// consistent (triangles face up).
     ///
     /// Note: ribs use the vertex bisector normal, which keeps width consistent
@@ -75,13 +77,17 @@ impl RoadNetwork {
             let base = mesh.vertices.len() as u32;
             for i in 0..points.len() {
                 let along = tangents[i];
-                let left = left_normal(along);
-                // Surface up-normal: along × left is +Y for a flat road, and
+                // Cross axis, rolled about the (stored) tangent by the local
+                // bank: +bank raises the left rib. Flat lanes (empty bank) leave
+                // it the horizontal left normal, so the mesh is unchanged.
+                let bank = lane.bank.get(i).copied().unwrap_or(0.0);
+                let lateral = Quat::from_axis_angle(along, bank) * left_normal(along);
+                // Surface up-normal: along × lateral is +Y for a flat road, and
                 // tilts with grade/bank.
-                let up = along.cross(left).normalize_or_zero();
-                mesh.vertices.push(points[i] + left * half);
+                let up = along.cross(lateral).normalize_or(Vec3::Y);
+                mesh.vertices.push(points[i] + lateral * half);
                 mesh.normals.push(up);
-                mesh.vertices.push(points[i] - left * half);
+                mesh.vertices.push(points[i] - lateral * half);
                 mesh.normals.push(up);
             }
             // Two triangles per segment, over the [left, right] rib pairs.
@@ -168,6 +174,163 @@ mod tests {
         let mut degenerate = sound.clone();
         degenerate.indices = vec![0, 1, 1];
         assert_eq!(degenerate.validate(), Err(MeshError::DegenerateTriangle(0)));
+    }
+
+    #[test]
+    fn a_banked_lane_tilts_its_ribs() {
+        // A straight lane heading +X, canted a constant 0.2 rad: +bank raises
+        // the left rib, so the left (first) vertex of each pair rides above the
+        // right, and the up-normal leans off vertical.
+        let net = RoadNetwork {
+            lanes: vec![Lane {
+                bank: vec![0.2; 3],
+                ..Lane {
+                    id: LaneId(0),
+                    kind: LaneKind::Driving,
+                    direction: Direction::Forward,
+                    center: Polyline::new(vec![
+                        Vec3::new(0.0, 0.0, 0.0),
+                        Vec3::new(5.0, 0.0, 0.0),
+                        Vec3::new(10.0, 0.0, 0.0),
+                    ]),
+                    width: 4.0,
+                    bank: Vec::new(),
+                    successors: Vec::new(),
+                    predecessors: Vec::new(),
+                    neighbors: Vec::new(),
+                }
+            }],
+        };
+        let mesh = net.surface_mesh();
+        mesh.validate().expect("a banked lane is a valid trimesh");
+        // Left (index 0) above right (index 1) of the first rib pair.
+        assert!(
+            mesh.vertices[0].y - mesh.vertices[1].y > 0.5,
+            "outer/left {} should ride above inner/right {}",
+            mesh.vertices[0].y,
+            mesh.vertices[1].y
+        );
+        // The up-normal is tilted but still points up.
+        assert!(mesh.normals[0].y < 0.99 && mesh.normals[0].y > 0.9);
+        assert!(
+            (mesh.normals[0] - Vec3::Y).length() > 0.05,
+            "normal should tilt"
+        );
+    }
+
+    // Build a one-lane network from centerline points and a per-vertex bank.
+    fn banked_net(points: Vec<Vec3>, bank: Vec<f32>, width: f32) -> RoadNetwork {
+        RoadNetwork {
+            lanes: vec![Lane {
+                id: LaneId(0),
+                kind: LaneKind::Driving,
+                direction: Direction::Forward,
+                center: Polyline::new(points),
+                width,
+                bank,
+                successors: Vec::new(),
+                predecessors: Vec::new(),
+                neighbors: Vec::new(),
+            }],
+        }
+    }
+
+    // A CURVED banked lane: a right-hand arc (curving toward +Z), so the left
+    // edge is the OUTER edge. With a constant positive bank the outer edge must
+    // ride above the inner one all the way round, every normal still points up,
+    // and the mesh is a valid trimesh.
+    #[test]
+    fn a_banked_curve_lifts_the_outer_edge_and_stays_valid() {
+        let r = 20.0_f32;
+        // Circle centered at (0,0,r): point = (r sinθ, 0, r - r cosθ). θ=0 -> +X
+        // heading, z grows -> a right turn, so left_normal (-Z at start) is outer.
+        let points: Vec<Vec3> = (0..=8)
+            .map(|k| {
+                let th = (k as f32) * (std::f32::consts::FRAC_PI_4 / 8.0);
+                Vec3::new(r * th.sin(), 0.0, r - r * th.cos())
+            })
+            .collect();
+        let net = banked_net(points.clone(), vec![0.15; points.len()], 5.0);
+        let mesh = net.surface_mesh();
+        mesh.validate().expect("a banked curve tessellates");
+
+        // Every normal still points generally up.
+        assert!(
+            mesh.normals.iter().all(|n| n.y > 0.9),
+            "some normal fell below 0.9: {:?}",
+            mesh.normals.iter().map(|n| n.y).fold(1.0_f32, f32::min)
+        );
+        // Outer (left, even index) rib rides above the inner (right, odd) rib at
+        // every rib pair -- the physically-correct banked-curve profile.
+        for i in 0..points.len() {
+            let outer = mesh.vertices[2 * i].y;
+            let inner = mesh.vertices[2 * i + 1].y;
+            assert!(
+                outer - inner > 0.5,
+                "rib {i}: outer {outer} should ride above inner {inner}"
+            );
+        }
+        // The normals are genuinely tilted, not vertical.
+        assert!(mesh.normals.iter().any(|n| (n.y - 1.0).abs() > 0.005));
+    }
+
+    // Negative bank rolls the surface the other way: the RIGHT rib rides above
+    // the left, and the normal leans toward -Z -- the mirror of positive bank.
+    #[test]
+    fn negative_bank_raises_the_opposite_rib() {
+        let pts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(5.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+        ];
+        let neg = banked_net(pts.clone(), vec![-0.2; 3], 4.0).surface_mesh();
+        let pos = banked_net(pts, vec![0.2; 3], 4.0).surface_mesh();
+        neg.validate().expect("valid trimesh");
+        // Right (index 1) above left (index 0) for negative bank.
+        assert!(
+            neg.vertices[1].y - neg.vertices[0].y > 0.5,
+            "negative bank should raise the right rib: left {} right {}",
+            neg.vertices[0].y,
+            neg.vertices[1].y
+        );
+        // Exact mirror of the positive-bank mesh.
+        assert!((neg.vertices[0].y + pos.vertices[0].y).abs() < 1e-5);
+        assert!((neg.vertices[1].y + pos.vertices[1].y).abs() < 1e-5);
+        // Normal leans toward -Z (positive bank leans +Z).
+        assert!(neg.normals[0].z < -0.05, "neg normal {:?}", neg.normals[0]);
+        assert!(pos.normals[0].z > 0.05, "pos normal {:?}", pos.normals[0]);
+        assert!(neg.normals.iter().all(|n| n.y > 0.9));
+    }
+
+    // The two independent consumers of `bank` must agree: at each centerline
+    // vertex the mesh's per-vertex up-normal equals the up-normal
+    // `Lane::sample_at` derives at that vertex's arc length. Both roll +Y about
+    // the same stored tangent by the same bank, so they cannot diverge.
+    #[test]
+    fn mesh_normal_matches_sample_at_up_at_each_vertex() {
+        let pts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(8.0, 0.0, 0.0),
+            Vec3::new(16.0, 0.0, 6.0),
+            Vec3::new(20.0, 0.0, 16.0),
+        ];
+        let bank = vec![0.05, 0.12, 0.18, 0.1];
+        let net = banked_net(pts.clone(), bank, 5.0);
+        let mesh = net.surface_mesh();
+        let lane = &net.lanes[0];
+        // Cumulative arc length at each vertex.
+        let mut s = 0.0_f32;
+        for i in 0..pts.len() {
+            if i > 0 {
+                s += (pts[i] - pts[i - 1]).length();
+            }
+            let mesh_up = mesh.normals[2 * i]; // left and right share the vertex normal
+            let sampled_up = lane.sample_at(s).up;
+            assert!(
+                mesh_up.abs_diff_eq(sampled_up, 1e-5),
+                "vertex {i} (s={s}): mesh normal {mesh_up:?} != sample_at up {sampled_up:?}"
+            );
+        }
     }
 
     #[test]

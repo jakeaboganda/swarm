@@ -16,7 +16,7 @@ use std::f32::consts::PI;
 
 use glam::{Quat, Vec3};
 
-use crate::geometry::{left_normal, Polyline};
+use crate::geometry::{left_normal, Polyline, RoadSample};
 use crate::mesh::Mesh;
 use crate::network::{Direction, Lane, LaneId, LaneKind, RoadNetwork};
 
@@ -28,21 +28,6 @@ const STEP: f32 = 2.5; // centerline sample spacing (m)
 /// edge; the oval turns consistently right, so its left edge is always the outer
 /// (raised) one.
 const PEAK_BANK: f32 = 0.21;
-
-/// The road surface at one station: everything needed to place + orient a body
-/// on the (possibly canted) road, and to feed the bank into a vehicle model.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RoadSample {
-    /// Centerline surface point (Y-up, m).
-    pub point: Vec3,
-    /// Unit tangent (direction of travel), in the XZ plane.
-    pub heading: Vec3,
-    /// Superelevation at this station (rad, signed; positive raises the left
-    /// edge). ~0 on the straights, peaks through the curves.
-    pub bank: f32,
-    /// Surface up-normal, tilted from +Y by `bank` about the tangent.
-    pub up: Vec3,
-}
 
 /// A closed banked oval: a routing-ready network plus its bank profile, banked
 /// mesh and sampling. See the module docs for why the bank lives here, not on
@@ -183,13 +168,7 @@ impl BankedTrack {
     /// Sample the road at arc length `s` along the loop.
     pub fn sample_at(&self, s: f32) -> RoadSample {
         let pose = self.center.pose_at(s);
-        let bank = self.bank_at(s);
-        RoadSample {
-            point: pose.position,
-            heading: pose.heading,
-            bank,
-            up: banked_up(pose.heading, bank),
-        }
+        RoadSample::new(pose.position, pose.heading, self.bank_at(s))
     }
 
     /// Sample the road nearest a world point -- the road-conform's entry point:
@@ -225,12 +204,6 @@ impl BankedTrack {
         }
         mesh
     }
-}
-
-/// The surface up-normal for a road with horizontal tangent `heading`, tilted
-/// from +Y about that tangent by `bank` (positive raises the left edge).
-fn banked_up(heading: Vec3, bank: f32) -> Vec3 {
-    (Quat::from_axis_angle(heading, bank) * Vec3::Y).normalize_or(Vec3::Y)
 }
 
 #[cfg(test)]

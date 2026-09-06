@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Quat, Vec3};
 
 /// A position plus a horizontal heading along a lane. Y is up (elevation).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -6,6 +6,45 @@ pub struct Pose {
     pub position: Vec3,
     /// Unit tangent in the XZ (ground) plane -- the direction of travel.
     pub heading: Vec3,
+}
+
+/// The road surface at one station: where a body sits and how it is oriented on
+/// a (possibly canted) road, plus the bank angle a vehicle model consumes. This
+/// is what draping a body onto the road needs -- see [`crate::Lane::sample_at`]
+/// and [`crate::RoadNetwork::sample_near`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoadSample {
+    /// Centerline surface point (Y-up, m) -- already at the banked height.
+    pub point: Vec3,
+    /// Unit tangent in the XZ plane. The centerline's *stored* (geometry)
+    /// direction, which for a `Backward` lane opposes travel; it is the frame
+    /// `bank`/`up` are defined in.
+    pub heading: Vec3,
+    /// Superelevation (rad, signed; positive raises the +offset / left edge).
+    pub bank: f32,
+    /// Surface up-normal: +Y rolled about `heading` by `bank`. Lateral cant
+    /// only -- since `heading` is horizontal, `up.dot(heading) == 0`, so this
+    /// carries no fore-aft **grade** pitch. Exact on a level road; on a graded
+    /// lane it omits the small pitch component (immaterial to the raycast
+    /// vehicle, which reads the meshed vertices; a residual for the analytic FMU
+    /// conform).
+    pub up: Vec3,
+}
+
+impl RoadSample {
+    /// Build a sample, deriving the up-normal by rolling +Y about the horizontal
+    /// `heading` by `bank`. `heading` must be the centerline's stored tangent so
+    /// the roll frame agrees with how `bank` is defined (positive raises the
+    /// left-hand-normal edge).
+    pub fn new(point: Vec3, heading: Vec3, bank: f32) -> Self {
+        let up = (Quat::from_axis_angle(heading, bank) * Vec3::Y).normalize_or(Vec3::Y);
+        Self {
+            point,
+            heading,
+            bank,
+            up,
+        }
+    }
 }
 
 /// The result of projecting a world point onto a polyline.
@@ -258,6 +297,60 @@ mod tests {
     #[test]
     fn left_normal_of_plus_x_is_minus_z() {
         assert!(left_normal(Vec3::X).abs_diff_eq(Vec3::new(0.0, 0.0, -1.0), 1e-5));
+    }
+
+    // --- RoadSample::new invariants (independent D2 test pass) ---------------
+
+    // For any bank angle the up-normal stays unit length and orthogonal to the
+    // horizontal heading (the roll axis), and at bank 0 it is *exactly* +Y.
+    #[test]
+    fn road_sample_up_is_unit_orthogonal_and_plumb_at_zero() {
+        let headings = [
+            Vec3::X,
+            Vec3::Z,
+            Vec3::new(1.0, 0.0, 1.0).normalize(),
+            Vec3::new(-2.0, 0.0, 1.0).normalize(),
+        ];
+        for h in headings {
+            for bank in [0.0_f32, 0.2, -0.2, 1.5, -1.5] {
+                let s = RoadSample::new(Vec3::new(3.0, 1.0, -4.0), h, bank);
+                // Unit length.
+                assert!(
+                    (s.up.length() - 1.0).abs() < 1e-5,
+                    "up not unit for heading {h:?} bank {bank}: len {}",
+                    s.up.length()
+                );
+                // Orthogonal to heading (lateral cant only; no fore-aft grade).
+                assert!(
+                    s.up.dot(h).abs() < 1e-6,
+                    "up.heading = {} for heading {h:?} bank {bank}",
+                    s.up.dot(h)
+                );
+                // Fields are stored verbatim.
+                assert_eq!(s.point, Vec3::new(3.0, 1.0, -4.0));
+                assert_eq!(s.heading, h);
+                assert_eq!(s.bank, bank);
+            }
+            // At bank 0 the up-normal is exactly +Y (not just approximately).
+            assert_eq!(
+                RoadSample::new(Vec3::ZERO, h, 0.0).up,
+                Vec3::Y,
+                "bank 0 up must be exactly +Y for heading {h:?}"
+            );
+        }
+    }
+
+    // Sign: for heading +X, +bank leans the up-normal toward +Z (the left edge
+    // rises), and -bank leans it toward -Z. The two are mirror images.
+    #[test]
+    fn road_sample_up_sign_flips_with_bank_sign() {
+        let pos = RoadSample::new(Vec3::ZERO, Vec3::X, 0.3);
+        let neg = RoadSample::new(Vec3::ZERO, Vec3::X, -0.3);
+        assert!(pos.up.z > 0.05, "+bank should lean +Z: {:?}", pos.up);
+        assert!(neg.up.z < -0.05, "-bank should lean -Z: {:?}", neg.up);
+        // Mirror across the XZ->Y plane: same y, opposite z.
+        assert!((pos.up.y - neg.up.y).abs() < 1e-6);
+        assert!((pos.up.z + neg.up.z).abs() < 1e-6);
     }
 
     #[test]

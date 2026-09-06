@@ -21,8 +21,8 @@ mod mesh;
 mod network;
 mod route;
 
-pub use banked_oval::{banked_oval, BankedTrack, RoadSample};
+pub use banked_oval::{banked_oval, BankedTrack};
 pub use build::demo_road;
-pub use geometry::{Polyline, Pose, Projection};
+pub use geometry::{Polyline, Pose, Projection, RoadSample};
 pub use mesh::{Mesh, MeshError};
 pub use network::{Direction, Lane, LaneId, LaneKind, RoadNetwork};
