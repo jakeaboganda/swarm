@@ -57,10 +57,10 @@ pub fn load_map(spec: Option<&str>) -> anyhow::Result<Option<map::RoadNetwork>> 
     let network = match spec {
         None => return Ok(None),
         Some("demo") => map::demo_road(),
-        // The banked oval's flat routing network (agents lap it); the canted
-        // surface (collider + viz) is built separately from `banked_mesh()` in
-        // `setup_world`, and `BankedTrackRes` carries the bank for the conform.
-        Some("banked_oval") => map::banked_oval().network,
+        // The banked oval is a plain canted RoadNetwork: its lane carries the
+        // bank, so `surface_mesh` builds the canted collider/viz and
+        // `sample_near` drapes FMU cars -- no bespoke track bundle.
+        Some("banked_oval") => map::banked_oval(),
         Some(path) if path.ends_with(".xodr") => map_opendrive::load_file(path)
             .map_err(|e| anyhow::anyhow!("loading map {path:?}: {e}"))?,
         Some(other) => {
@@ -94,11 +94,12 @@ pub fn build_app(config: SimConfig) -> App {
     } = config;
 
     let perception_seed = scenario.seed;
-    // The banked oval carries a bank profile the flat `RoadNetwork` can't; build
-    // the full `BankedTrack` here so `setup_world` can spawn its canted mesh and
-    // `conform_fmu_to_track` can sample it. `map_world` already holds the same
-    // track's flat routing network (from `load_map`).
-    let banked_track = (scenario.map.as_deref() == Some("banked_oval")).then(map::banked_oval);
+    // Whether this map is superelevated: any lane carrying a bank profile. Drives
+    // whether `conform_fmu_to_track` runs -- it drapes FMU cars onto a canted
+    // surface, and is pure overhead on a flat map.
+    let map_banked = map_world
+        .as_ref()
+        .is_some_and(|net| net.lanes.iter().any(|l| !l.bank.is_empty()));
     let pending_roster = PendingRoster(scenario.roster.iter().map(|s| s.name.clone()).collect());
     let arena_bounds = ArenaBounds {
         half_width: scenario.arena.width / 2.0,
@@ -135,7 +136,7 @@ pub fn build_app(config: SimConfig) -> App {
         .insert_resource(Roster(scenario))
         .insert_resource(arena_bounds)
         .insert_resource(world::MapWorld(map_world))
-        .insert_resource(world::BankedTrackRes(banked_track))
+        .insert_resource(world::MapBanked(map_banked))
         .insert_resource(pending_roster)
         .insert_resource(AgentRegistry::default())
         .insert_resource(AwaitingReconnect::default())
@@ -190,12 +191,13 @@ pub fn build_app(config: SimConfig) -> App {
         )
         // Drape FMU vehicles onto the banked surface: after the FMU writes its
         // flat pose (MovementSet::ApplyForce), before Rapier reads the kinematic
-        // target (SyncBackend). A no-op without a banked track.
+        // target (SyncBackend). Runs only on a superelevated map.
         .add_systems(
             FixedUpdate,
             world::conform_fmu_to_track
                 .after(movement::MovementSet::ApplyForce)
-                .before(PhysicsSet::SyncBackend),
+                .before(PhysicsSet::SyncBackend)
+                .run_if(|banked: Res<world::MapBanked>| banked.0),
         )
         // Viz broadcast. `broadcast_spawns` runs before `drain_viz_events`
         // so a viewer connecting the same frame an agent joins learns of
@@ -246,16 +248,99 @@ pub fn build_app(config: SimConfig) -> App {
 
 /// Builds the world at startup: the road map if the scenario selected one,
 /// otherwise the flat arena.
-fn setup_world(
-    mut commands: Commands,
-    roster: Res<Roster>,
-    map: Res<world::MapWorld>,
-    banked: Res<world::BankedTrackRes>,
-) {
-    match (&banked.0, &map.0) {
-        // A banked track: its canted mesh is the collider/viz.
-        (Some(track), _) => world::spawn_banked_road(&mut commands, track),
-        (None, Some(road)) => world::spawn_road(&mut commands, road),
-        (None, None) => world::spawn_arena(&mut commands, &roster.0.arena),
+fn setup_world(mut commands: Commands, roster: Res<Roster>, map: Res<world::MapWorld>) {
+    match &map.0 {
+        // A road (banked or flat): surface_mesh is the collider/viz, canted where
+        // the lanes are.
+        Some(road) => world::spawn_road(&mut commands, road),
+        None => world::spawn_arena(&mut commands, &roster.0.arena),
+    }
+}
+
+#[cfg(test)]
+mod map_banked_tests {
+    //! D4 wiring at the `load_map` boundary: the retire replaced the bespoke
+    //! `BankedTrack`/`BankedTrackRes` with a plain canted `RoadNetwork` and a
+    //! `MapBanked(bool)` gate. `MapBanked` is exactly this predicate over the
+    //! loaded network, so pinning it here pins what actually decides whether
+    //! `conform_fmu_to_track` runs. (`build_app` computes the identical
+    //! expression; the full-app resource value is asserted in the server
+    //! integration tests.)
+
+    use super::load_map;
+
+    /// The `MapBanked` predicate: any lane carries a (non-empty) bank profile.
+    /// Mirrors `build_app`'s inline `map_banked` computation.
+    fn is_banked(net: &map::RoadNetwork) -> bool {
+        net.lanes.iter().any(|l| !l.bank.is_empty())
+    }
+
+    // A banked `.xodr` fixture with real superelevation, and a flat one from
+    // before the feature (no `<superelevation>` -> every lane's bank is empty).
+    const BANKED_XODR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../map-opendrive/tests/data/banked_sweeper.xodr"
+    );
+    const FLAT_XODR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../map-opendrive/tests/data/param_poly3.xodr"
+    );
+
+    #[test]
+    fn banked_oval_loads_as_a_drivable_banked_lap() {
+        // The retire re-expressed `banked_oval()` as a plain RoadNetwork; loading
+        // it must still yield one canted, drivable, lappable lane.
+        let net = load_map(Some("banked_oval"))
+            .expect("banked_oval loads")
+            .expect("banked_oval is a map");
+        let lanes: Vec<_> = net.driving_lanes().collect();
+        assert_eq!(lanes.len(), 1, "the oval is one driving lane");
+        assert!(!lanes[0].bank.is_empty(), "the oval lane must carry a bank");
+        // The lap wraps: driving off the exit re-enters the same lane, so
+        // routing over the loop terminates.
+        assert_eq!(lanes[0].successors, vec![lanes[0].id]);
+        // The successor edge resolves through the network's routing lookup.
+        assert_eq!(
+            net.successors(lanes[0].id).map(|l| l.id).next(),
+            Some(lanes[0].id),
+            "the oval must route (successor wraps to itself)"
+        );
+        // load_map already ran surface_mesh().validate(); assert the cant is real
+        // in the built collider mesh (a tilted normal exists).
+        let mesh = net.surface_mesh();
+        mesh.validate().expect("the oval collider mesh is valid");
+        assert!(
+            mesh.normals.iter().any(|n| n.y < 0.99),
+            "the oval collider mesh is not canted"
+        );
+    }
+
+    #[test]
+    fn map_banked_is_true_for_banked_maps() {
+        // The built-in oval and an imported banked `.xodr` both drive the conform.
+        let oval = load_map(Some("banked_oval")).unwrap().unwrap();
+        assert!(is_banked(&oval), "banked_oval must read as banked");
+
+        let imported = load_map(Some(BANKED_XODR)).unwrap().unwrap();
+        assert!(
+            is_banked(&imported),
+            "the imported banked sweeper must read as banked -- this is what makes \
+             conform_fmu_to_track run on an imported map (feature goal b)"
+        );
+    }
+
+    #[test]
+    fn map_banked_is_false_for_flat_maps() {
+        // The flat built-in road and a flat imported map: no lane carries a bank,
+        // so conform_fmu_to_track is skipped and FMU cars are untouched, exactly
+        // as before the retire.
+        let demo = load_map(Some("demo")).unwrap().unwrap();
+        assert!(!is_banked(&demo), "demo_road has no bank");
+
+        let flat = load_map(Some(FLAT_XODR)).unwrap().unwrap();
+        assert!(
+            !is_banked(&flat),
+            "a pre-superelevation imported map must read as flat"
+        );
     }
 }

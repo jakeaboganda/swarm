@@ -104,64 +104,31 @@ const ROAD_COLOR: viz::Color = viz::Color {
 #[derive(Resource, Default)]
 pub struct MapWorld(pub Option<map::RoadNetwork>);
 
-/// The banked track, when the scenario selected `"banked_oval"`. Present
-/// alongside `MapWorld` (which holds the same track's flat routing network): the
-/// banked mesh is the collider/viz, and `conform_fmu_to_track` samples this to
-/// drape FMU vehicles onto the canted surface.
+/// Whether the loaded map is superelevated (any lane carries a bank profile).
+/// Gates `conform_fmu_to_track`, which is pure overhead on a flat map.
 #[derive(Resource, Default)]
-pub struct BankedTrackRes(pub Option<map::BankedTrack>);
+pub struct MapBanked(pub bool);
 
-/// Spawns the banked-track surface as a static collider + viz, from its
-/// bank-tilted mesh (so the corners are physically and visually canted, unlike
-/// `spawn_road`'s flat-cross-section `surface_mesh`).
-pub fn spawn_banked_road(commands: &mut Commands, track: &map::BankedTrack) {
-    let mesh = track.banked_mesh();
-    let triangles: Vec<[u32; 3]> = mesh
-        .indices
-        .chunks_exact(3)
-        .map(|t| [t[0], t[1], t[2]])
-        .collect();
-    let collider = Collider::trimesh(mesh.vertices.clone(), triangles)
-        .expect("banked track surface is a valid mesh");
-    commands.spawn((
-        RigidBody::Fixed,
-        collider,
-        Transform::IDENTITY,
-        Friction::new(0.9),
-        Restitution::new(0.0),
-        VizEntity {
-            id: viz::EntityId("road".into()),
-            name: "road".into(),
-            kind: viz::EntityKind::Static,
-            root: viz::EntityNode::body(viz::Geometry::Mesh {
-                positions: mesh.vertices.iter().map(to_viz_vec).collect(),
-                normals: mesh.normals.iter().map(to_viz_vec).collect(),
-                indices: mesh.indices,
-            }),
-            color: ROAD_COLOR,
-            sensors: None,
-        },
-    ));
-}
-
-/// Drapes every FMU vehicle onto the banked surface: samples the track under the
+/// Drapes every FMU vehicle onto the banked surface: samples the road under the
 /// car and overrides its height + orientation so it sits tilted on the canted
 /// road, and records the local bank for the FMU to respond to next tick.
 ///
 /// Runs after `drive_fmu_vehicles` writes the flat pose and before Rapier's
-/// `SyncBackend` reads the kinematic target (see `app::build_app`). No-op when
-/// there is no banked track. The dominant visible cant is the road-surface tilt
-/// here; the FMU's own suspension roll (`ocd_roll`) rides on top and is left as
-/// a follow-up refinement.
+/// `SyncBackend` reads the kinematic target (see `app::build_app`), only on a
+/// superelevated map. The dominant visible cant is the road-surface tilt here;
+/// the FMU's own suspension roll (`ocd_roll`) rides on top and is left as a
+/// follow-up refinement.
 pub fn conform_fmu_to_track(
-    track: Res<BankedTrackRes>,
+    map: Res<MapWorld>,
     mut query: Query<(&mut Transform, &mut FmuVehicle)>,
 ) {
-    let Some(track) = track.0.as_ref() else {
+    let Some(net) = map.0.as_ref() else {
         return;
     };
     for (mut transform, mut vehicle) in &mut query {
-        let sample = track.sample_near(transform.translation);
+        let Some(sample) = net.sample_near(transform.translation) else {
+            continue;
+        };
         // Keep the OCD-driven heading (yaw), sit on the surface, tilt the body's
         // up-axis onto the road's surface normal -- the visible cant.
         let (yaw, _pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);

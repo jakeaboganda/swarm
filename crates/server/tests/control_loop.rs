@@ -723,12 +723,13 @@ fn an_ocd_car_banks_on_the_canted_oval() {
 
     // Route a lap of the oval from the track centerline, so the car drives off
     // the start straight and into a banked curve.
-    let track = map::banked_oval();
-    let len = track.length();
+    let net = map::banked_oval();
+    let lane = net.driving_lanes().next().expect("the oval has a lane");
+    let len = lane.center.length();
     let n = 32u32;
     let waypoints: Vec<_> = (1..=n)
         .map(|i| {
-            let p = track.sample_at(len * (i as f32) / (n as f32)).point;
+            let p = lane.sample_at(len * (i as f32) / (n as f32)).point;
             waypoint(p.x, p.z, 16.0)
         })
         .collect();
@@ -782,6 +783,116 @@ fn an_ocd_car_banks_on_the_canted_oval() {
     );
 }
 
+/// The purpose-built banked `.xodr` sweeper (a flat straight -> a super-elevated
+/// left arc -> a flat straight), imported through the real OpenDRIVE path.
+const BANKED_SWEEPER_XODR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../map-opendrive/tests/data/banked_sweeper.xodr"
+);
+
+/// The OCD FMU car, but on an *imported* banked `.xodr` instead of the built-in
+/// oval -- the feature's headline capability (goal b): the same conform that
+/// drapes the oval must drape a car on a canted imported map.
+fn banked_sweeper_fmu_scenario(name: &str) -> ScenarioConfig {
+    let mut cfg = banked_ocd_scenario(name);
+    cfg.map = Some(BANKED_SWEEPER_XODR.into());
+    cfg
+}
+
+#[test]
+fn an_fmu_car_conforms_on_an_imported_banked_xodr() {
+    // The headline of the whole superelevation effort: an FMU vehicle on a real
+    // imported banked `.xodr` (not the hand-built oval) gets conformed onto the
+    // imported cant. Two things must both hold: `MapBanked` is true (so the
+    // conform system is scheduled at all), and driving into the banked arc
+    // actually tilts the car's up-axis off vertical.
+    let mut sim = Sim::new(banked_sweeper_fmu_scenario("ocd-car"));
+
+    // The import is recognised as superelevated, so `conform_fmu_to_track` runs.
+    // This is the exact gate the retire introduced (was `BankedTrackRes`, which
+    // only ever existed for the built-in oval).
+    assert!(
+        sim.app.world().resource::<server::world::MapBanked>().0,
+        "the imported banked sweeper must set MapBanked=true, else conform never runs"
+    );
+
+    let agent = sim.join("ocd-car"); // FMU loads + binds (roll/pitch/bank too)
+    sim.expect("the scenario to start", |sim| {
+        (sim.state() == ScenarioState::Running).then_some(())
+    });
+
+    // Lay a plan along the forward lane the car spawns on, from its start on the
+    // flat entry straight, through the banked arc. Forward (RHT right-hand) lanes
+    // carry the cant; sampling the nearest one to the spawn gives the driven line.
+    let net = map_opendrive::load_file(BANKED_SWEEPER_XODR).expect("the sweeper loads");
+    let start = sim.position_of("ocd-car");
+    let start_v = glam::Vec3::new(start.x, 0.0, start.z);
+    let lane = net
+        .driving_lanes()
+        .filter(|l| l.direction == map::Direction::Forward)
+        .min_by(|a, b| {
+            let da = (a.center.project(start_v).point - start_v).length_squared();
+            let db = (b.center.project(start_v).point - start_v).length_squared();
+            da.total_cmp(&db)
+        })
+        .expect("a forward lane");
+    let len = lane.center.length();
+    let n = 40u32;
+    let waypoints: Vec<_> = (1..=n)
+        .map(|i| {
+            let p = lane.sample_at(len * (i as f32) / (n as f32)).point;
+            waypoint(p.x, p.z, 16.0)
+        })
+        .collect();
+    agent.send(ClientMessage::SubmitPlan { waypoints });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("ocd-car") == 1).then_some(())
+    });
+
+    // On the flat entry straight the car sits ~level; record the largest lean as
+    // it drives on into the banked arc.
+    let level = {
+        let up = sim
+            .component::<bevy::prelude::Transform>("ocd-car")
+            .rotation
+            * BevyVec3::Y;
+        up.angle_between(BevyVec3::Y)
+    };
+    let mut max_tilt = 0f32;
+    let mut min_y = f32::INFINITY;
+    for _ in 0..900 {
+        sim.step(1);
+        let tf = sim.component::<bevy::prelude::Transform>("ocd-car");
+        let up = tf.rotation * BevyVec3::Y;
+        max_tilt = max_tilt.max(up.angle_between(BevyVec3::Y));
+        min_y = min_y.min(tf.translation.y);
+    }
+    let moved = (sim.position_of("ocd-car") - start).length();
+    eprintln!(
+        "imported banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad min_y={min_y}"
+    );
+
+    assert!(
+        level < 0.03,
+        "car was not level on the flat entry straight ({level} rad)"
+    );
+    assert!(moved > 30.0, "car did not drive into the arc ({moved} m)");
+    // The sweeper banks to ~0.2 rad; the imported-map conform must tilt the car
+    // well past level once it reaches the arc.
+    assert!(
+        max_tilt > 0.08,
+        "car never banked on the imported map (max tilt {max_tilt} rad) -- \
+         conform is not draping it onto the imported cant"
+    );
+    // Conform must sit the chassis a ride height *above* the road surface, not
+    // buried in it, on the imported map too.
+    let ride = server::world::car_ride_height();
+    assert!(
+        min_y > -0.5,
+        "car sank below the road on the imported map (min y {min_y}, ride {ride})"
+    );
+}
+
 /// Two double-track OCD cars on the banked oval, for the demo capture below.
 fn banked_ocd_scenario_2cars() -> ScenarioConfig {
     let mut cfg = banked_ocd_scenario("car-1");
@@ -819,8 +930,9 @@ fn capture_banked_oval() {
         (s.state() == ScenarioState::Running).then_some(())
     });
 
-    let track = map::banked_oval();
-    let len = track.length();
+    let net = map::banked_oval();
+    let lane = net.driving_lanes().next().expect("the oval has a lane");
+    let len = lane.center.length();
     let laps = 2u32;
     let per_lap = 64u32;
 
@@ -831,7 +943,7 @@ fn capture_banked_oval() {
         for _ in 0..laps {
             for k in 1..=per_lap {
                 let s = len * (k as f32) / (per_lap as f32);
-                let smp = track.sample_at(s);
+                let smp = lane.sample_at(s);
                 let lateral = smp.up.cross(smp.heading).normalize_or_zero();
                 let p = smp.point + lateral * *offset;
                 wps.push(waypoint(p.x, p.z, 15.0));
@@ -870,7 +982,7 @@ fn capture_banked_oval() {
     let track_samples: Vec<serde_json::Value> = (0..=240)
         .map(|i| {
             let s = (len * i as f32 / 240.0).min(len);
-            let smp = track.sample_at(s);
+            let smp = lane.sample_at(s);
             serde_json::json!({
                 "s": s, "x": smp.point.x, "z": smp.point.z, "bank": smp.bank,
             })
