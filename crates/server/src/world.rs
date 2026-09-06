@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use dynamics_fmi::{Driver, FmuFrame, ResolvedBinding};
 use movement::{
-    CarLike, DesiredVelocity, FmuStore, FmuVehicle, FullVehicle, Holonomic, PhysicalYaw,
-    RaycastVehicle,
+    wheel_offset, CarLike, DesiredVelocity, FmuStore, FmuVehicle, FullVehicle, Holonomic,
+    PhysicalYaw, RaycastVehicle, Wheels,
 };
 use protocol::map::{LaneData, LaneDirection, LaneKind as WireLaneKind, MapData};
 use protocol::scenario::{ArenaConfig, Embodiment, SensorDef, SensorSource};
@@ -44,6 +44,15 @@ pub const CAR_MASS: f32 = 1300.0;
 /// constant, so the two cannot drift apart.
 pub fn car_ride_height() -> f32 {
     RaycastVehicle::default().rest_ride_height()
+}
+
+/// A car's chassis-centre height above the surface once *conformed* and settled
+/// onto its springs -- the full-extension [`car_ride_height`] less the static
+/// sag. Where [`conform_fmu_to_track`] rides a car; exposed for tests that pin
+/// the settled stance.
+pub fn conformed_ride_height() -> f32 {
+    let rig = RaycastVehicle::default();
+    rig.rest_ride_height() - static_sag(&rig)
 }
 
 /// The chassis's principal moments of inertia, as a uniform box of `CAR_MASS`.
@@ -109,43 +118,132 @@ pub struct MapWorld(pub Option<map::RoadNetwork>);
 #[derive(Resource, Default)]
 pub struct MapBanked(pub bool);
 
-/// Drapes every FMU vehicle onto the banked surface: samples the road under the
-/// car and overrides its height + orientation so it sits tilted on the canted
-/// road, and records the local bank for the FMU to respond to next tick.
+/// A four-wheel car draped onto the road by its wheels: where the chassis sits
+/// and how far each wheel's suspension is extended so every wheel meets the
+/// surface under it. Returned by [`wheel_drape`].
+pub struct WheelDrape {
+    /// Chassis-centre height (world Y).
+    pub chassis_y: f32,
+    /// Chassis up-axis: the mean of the surface normals under the wheels.
+    pub up: Vec3,
+    /// Per-wheel suspension compression (m), in `viz::WHEEL_NODES` order.
+    pub compression: [f32; 4],
+    /// Superelevation under the chassis centre, for the FMU bank input.
+    pub bank: f32,
+}
+
+/// A quarter of the car's weight compresses each spring this far at rest -- the
+/// static sag a real car settles into. Subtracted from the full-extension
+/// `rest_ride_height` so a draped car sits planted, not floating on full droop.
+fn static_sag(vehicle: &RaycastVehicle) -> f32 {
+    (CAR_MASS * 9.81 / 4.0) / vehicle.suspension_stiffness
+}
+
+/// Drape a four-wheel car onto `net`: from its planar position and heading,
+/// sample the road under each wheel's attach point and return the chassis height,
+/// the surface up-normal, and each wheel's compression so the wheels sit on the
+/// (possibly banked) surface. `None` if there is no road under the car.
+///
+/// Pure (no ECS), so the geometry is unit-tested directly. `conform_fmu_to_track`
+/// is the caller; a `RaycastVehicle` supplies only the wheel offsets + rig
+/// dimensions (an FMU car is drawn on the same rig), never its dynamics.
+pub fn wheel_drape(
+    net: &map::RoadNetwork,
+    pos: Vec3,
+    yaw: f32,
+    vehicle: &RaycastVehicle,
+) -> Option<WheelDrape> {
+    let yaw_rot = Quat::from_rotation_y(yaw);
+    // Sample the surface under each wheel's yaw-placed attach point. `on_road`
+    // marks the wheels that found a surface; a wheel hanging off the edge is not
+    // averaged into the chassis pose (its bogus y=0 would drag an elevated car
+    // down/askew) -- it just hangs at full droop.
+    let mut contact = [Vec3::ZERO; 4];
+    let mut on_road = [false; 4];
+    let mut normal_sum = Vec3::ZERO;
+    let mut sum_y = 0.0;
+    let mut found = 0u32;
+    for (i, c) in contact.iter_mut().enumerate() {
+        let off = yaw_rot * wheel_offset(i, vehicle);
+        let xz = Vec3::new(pos.x + off.x, 0.0, pos.z + off.z);
+        let Some(s) = net.sample_near(xz) else {
+            continue;
+        };
+        // Surface height under the wheel: the tangent plane through the sample.
+        let n = s.up;
+        let d = xz - s.point;
+        c.x = xz.x;
+        c.y = s.point.y - (n.x * d.x + n.z * d.z) / n.y;
+        c.z = xz.z;
+        on_road[i] = true;
+        normal_sum += n;
+        sum_y += c.y;
+        found += 1;
+    }
+    if found == 0 {
+        return None;
+    }
+    let up = normal_sum.normalize_or(Vec3::Y);
+    // The chassis rides a settled height above the mean of the wheels that are
+    // actually on the road.
+    let mean_y = sum_y / found as f32;
+    let chassis_y = mean_y + vehicle.rest_ride_height() - static_sag(vehicle);
+    let chassis = Transform {
+        translation: Vec3::new(pos.x, chassis_y, pos.z),
+        rotation: Quat::from_rotation_arc(Vec3::Y, up) * yaw_rot,
+        scale: Vec3::ONE,
+    };
+    // Extend each on-road wheel so its contact patch meets its own surface
+    // sample; a wheel off the road hangs at full droop (compression 0).
+    let mut compression = [0.0f32; 4];
+    for (i, comp) in compression.iter_mut().enumerate() {
+        if !on_road[i] {
+            continue;
+        }
+        let attach = chassis.transform_point(wheel_offset(i, vehicle));
+        let extension = (attach - contact[i]).dot(up) - vehicle.wheel_radius;
+        *comp = (vehicle.suspension_rest - extension).clamp(0.0, vehicle.suspension_rest);
+    }
+    let bank = net.sample_near(pos).map(|s| s.bank).unwrap_or(0.0);
+    Some(WheelDrape {
+        chassis_y,
+        up,
+        compression,
+        bank,
+    })
+}
+
+/// Drapes every FMU vehicle onto the road by its four wheels: samples the surface
+/// under each wheel and sets the chassis height + tilt so the body sits planted
+/// and each wheel meets the (possibly banked) surface under it, then records the
+/// local bank for the FMU to respond to next tick.
 ///
 /// Runs after `drive_fmu_vehicles` writes the flat pose and before Rapier's
 /// `SyncBackend` reads the kinematic target (see `app::build_app`), only on a
-/// superelevated map. The dominant visible cant is the road-surface tilt here;
-/// the FMU's own suspension roll (`ocd_roll`) rides on top and is left as a
-/// follow-up refinement.
+/// superelevated map. The FMU's own suspension roll (`ocd_roll`) rides on top and
+/// is left as a follow-up refinement.
 pub fn conform_fmu_to_track(
     map: Res<MapWorld>,
-    mut query: Query<(&mut Transform, &mut FmuVehicle)>,
+    mut query: Query<(&mut Transform, &mut FmuVehicle, &mut Wheels)>,
 ) {
     let Some(net) = map.0.as_ref() else {
         return;
     };
-    for (mut transform, mut vehicle) in &mut query {
-        let Some(sample) = net.sample_near(transform.translation) else {
+    let rig = RaycastVehicle::default();
+    for (mut transform, mut vehicle, mut wheels) in &mut query {
+        // Keep the OCD-driven planar pose (x, z, yaw); the drape owns height/tilt.
+        let (yaw, _pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);
+        let Some(drape) = wheel_drape(net, transform.translation, yaw, &rig) else {
             continue;
         };
-        // Keep the OCD-driven heading (yaw), sit on the surface, tilt the body's
-        // up-axis onto the road's surface normal -- the visible cant.
-        let (yaw, _pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);
-        // Height of the banked surface *under the car*, not at the centreline: a
-        // car driving a racing line rides laterally off-centre, where the bank
-        // lifts the road. The surface is locally the tangent plane through the
-        // centreline sample with normal `up`, so solve that plane at the car's
-        // own (x,z). Then add the chassis ride height (the same one spawn uses),
-        // so the body sits ON the road instead of buried in it.
-        let n = sample.up;
-        let d = transform.translation - sample.point;
-        let surface_y = sample.point.y - (n.x * d.x + n.z * d.z) / n.y;
-        transform.translation.y = surface_y + car_ride_height();
+        transform.translation.y = drape.chassis_y;
         transform.rotation =
-            Quat::from_rotation_arc(Vec3::Y, sample.up) * Quat::from_rotation_y(yaw);
+            Quat::from_rotation_arc(Vec3::Y, drape.up) * Quat::from_rotation_y(yaw);
+        for (wheel, compression) in wheels.0.iter_mut().zip(drape.compression) {
+            wheel.compression = compression;
+        }
         // Feed next tick's FMU bank input so OCD's own roll dynamics respond.
-        vehicle.road_bank = sample.bank;
+        vehicle.road_bank = drape.bank;
     }
 }
 
@@ -627,6 +725,12 @@ pub fn spawn_agent(
                         combine_rule: CoefficientCombineRule::Average,
                     },
                     FmuVehicle::new(Driver::default(), binding, frame, spawn_pos, spawn_yaw),
+                    // Per-wheel suspension state, written each tick by
+                    // `conform_fmu_to_track` so the wheels sit on the road (an FMU
+                    // car has no raycast suspension of its own). `Wheels` alone
+                    // does not trigger the raycast drive, which keys on
+                    // `RaycastVehicle`.
+                    Wheels::default(),
                 ))
             }
             // `scenario::validate_fmu` requires the config for this embodiment
@@ -658,6 +762,119 @@ pub fn free_despawned_fmus(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A single straight driving lane heading +X, with an optional constant bank.
+    fn straight(bank: Vec<f32>) -> map::RoadNetwork {
+        map::RoadNetwork {
+            lanes: vec![map::Lane {
+                id: map::LaneId(0),
+                kind: map::LaneKind::Driving,
+                direction: map::Direction::Forward,
+                center: map::Polyline::new(vec![
+                    Vec3::new(-50.0, 0.0, 0.0),
+                    Vec3::new(50.0, 0.0, 0.0),
+                ]),
+                width: 6.0,
+                bank,
+                successors: Vec::new(),
+                predecessors: Vec::new(),
+                neighbors: Vec::new(),
+            }],
+        }
+    }
+
+    /// Surface height (world Y) under `xz` on `net`, via the tangent plane -- the
+    /// same reading `wheel_drape` uses, for checking a wheel sits on the road.
+    fn surface_y(net: &map::RoadNetwork, xz: Vec3) -> f32 {
+        let s = net.sample_near(xz).expect("a lane under the point");
+        let n = s.up;
+        let d = xz - s.point;
+        s.point.y - (n.x * d.x + n.z * d.z) / n.y
+    }
+
+    /// World position of wheel `i`'s contact patch for a drape at planar `pos`.
+    fn wheel_bottom(net_pos: Vec3, drape: &WheelDrape, rig: &RaycastVehicle, i: usize) -> Vec3 {
+        let chassis = Transform {
+            translation: Vec3::new(net_pos.x, drape.chassis_y, net_pos.z),
+            rotation: Quat::from_rotation_arc(Vec3::Y, drape.up),
+            scale: Vec3::ONE,
+        };
+        let extension = rig.suspension_rest - drape.compression[i];
+        chassis.transform_point(wheel_offset(i, rig)) - drape.up * (extension + rig.wheel_radius)
+    }
+
+    #[test]
+    fn drape_on_a_flat_road_sits_planted_with_every_wheel_touching() {
+        let rig = RaycastVehicle::default();
+        let net = straight(Vec::new());
+        let pos = Vec3::new(0.0, 0.0, 0.0);
+        let drape = wheel_drape(&net, pos, 0.0, &rig).expect("road under the car");
+
+        // Level, and settled a static sag below full extension (not floating).
+        assert!(drape.up.abs_diff_eq(Vec3::Y, 1e-5), "up {:?}", drape.up);
+        let sag = static_sag(&rig);
+        assert!(
+            (drape.chassis_y - (rig.rest_ride_height() - sag)).abs() < 1e-4,
+            "chassis {} should settle to rest - sag",
+            drape.chassis_y
+        );
+        // Every wheel touches the surface (bottom at y = 0), at equal compression.
+        for i in 0..4 {
+            let b = wheel_bottom(pos, &drape, &rig, i);
+            assert!(
+                b.y.abs() < 1e-4,
+                "wheel {i} bottom at {} not on the road",
+                b.y
+            );
+            assert!(
+                (drape.compression[i] - sag).abs() < 1e-4,
+                "wheel {i} compression"
+            );
+        }
+    }
+
+    #[test]
+    fn drape_on_a_banked_road_tilts_the_car_and_keeps_the_wheels_on_the_surface() {
+        let rig = RaycastVehicle::default();
+        let net = straight(vec![0.15, 0.15]); // constant +0.15 rad cant
+        let pos = Vec3::new(0.0, 0.0, 0.0);
+        let drape = wheel_drape(&net, pos, 0.0, &rig).expect("road under the car");
+
+        // The car leans onto the cant.
+        assert!(drape.up.y < 0.999 && drape.up.y > 0.9, "up {:?}", drape.up);
+        assert!((drape.up - Vec3::Y).length() > 0.05, "up should tilt");
+        assert!((drape.bank - 0.15).abs() < 1e-3, "bank {}", drape.bank);
+
+        // Each wheel still sits on the surface under it, and the tilt puts the
+        // wheels at different heights (the car is canted, not level).
+        let mut ys = Vec::new();
+        for i in 0..4 {
+            let b = wheel_bottom(pos, &drape, &rig, i);
+            assert!(
+                (b.y - surface_y(&net, b)).abs() < 5e-3,
+                "wheel {i} bottom {} off the surface {}",
+                b.y,
+                surface_y(&net, b)
+            );
+            ys.push(b.y);
+        }
+        let (lo, hi) = (
+            ys.iter().copied().fold(f32::INFINITY, f32::min),
+            ys.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        );
+        assert!(
+            hi - lo > 0.3,
+            "the car did not tilt: wheel spread {}",
+            hi - lo
+        );
+    }
+
+    #[test]
+    fn drape_is_none_off_the_road() {
+        let rig = RaycastVehicle::default();
+        let empty = map::RoadNetwork::default();
+        assert!(wheel_drape(&empty, Vec3::ZERO, 0.0, &rig).is_none());
+    }
 
     #[test]
     fn a_lane_with_no_surface_is_not_spawnable() {

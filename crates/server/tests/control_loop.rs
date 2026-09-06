@@ -774,12 +774,14 @@ fn an_ocd_car_banks_on_the_canted_oval() {
         "car never banked (max tilt {max_tilt} rad) -- road-conform is not tilting it"
     );
     // The car rides the centreline here (surface at y=0), so conform must sit its
-    // chassis a ride height *above* the road, never buried in it. A regression
-    // that placed it at the bare surface height would sink it half underground.
-    let ride = server::world::car_ride_height();
+    // chassis a settled ride height *above* the road, never buried in it. A
+    // regression that placed it at the bare surface height would sink it half
+    // underground. The per-wheel drape settles the car onto its springs, so the
+    // reference is the conformed (settled) height, not full extension.
+    let ride = server::world::conformed_ride_height();
     assert!(
         min_y > ride - 0.05,
-        "car sank into the road (min y {min_y}, expected >= ride height {ride})"
+        "car sank into the road (min y {min_y}, expected >= settled height {ride})"
     );
 }
 
@@ -890,6 +892,89 @@ fn an_fmu_car_conforms_on_an_imported_banked_xodr() {
     assert!(
         min_y > -0.5,
         "car sank below the road on the imported map (min y {min_y}, ride {ride})"
+    );
+}
+
+#[test]
+fn an_fmu_car_rides_at_the_settled_height_on_the_imported_sweeper() {
+    // Independent test-pass check of the per-wheel conform's headline numeric
+    // behaviour on a *real imported* map: the FMU chassis must ride the *settled*
+    // height (rest_ride_height - static_sag) above the surface under it, not float
+    // at full extension. The retired single-point conform pinned the chassis at
+    // the full `car_ride_height`; option C settles it onto its springs, and the
+    // two differ by the static sag -- so the ride height distinguishes them.
+    let mut sim = Sim::new(banked_sweeper_fmu_scenario("ocd-car"));
+    assert!(
+        sim.app.world().resource::<server::world::MapBanked>().0,
+        "the imported banked sweeper must set MapBanked=true, else conform never runs"
+    );
+    let agent = sim.join("ocd-car");
+    sim.expect("the scenario to start", |sim| {
+        (sim.state() == ScenarioState::Running).then_some(())
+    });
+
+    // Lay a plan along the nearest forward lane, as the headline conform test does.
+    let net = map_opendrive::load_file(BANKED_SWEEPER_XODR).expect("the sweeper loads");
+    let start = sim.position_of("ocd-car");
+    let start_v = glam::Vec3::new(start.x, 0.0, start.z);
+    let lane = net
+        .driving_lanes()
+        .filter(|l| l.direction == map::Direction::Forward)
+        .min_by(|a, b| {
+            let da = (a.center.project(start_v).point - start_v).length_squared();
+            let db = (b.center.project(start_v).point - start_v).length_squared();
+            da.total_cmp(&db)
+        })
+        .expect("a forward lane");
+    let len = lane.center.length();
+    let n = 40u32;
+    let waypoints: Vec<_> = (1..=n)
+        .map(|i| {
+            let p = lane.sample_at(len * (i as f32) / (n as f32)).point;
+            waypoint(p.x, p.z, 8.0)
+        })
+        .collect();
+    agent.send(ClientMessage::SubmitPlan { waypoints });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("ocd-car") == 1).then_some(())
+    });
+
+    let conformed = server::world::conformed_ride_height();
+    let full = server::world::car_ride_height();
+
+    // Drive a short way; each tick, measure the chassis height above the surface
+    // directly under it (the same tangent-plane the conform samples). It must ride
+    // the settled height the whole time, whether on the flat entry or the arc --
+    // never the old full-extension float.
+    let mut readings = Vec::new();
+    for _ in 0..150 {
+        sim.step(1);
+        let pos = sim.position_of("ocd-car");
+        let pos_v = glam::Vec3::new(pos.x, 0.0, pos.z);
+        let sample = net.sample_near(pos_v).expect("surface under the car");
+        let nrm = sample.up;
+        let d = pos_v - sample.point;
+        let surf = sample.point.y - (nrm.x * d.x + nrm.z * d.z) / nrm.y;
+        readings.push(pos.y - surf);
+    }
+    let ride = readings.iter().copied().sum::<f32>() / readings.len() as f32;
+    let max_ride = readings.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    eprintln!(
+        "imported sweeper ride height: mean={ride} max={max_ride} settled={conformed} full={full}"
+    );
+
+    // The settled height is the reference, not the full-extension float.
+    assert!(
+        (ride - conformed).abs() < (ride - full).abs(),
+        "ride {ride} should sit at the settled height {conformed}, not the float {full}"
+    );
+    assert!(
+        max_ride < full - 0.02,
+        "car is floating at ~full extension (max ride {max_ride}, full {full}, settled {conformed})"
+    );
+    assert!(
+        (ride - conformed).abs() < 0.05,
+        "ride {ride} should be within a sag of the settled height {conformed}"
     );
 }
 

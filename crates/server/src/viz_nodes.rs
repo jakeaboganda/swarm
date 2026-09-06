@@ -77,9 +77,14 @@ pub fn wheel_nodes(vehicle: &RaycastVehicle, wheels: &Wheels) -> Vec<EntityNode>
 /// Where every *non-root* node of an entity is now. Empty for anything without
 /// wheels, which is everything but a car: its frame is then just its root.
 pub fn node_updates(vehicle: Option<&RaycastVehicle>, wheels: Option<&Wheels>) -> Vec<NodeUpdate> {
-    let (Some(vehicle), Some(wheels)) = (vehicle, wheels) else {
+    // Wheels are what a car has to pose; the vehicle only supplies the rig
+    // dimensions. An FMU car carries `Wheels` (posed by the road-conform) but no
+    // `RaycastVehicle`, so fall back to the default rig its wheels were baked on.
+    let Some(wheels) = wheels else {
         return Vec::new();
     };
+    let default_rig = RaycastVehicle::default();
+    let vehicle = vehicle.unwrap_or(&default_rig);
     viz::WHEEL_NODES
         .iter()
         .enumerate()
