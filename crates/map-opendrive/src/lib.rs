@@ -1304,6 +1304,52 @@ mod tests {
         }
     }
 
+    // End-to-end: importing a banked `.xodr` and calling `sample_near` on the
+    // imported network yields a sane RoadSample -- correct bank, a unit up-normal
+    // that points up and carries lateral cant only (up.heading == 0) -- on both
+    // the straight and the arc portion of the banked road.
+    #[test]
+    fn sample_near_on_an_imported_banked_road_is_sane() {
+        let net = load_str(SUPERELEV_ARC).expect("import");
+        let left = net
+            .lanes
+            .iter()
+            .find(|l| l.direction == Direction::Backward)
+            .expect("a left lane");
+
+        // Query at points sitting on the left lane's own centerline: s=20 (the
+        // straight) and s=60 (well into the arc). sample_near must land back on
+        // that lane and report its ~0.15 rad bank.
+        for &s in &[20.0_f32, 60.0] {
+            let on_lane = left.center.point_at(s);
+            let rs = net.sample_near(on_lane).expect("a sample near the road");
+            assert!(rs.point.is_finite(), "sample point not finite @ s={s}");
+            assert!(
+                (rs.bank.abs() - 0.15).abs() < 1e-2,
+                "bank @ s={s} = {} (want |0.15|)",
+                rs.bank
+            );
+            // Unit up-normal, pointing up, lateral cant only.
+            assert!(
+                (rs.up.length() - 1.0).abs() < 1e-4,
+                "up not unit @ s={s}: {:?}",
+                rs.up
+            );
+            assert!(rs.up.y > 0.9, "up.y too low @ s={s}: {}", rs.up.y);
+            assert!(
+                rs.up.dot(rs.heading).abs() < 1e-5,
+                "up.heading @ s={s} = {}",
+                rs.up.dot(rs.heading)
+            );
+            // The sample landed close to where we queried (same lane).
+            assert!(
+                (rs.point - on_lane).length() < 0.5,
+                "sample drifted from the query @ s={s}: {:?} vs {on_lane:?}",
+                rs.point
+            );
+        }
+    }
+
     // Superelevation composed with an elevation grade: the road climbs at 4% AND
     // banks at 0.1 rad. A lane's height must be grade(s) + t*sin(phi) -- the two
     // add, neither clobbers the other.
