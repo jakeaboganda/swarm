@@ -117,3 +117,54 @@ fn the_car_drives_the_whole_test_track_without_leaving_it() {
          max roll {max_roll:.1} deg, {airborne_ticks} ticks with a wheel off the ground"
     );
 }
+
+/// The car actually leans on the newly-banked track. Before superelevation the
+/// track was flat and the raycast vehicle rode level; now it rolls into the
+/// curves. This is the end-to-end confirmation that the baked cant reaches the
+/// physics, not just the geometry model -- reusing the drive above, but
+/// asserting on roll rather than only reporting it.
+#[test]
+fn the_car_leans_on_the_banked_track() {
+    let (mut sim, agent, net) = car_on_the_track();
+    let here = sim.position_of("car");
+    let (lane_id, projection) = net.nearest_lane(here).expect("a lane under the car");
+    let lane = net.lane(lane_id).expect("the lane it just reported");
+    let length = lane.center.length();
+
+    let finish = length - 20.0;
+    let mut waypoints = Vec::new();
+    let mut s = projection.s;
+    while s < finish {
+        s += SPACING;
+        let point = lane.center.point_at(s.min(finish));
+        waypoints.push(Waypoint {
+            position: protocol::Vec3::new(point.x, point.y, point.z),
+            speed: 12.0,
+        });
+    }
+    agent.send(ClientMessage::SubmitPlan { waypoints });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("car") == 1).then_some(())
+    });
+
+    let mut max_roll = 0.0f32;
+    for _ in 0..20_000 {
+        sim.step_quiet(1);
+        if sim.entity_of("car").is_none() {
+            break;
+        }
+        let transform: Transform = sim.component("car");
+        max_roll = max_roll.max(transform.right().y.asin().to_degrees().abs());
+        if sim.plan_waypoints("car").is_empty() {
+            break;
+        }
+    }
+
+    // The deepest curve is banked ~0.20 rad (~11.3 deg); the car leans with it.
+    // A wide margin below that keeps this off the flake line -- the point is that
+    // it is no longer riding flat, not the exact lean angle.
+    assert!(
+        max_roll > 5.0,
+        "the car barely leaned on the banked track: max roll {max_roll:.1} deg"
+    );
+}
