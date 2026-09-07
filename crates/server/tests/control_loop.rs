@@ -748,18 +748,25 @@ fn an_ocd_car_banks_on_the_canted_oval() {
             * BevyVec3::Y;
         up.angle_between(BevyVec3::Y)
     };
+    // The per-wheel drape follows the *local* banked surface (which dips below
+    // the centreline on the cant), so absolute chassis height varies; the
+    // invariant is the clearance ABOVE the road under the car. Sample the same
+    // mesh the drape uses.
+    let mesh = map::banked_oval().surface_mesh();
     let mut max_tilt = 0f32;
-    let mut min_y = f32::INFINITY;
+    let mut min_clearance = f32::INFINITY;
     for _ in 0..600 {
         sim.step(1);
         let tf = sim.component::<bevy::prelude::Transform>("ocd-car");
         let up = tf.rotation * BevyVec3::Y;
         max_tilt = max_tilt.max(up.angle_between(BevyVec3::Y));
-        min_y = min_y.min(tf.translation.y);
+        if let Some((surf, _)) = mesh.height_at(tf.translation.x, tf.translation.z) {
+            min_clearance = min_clearance.min(tf.translation.y - surf);
+        }
     }
     let moved = (sim.position_of("ocd-car") - start).length();
     eprintln!(
-        "banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad min_y={min_y}"
+        "banked drive: level_tilt={level} moved={moved} max_tilt={max_tilt} rad min_clearance={min_clearance}"
     );
 
     assert!(
@@ -773,15 +780,93 @@ fn an_ocd_car_banks_on_the_canted_oval() {
         max_tilt > 0.08,
         "car never banked (max tilt {max_tilt} rad) -- road-conform is not tilting it"
     );
-    // The car rides the centreline here (surface at y=0), so conform must sit its
-    // chassis a settled ride height *above* the road, never buried in it. A
-    // regression that placed it at the bare surface height would sink it half
-    // underground. The per-wheel drape settles the car onto its springs, so the
-    // reference is the conformed (settled) height, not full extension.
+    // ...but not *twice* the bank: the FMU's own roll/pitch ride on top of the
+    // road tilt, and the FMU is fed the bank as an input. If its roll output were
+    // absolute (already containing the bank) rather than road-relative suspension
+    // lean, the composition would double-count and the car would lean ~2x the
+    // ~0.21 rad cant. This guards a future FMU swap against that.
+    assert!(
+        max_tilt < 0.31,
+        "car leans {max_tilt} rad, ~2x the road bank -- FMU roll is double-counting the cant"
+    );
+    // The chassis must ride ~the settled height above the road under it, never
+    // buried. A regression that placed it at the bare surface would drop the
+    // clearance toward 0.
     let ride = server::world::conformed_ride_height();
     assert!(
-        min_y > ride - 0.05,
-        "car sank into the road (min y {min_y}, expected >= settled height {ride})"
+        (min_clearance - ride).abs() < 0.12,
+        "clearance above the road ({min_clearance}) should stay near the settled height {ride}"
+    );
+}
+
+// Independent test pass (float-fix follow-up): the FMU wheels now spin by the
+// distance travelled, and the conform wraps that accumulator with `rem_euclid(TAU)`
+// so it can't grow unbounded over a long run. This drives the REAL sim and reads
+// the real `Wheels` component to pin the wrap end-to-end (not just the formula),
+// and confirms the wheels actually turn.
+#[test]
+fn fmu_wheel_spin_wraps_and_stays_bounded_over_a_long_drive() {
+    use std::f32::consts::TAU;
+
+    let mut sim = Sim::new(banked_ocd_scenario("ocd-car"));
+    let agent = sim.join("ocd-car");
+    sim.expect("the scenario to start", |sim| {
+        (sim.state() == ScenarioState::Running).then_some(())
+    });
+
+    // Route several laps of the oval so the wheels turn through many revolutions.
+    let net = map::banked_oval();
+    let lane = net.driving_lanes().next().expect("the oval has a lane");
+    let len = lane.center.length();
+    let n = 32u32;
+    let waypoints: Vec<_> = (1..=n)
+        .map(|i| {
+            let p = lane.sample_at(len * (i as f32) / (n as f32)).point;
+            waypoint(p.x, p.z, 16.0)
+        })
+        .collect();
+    agent.send(ClientMessage::SubmitPlan { waypoints });
+    sim.expect("the plan to land", |sim| {
+        (sim.plan_version("ocd-car") == 1).then_some(())
+    });
+
+    let start = sim.position_of("ocd-car");
+    let mut wrapped = false;
+    let mut moved_any = false;
+    let mut prev = [0.0f32; 4];
+    // ~9 s of sim (the sibling banked test covers ~85 m in this many ticks): at
+    // a 0.32 m radius that is ~265 rad, so ~42 revolutions -- the accumulator
+    // wraps dozens of times.
+    for t in 0..600 {
+        sim.step(1);
+        let wheels = sim.component::<movement::Wheels>("ocd-car");
+        for (i, w) in wheels.0.iter().enumerate() {
+            assert!(
+                (0.0..TAU).contains(&w.angle),
+                "tick {t} wheel {i}: spin angle {} escaped [0, TAU)",
+                w.angle
+            );
+            assert!(w.angle.is_finite(), "tick {t} wheel {i}: angle non-finite");
+            // A drop while driving forward means the accumulator crossed TAU and
+            // wrapped -- proof the wrap path is actually exercised.
+            if w.angle + 0.5 < prev[i] {
+                wrapped = true;
+            }
+            if (w.angle - prev[i]).abs() > 1e-6 {
+                moved_any = true;
+            }
+            prev[i] = w.angle;
+        }
+    }
+    let moved = (sim.position_of("ocd-car") - start).length();
+    assert!(
+        moved > 50.0,
+        "car barely moved ({moved} m) -- not a real drive"
+    );
+    assert!(moved_any, "the wheels never turned");
+    assert!(
+        wrapped,
+        "the spin angle never wrapped -- either it isn't accumulating or the wrap is untested"
     );
 }
 

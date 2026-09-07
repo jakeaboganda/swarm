@@ -100,6 +100,9 @@ pub fn build_app(config: SimConfig) -> App {
     let map_banked = map_world
         .as_ref()
         .is_some_and(|net| net.lanes.iter().any(|l| !l.bank.is_empty()));
+    // The baked road surface, for the per-wheel FMU drape (sampled every tick).
+    // Built once here rather than re-tessellated per tick.
+    let road_mesh = map_world.as_ref().map(|net| net.surface_mesh());
     let pending_roster = PendingRoster(scenario.roster.iter().map(|s| s.name.clone()).collect());
     let arena_bounds = ArenaBounds {
         half_width: scenario.arena.width / 2.0,
@@ -137,6 +140,7 @@ pub fn build_app(config: SimConfig) -> App {
         .insert_resource(arena_bounds)
         .insert_resource(world::MapWorld(map_world))
         .insert_resource(world::MapBanked(map_banked))
+        .insert_resource(world::RoadMesh(road_mesh))
         .insert_resource(pending_roster)
         .insert_resource(AgentRegistry::default())
         .insert_resource(AwaitingReconnect::default())

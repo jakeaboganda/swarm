@@ -15,7 +15,7 @@
 //! Test-only file (added by the test pass); no non-test code is touched.
 
 use glam::Vec3;
-use map::{Direction, Lane, LaneId, LaneKind, Polyline, RoadNetwork};
+use map::{Direction, Lane, LaneId, LaneKind, Mesh, Polyline, RoadNetwork};
 use movement::{wheel_offset, RaycastVehicle};
 use server::world::{car_ride_height, conformed_ride_height, wheel_drape, WheelDrape, CAR_MASS};
 
@@ -93,7 +93,8 @@ fn flat_drape_sits_at_the_conformed_height_with_every_wheel_on_the_surface() {
     let rig = RaycastVehicle::default();
     let net = straight(Vec::new());
     let pos = Vec3::ZERO;
-    let drape = wheel_drape(&net, pos, yaw_for(Vec3::X), &rig).expect("road under the car");
+    let drape = wheel_drape(&net.surface_mesh(), &net, pos, yaw_for(Vec3::X), &rig)
+        .expect("road under the car");
 
     assert!(drape.up.abs_diff_eq(Vec3::Y, 1e-5), "up {:?}", drape.up);
     // Surface is at y=0 here, so the chassis rides exactly the settled height.
@@ -159,7 +160,8 @@ fn elevated_banked_drape_tracks_the_grade_and_cants_the_car() {
     let pos = Vec3::new(s.point.x, 0.0, s.point.z);
     let yaw = yaw_for(s.heading);
 
-    let drape = wheel_drape(&net, pos, yaw, &rig).expect("road under the elevated car");
+    let drape = wheel_drape(&net.surface_mesh(), &net, pos, yaw, &rig)
+        .expect("road under the elevated car");
 
     // The station is genuinely elevated (~2.5 m of climb at mid-road); the
     // chassis must ride the *local* surface, not be pinned near zero.
@@ -215,7 +217,14 @@ fn flat_is_level_and_equal_while_a_bank_tilts_the_wheels_apart() {
 
     // Flat: all four wheels at the same world height, equal compression.
     let flat = straight(Vec::new());
-    let fd = wheel_drape(&flat, Vec3::ZERO, yaw_for(Vec3::X), &rig).expect("flat road");
+    let fd = wheel_drape(
+        &flat.surface_mesh(),
+        &flat,
+        Vec3::ZERO,
+        yaw_for(Vec3::X),
+        &rig,
+    )
+    .expect("flat road");
     let f_ys: Vec<f32> = (0..4)
         .map(|i| wheel_bottom(Vec3::ZERO, yaw_for(Vec3::X), &fd, &rig, i).y)
         .collect();
@@ -235,7 +244,14 @@ fn flat_is_level_and_equal_while_a_bank_tilts_the_wheels_apart() {
     // Bank: the body tilts, so the wheels sit at clearly different world heights,
     // each still on the surface under it.
     let banked = straight(vec![0.15, 0.15]);
-    let bd = wheel_drape(&banked, Vec3::ZERO, yaw_for(Vec3::X), &rig).expect("banked road");
+    let bd = wheel_drape(
+        &banked.surface_mesh(),
+        &banked,
+        Vec3::ZERO,
+        yaw_for(Vec3::X),
+        &rig,
+    )
+    .expect("banked road");
     let b_ys: Vec<f32> = (0..4)
         .map(|i| {
             let b = wheel_bottom(Vec3::ZERO, yaw_for(Vec3::X), &bd, &rig, i);
@@ -263,18 +279,38 @@ fn flat_is_level_and_equal_while_a_bank_tilts_the_wheels_apart() {
 #[test]
 fn empty_network_drapes_to_none() {
     let rig = RaycastVehicle::default();
-    assert!(wheel_drape(&RoadNetwork::default(), Vec3::ZERO, 0.0, &rig).is_none());
+    assert!(wheel_drape(
+        &Mesh::default(),
+        &RoadNetwork::default(),
+        Vec3::ZERO,
+        0.0,
+        &rig
+    )
+    .is_none());
 }
 
 #[test]
-fn a_car_off_to_the_side_still_drapes_finitely() {
+fn a_car_off_the_road_gets_no_drape_and_one_on_it_is_finite() {
     let rig = RaycastVehicle::default();
-    // Lane runs along X through z=0, width 6; put the car far off to the side.
+    // Lane runs along X through z=0, width 6 (edges at z=±3).
     let net = straight(vec![0.1, 0.1]);
-    let pos = Vec3::new(0.0, 0.0, 40.0);
-    let drape = wheel_drape(&net, pos, yaw_for(Vec3::X), &rig)
-        .expect("sample_near finds the nearest lane even off to the side");
+    let mesh = net.surface_mesh();
 
+    // Far off to the side there is no surface under the wheels: no drape (the
+    // car keeps its own pose; despawn-off-road handles it). Sampling the actual
+    // mesh, not the nearest lane, is what makes this None rather than a bogus
+    // extrapolated drape.
+    assert!(wheel_drape(
+        &mesh,
+        &net,
+        Vec3::new(0.0, 0.0, 40.0),
+        yaw_for(Vec3::X),
+        &rig
+    )
+    .is_none());
+
+    // On the road it drapes finitely: unit up, finite height, compressions in range.
+    let drape = wheel_drape(&mesh, &net, Vec3::ZERO, yaw_for(Vec3::X), &rig).expect("on the road");
     assert!(drape.chassis_y.is_finite(), "chassis_y not finite");
     assert!(
         drape.up.is_finite() && (drape.up.length() - 1.0).abs() < 1e-4,

@@ -55,6 +55,46 @@ impl Mesh {
         }
         Ok(())
     }
+
+    /// The surface height (world Y) and up-normal directly under `(x, z)`, by a
+    /// vertical ray against the triangles. `None` if no triangle covers the point
+    /// (off the road). Where triangles overlap (a bridge over a road) it returns
+    /// the highest -- the surface you would be standing on.
+    ///
+    /// This is the *actual* baked surface, faceted between vertices -- what the
+    /// collider and viewer use. A body draped against it sits on the road that is
+    /// drawn, not on the smooth curve the polyline only approximates. O(triangles)
+    /// per query; fine for the handful of analytically-draped bodies, not a
+    /// per-tick whole-fleet query on a city map.
+    pub fn height_at(&self, x: f32, z: f32) -> Option<(f32, Vec3)> {
+        let mut best: Option<(f32, Vec3)> = None;
+        for tri in self.indices.chunks_exact(3) {
+            let a = self.vertices[tri[0] as usize];
+            let b = self.vertices[tri[1] as usize];
+            let c = self.vertices[tri[2] as usize];
+            // Barycentric coords of (x,z) in the triangle's XZ projection.
+            let det = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+            if det.abs() < 1e-9 {
+                continue; // edge-on triangle: no XZ footprint
+            }
+            let l1 = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / det;
+            let l2 = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / det;
+            let l3 = 1.0 - l1 - l2;
+            if l1 < -1e-4 || l2 < -1e-4 || l3 < -1e-4 {
+                continue; // outside this triangle
+            }
+            let y = l1 * a.y + l2 * b.y + l3 * c.y;
+            if best.is_some_and(|(by, _)| y <= by) {
+                continue;
+            }
+            let mut n = (b - a).cross(c - a).normalize_or(Vec3::Y);
+            if n.y < 0.0 {
+                n = -n; // face up regardless of winding
+            }
+            best = Some((y, n));
+        }
+        best
+    }
 }
 
 impl RoadNetwork {
@@ -331,6 +371,61 @@ mod tests {
                 "vertex {i} (s={s}): mesh normal {mesh_up:?} != sample_at up {sampled_up:?}"
             );
         }
+    }
+
+    #[test]
+    fn height_at_reads_the_surface_under_a_point() {
+        // One flat 4 m-wide lane heading +X, from x=0 to x=10 at y=0.
+        let net = RoadNetwork {
+            lanes: vec![Lane {
+                id: LaneId(0),
+                kind: LaneKind::Driving,
+                direction: Direction::Forward,
+                center: Polyline::new(vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)]),
+                width: 4.0,
+                bank: Vec::new(),
+                successors: Vec::new(),
+                predecessors: Vec::new(),
+                neighbors: Vec::new(),
+            }],
+        };
+        let mesh = net.surface_mesh();
+        // On the lane: y = 0, normal up.
+        let (y, n) = mesh.height_at(5.0, 1.0).expect("on the lane");
+        assert!(y.abs() < 1e-5, "y {y}");
+        assert!(n.abs_diff_eq(Vec3::Y, 1e-5), "n {n:?}");
+        // Off the lane (beyond the half-width): nothing under the point.
+        assert!(mesh.height_at(5.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn height_at_follows_a_banked_cross_section() {
+        // A banked lane: the surface height varies across the width, and the
+        // normal tilts -- height_at reports the faceted surface, not a plane.
+        let net = RoadNetwork {
+            lanes: vec![Lane {
+                id: LaneId(0),
+                kind: LaneKind::Driving,
+                direction: Direction::Forward,
+                center: Polyline::new(vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)]),
+                width: 6.0,
+                bank: vec![0.2, 0.2],
+                successors: Vec::new(),
+                predecessors: Vec::new(),
+                neighbors: Vec::new(),
+            }],
+        };
+        let mesh = net.surface_mesh();
+        // +z is to the right of +X travel (negative offset); the left (+bank)
+        // edge is toward -z and rides higher.
+        let (left, _) = mesh.height_at(5.0, -2.0).expect("left of centre");
+        let (right, _) = mesh.height_at(5.0, 2.0).expect("right of centre");
+        assert!(
+            left > right + 0.3,
+            "left {left} should ride above right {right}"
+        );
+        let (_, n) = mesh.height_at(5.0, 0.0).expect("centre");
+        assert!(n.y < 0.999 && n.y > 0.9, "normal should tilt: {n:?}");
     }
 
     #[test]
