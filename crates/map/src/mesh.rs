@@ -61,17 +61,19 @@ impl Mesh {
     /// (off the road). Where triangles overlap (a bridge over a road) it returns
     /// the highest -- the surface you would be standing on.
     ///
-    /// This is the *actual* baked surface, faceted between vertices -- what the
-    /// collider and viewer use. A body draped against it sits on the road that is
-    /// drawn, not on the smooth curve the polyline only approximates. O(triangles)
+    /// Height is the *actual* baked surface, faceted between vertices -- what the
+    /// collider and viewer use, so a body draped against it sits on the road that
+    /// is drawn. The normal, though, is barycentric-interpolated from the smooth
+    /// per-vertex normals, not the flat triangle normal: a body oriented to the
+    /// flat normal snaps as each wheel crosses a facet edge (visible attitude
+    /// vibration), while the interpolated normal varies continuously. O(triangles)
     /// per query; fine for the handful of analytically-draped bodies, not a
     /// per-tick whole-fleet query on a city map.
     pub fn height_at(&self, x: f32, z: f32) -> Option<(f32, Vec3)> {
         let mut best: Option<(f32, Vec3)> = None;
         for tri in self.indices.chunks_exact(3) {
-            let a = self.vertices[tri[0] as usize];
-            let b = self.vertices[tri[1] as usize];
-            let c = self.vertices[tri[2] as usize];
+            let (ia, ib, ic) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            let (a, b, c) = (self.vertices[ia], self.vertices[ib], self.vertices[ic]);
             // Barycentric coords of (x,z) in the triangle's XZ projection.
             let det = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
             if det.abs() < 1e-9 {
@@ -87,10 +89,16 @@ impl Mesh {
             if best.is_some_and(|(by, _)| y <= by) {
                 continue;
             }
-            let mut n = (b - a).cross(c - a).normalize_or(Vec3::Y);
-            if n.y < 0.0 {
-                n = -n; // face up regardless of winding
-            }
+            // Smooth (interpolated vertex) normal, so a draped body doesn't snap
+            // at facet edges. Fall back to the flat normal if this mesh carries no
+            // per-vertex normals.
+            let n = if self.normals.len() == self.vertices.len() {
+                (l1 * self.normals[ia] + l2 * self.normals[ib] + l3 * self.normals[ic])
+                    .normalize_or(Vec3::Y)
+            } else {
+                (b - a).cross(c - a).normalize_or(Vec3::Y)
+            };
+            let n = if n.y < 0.0 { -n } else { n }; // face up regardless of winding
             best = Some((y, n));
         }
         best
@@ -396,6 +404,36 @@ mod tests {
         assert!(n.abs_diff_eq(Vec3::Y, 1e-5), "n {n:?}");
         // Off the lane (beyond the half-width): nothing under the point.
         assert!(mesh.height_at(5.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn height_at_normal_is_continuous_across_facets() {
+        // The banked oval's curves are faceted (a polyline of segments). A body
+        // oriented to the flat per-triangle normal snaps as it crosses each facet
+        // edge -- visible attitude vibration. height_at interpolates the smooth
+        // vertex normals, so the normal must vary continuously as the sample point
+        // walks across facet boundaries, not jump.
+        let mesh = crate::banked_oval().surface_mesh();
+        // Walk a fine line along a banked curve (the right curve: centre x=+35).
+        let (mut prev, mut worst) = (None, 0.0f32);
+        let mut s = 0.0;
+        while s < std::f32::consts::PI {
+            let x = 35.0 + 26.0 * s.cos();
+            let z = 26.0 * s.sin();
+            if let Some((_, n)) = mesh.height_at(x, z) {
+                if let Some(p) = prev {
+                    worst = worst.max((n as Vec3).angle_between(p).to_degrees());
+                }
+                prev = Some(n);
+            }
+            s += 0.02; // ~0.5 m steps, several per 2.5 m facet
+        }
+        // Interpolated normals drift by a fraction of a degree per step; the flat
+        // per-facet normal would jump several degrees at each edge.
+        assert!(
+            worst < 1.5,
+            "normal jumps {worst:.2} deg across a facet -- not interpolated?"
+        );
     }
 
     #[test]

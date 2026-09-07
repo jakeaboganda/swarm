@@ -145,23 +145,32 @@ fn the_returned_normal_is_a_unit_up_vector_for_both_windings() {
 }
 
 #[test]
-fn a_tilted_surface_returns_a_unit_up_normal_for_both_windings() {
-    // A surface tilted about the X axis: normal must be unit and lean, still +Y.
+fn a_tilted_surface_returns_its_interpolated_leaning_normal_for_both_windings() {
+    // height_at returns the mesh's own (interpolated) vertex normals, not a flat
+    // per-facet normal -- so a body draped on it doesn't snap at facet edges. A
+    // surface tilted about the X axis carries a leaning up-normal at every vertex;
+    // the query must return that lean, unit and upward, whichever way it is wound.
+    let vertices = vec![
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(2.0, 1.0, 2.0),
+        Vec3::new(0.0, 1.0, 2.0),
+    ];
+    // The surface's true up-normal (perpendicular to the plane, pointing up).
+    let up = (vertices[1] - vertices[0])
+        .cross(vertices[3] - vertices[0])
+        .normalize();
+    let up = if up.y < 0.0 { -up } else { up };
+    assert!(up.y < 0.999, "the test surface should actually tilt");
     for flip in [false, true] {
-        let vertices = vec![
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(2.0, 0.0, 0.0),
-            Vec3::new(2.0, 1.0, 2.0),
-            Vec3::new(0.0, 1.0, 2.0),
-        ];
         let indices = if flip {
             vec![0, 2, 1, 0, 3, 2]
         } else {
             vec![0, 1, 2, 0, 2, 3]
         };
         let mesh = Mesh {
-            vertices,
-            normals: vec![Vec3::Y; 4],
+            vertices: vertices.clone(),
+            normals: vec![up; 4],
             indices,
         };
         let (_, n) = mesh.height_at(1.0, 1.0).expect("on the tilted surface");
@@ -170,6 +179,9 @@ fn a_tilted_surface_returns_a_unit_up_normal_for_both_windings() {
             "tilted normal {n:?} not unit (flip={flip})"
         );
         assert!(n.y > 0.0, "tilted normal {n:?} must point up (flip={flip})");
-        assert!(n.y < 0.999, "tilted normal {n:?} should lean (flip={flip})");
+        assert!(
+            n.abs_diff_eq(up, 1e-5),
+            "should return the interpolated vertex normal {up:?}, got {n:?} (flip={flip})"
+        );
     }
 }
