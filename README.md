@@ -56,12 +56,14 @@ A scenario's `map` field selects which world it builds:
 
 - **Arena** (no `map`) — a flat, walled box. Vehicles move on the ground; the
   arena's size and walls come from the scenario.
-- **Road** (`"map": ...`) — a real road network: a graded, curved 3D road with
-  lanes. The road is either the built-in hand-authored `"demo"` road or a real
-  **OpenDRIVE** (`.xodr`) file baked into the same internal road model at load
-  (`"map": "maps/e6mini.xodr"`). Vehicles drive it as a `RaycastVehicle`: four
-  ray-cast wheels on spring-damper suspension, with real roll and pitch on the
-  terrain. In a road world the agent is **handed the map at join** (lane
+- **Road** (`"map": ...`) — a real road network: a graded, curved, and
+  optionally **banked** 3D road with lanes. The road is either the built-in
+  hand-authored `"demo"` road or a real **OpenDRIVE** (`.xodr`) file baked into
+  the same internal road model at load (`"map": "maps/e6mini.xodr"`). Vehicles
+  drive it as a `RaycastVehicle`: four ray-cast wheels on spring-damper
+  suspension, with real roll and pitch on the terrain — so on a super-elevated
+  curve it leans into the cant. In a road world the agent is **handed the map at
+  join** (lane
   centerlines plus a connectivity graph), so it can lay a lane-following path,
   or ask the server to **route** it from one point to another, across junctions
   and lane changes.
@@ -114,6 +116,9 @@ scripts/run.sh scenario_swarm.json clients/python/swarm_avoidance.py
 
 # Drive a lane on the 3D road (through a 90-degree curve, up a 4% grade)
 scripts/run.sh scenario_road_car.json clients/python/drive_road_demo.py
+
+# Lap a super-elevated oval: an FMU-driven car leans into the banked curves
+scripts/run.sh scenario_banked_oval.json clients/python/banked_oval_demo.py
 
 # Brake for a *perceived* obstacle: the car sees a barrier on radar and stops
 scripts/run.sh scenario_road_obstacle.json clients/python/brake_road_demo.py
@@ -244,7 +249,7 @@ Test-Driven Development.
 
 ## What's in the box
 
-**Movement** ships four embodiments, selected per agent via the roster's
+**Movement** ships five embodiments, selected per agent via the roster's
 `embodiment` field:
 
 - `Holonomic` — moves freely in any direction (a puck/drone).
@@ -255,6 +260,12 @@ Test-Driven Development.
   spring-damper suspension and tire grip, roll and pitch as real physics, so it
   follows the terrain (grade, banking). `scenario_carlike.json`,
   `scenario_bicycle.json`, and the `scenario_road_*.json` files run these.
+- `FmuVehicle` — a vehicle whose dynamics come from an external **FMU**
+  (Functional Mock-up Unit) co-simulation stepped each tick, instead of a
+  built-in model; the roster slot binds its inputs/outputs (see `AgentSlot.fmu`).
+  The server drapes it onto the road by its four wheels — each seated on the
+  (possibly banked) surface, the body tilted onto the cant — and feeds the local
+  bank back into the FMU. `scenario_banked_oval.json` runs one on a banked oval.
 
 **Perception** ships both ground-truth readings *and* **simulated perception**:
 the world equips an agent with named devices (`AgentSlot.sensors`), each either
@@ -270,10 +281,13 @@ envelope).
 The built-in `demo` road is hand-authored; the `map-opendrive` crate is a pure-
 Rust **OpenDRIVE importer** that bakes a real `.xodr` file into that same model
 at load: line / arc / spiral / paramPoly3 / poly3 geometry, elevation,
-per-lane widths, lane offsets, and multiple lane sections. Its geometry is
-cross-checked against the reference C++ [libOpenDRIVE](https://github.com/pageldev/libOpenDRIVE).
+**superelevation** (banked curves), per-lane widths, lane offsets, and multiple
+lane sections. Superelevation is baked as a real cant — the surface tilts about
+the reference line through the curve, so an outer lane rides higher and a vehicle
+leans into the bank — not just painted on. Its geometry is cross-checked against
+the reference C++ [libOpenDRIVE](https://github.com/pageldev/libOpenDRIVE).
 `scenario_road_real.json` drives a real esmini highway; `scenario_road_town.json`
-loads CARLA's Town07.
+loads CARLA's Town07; `scenario_banked_oval.json` laps a super-elevated oval.
 
 **Routing** turns the road network into "drive from A to B". The importer
 resolves road/lane links and junction connections into a **connectivity graph**
