@@ -2,16 +2,16 @@
 
 [![gate](https://github.com/jakeaboganda/swarm/actions/workflows/gate.yml/badge.svg)](https://github.com/jakeaboganda/swarm/actions/workflows/gate.yml)
 
-A playground for agentic driving: a small 3D physics world that external
+A playground for agentic driving. A small 3D physics world that external
 agent processes connect to and drive vehicles around, in a bounded arena or
-on real road networks. Built in Rust with [Bevy](https://bevyengine.org) (ECS)
-and [Rapier](https://rapier.rs) (physics). The **simulation runs headless** and
-streams the world to separate **viewer** processes, so you can watch it in a
-3D window, run it on a server with no display, or attach several viewers at
-once.
+on real road networks. Built in Rust with [Bevy](https://bevyengine.org)
+(ECS) and [Rapier](https://rapier.rs) (physics). The **simulation runs
+headless** and streams the world to separate **viewer** processes, so you
+can watch it in a 3D window, run it on a server with no display, or attach
+several viewers at once.
 
-It's an evolving sandbox for experimenting with how independent agents, scripted or
-LLM-driven (soon), behave in a shared physical space. Not a finished product.
+A sandbox for how independent agents, scripted or LLM-driven (soon), behave
+in a shared physical space. Not a finished product.
 
 A swarm fleet example:
 
@@ -21,59 +21,60 @@ A swarm fleet example:
 
 An agent controls its vehicle through two layers:
 
-- **Plan** (slow, deliberative) — a path of waypoints, each with a target
+- **Plan** (slow, deliberative). A path of waypoints, each with a target
   speed. "Drive here, then here." The server steers the vehicle along it.
-- **Reflexes** (fast, reactive) — declarative rules like *"if
+- **Reflexes** (fast, reactive). Declarative rules like *"if
   time-to-collision < 2s, brake"*, evaluated on the server every physics
-  tick. They override the plan the instant they fire, so a vehicle reacts in
-  one tick regardless of how slow its controlling agent is to think. A rule
-  reads a named **sensor device**: either perfect `ground_truth` or a
-  scenario-equipped **simulated** device (limited range/FOV, noise, latency).
-  So an agent can react to *what it actually perceives*, not the truth.
+  tick. They override the plan the instant they fire, so a vehicle reacts
+  in one tick regardless of how slow its controlling agent is to think. A
+  rule reads a named **sensor device**, either perfect `ground_truth` or a
+  scenario-equipped **simulated** device (limited range/FOV, noise,
+  latency), so an agent can react to *what it actually perceives*, not the
+  truth.
 
-This split is the whole point: **agents are the brains** (deciding where to go
-and how to avoid trouble); **the sim is the body and the world** (following
-plans, enforcing reflexes, running the physics).
+That split is the whole point. **Agents are the brains** (deciding where
+to go and how to avoid trouble); **the sim is the body and the world**
+(following plans, enforcing reflexes, running the physics).
 
-The world runs as a **scenario**: a fixed roster of vehicles declared up
+The world runs as a **scenario**. A fixed roster of vehicles declared up
 front. The simulation waits for every declared agent to connect, runs, and
-ends if any of them drops (after a short reconnect grace window). The scenario
-also **owns time**. An optional `time` block sets the run's duration (in
-sim-seconds) and pace (`realtime` or `afap`), so the server ends the run on
-its own clock rather than leaving it to each client's loop.
+ends if any of them drops (after a short reconnect grace window). The
+scenario also **owns time**. An optional `time` block sets the run's
+duration (in sim-seconds) and pace (`realtime` or `afap`), so the server
+ends the run on its own clock rather than leaving it to each client's loop.
 
-Agents are external processes speaking **WebSocket + JSON**, so you can write
-one in any language. Three pathways meet at the server, each on its own port:
-agents **control** entities (`:4000`), viewers **observe** a semantic scene
-stream (MessagePack, `:4001`), and agents optionally subscribe to their own
-**simulated perception** (`:4002`): the impaired view their reflexes and
-planning can run on. Viewers are passive: connecting or dropping one never
-touches the sim.
+Agents are external processes speaking **WebSocket + JSON**, so you can
+write one in any language. Three pathways meet at the server, each on its
+own port. Agents **control** entities (`:4000`), viewers **observe** a
+semantic scene stream (MessagePack, `:4001`), and agents optionally
+subscribe to their own **simulated perception** (`:4002`), the impaired
+view their reflexes and planning can run on. Viewers are passive.
+Connecting or dropping one never touches the sim.
 
 ## Two worlds
 
 A scenario's `map` field selects which world it builds:
 
-- **Arena** (no `map`) — a flat, walled box. Vehicles move on the ground; the
-  arena's size and walls come from the scenario.
-- **Road** (`"map": ...`) — a real road network: a graded, curved, and
-  optionally **banked** 3D road with lanes. The road is either the built-in
-  hand-authored `"demo"` road or a real **OpenDRIVE** (`.xodr`) file baked into
-  the same internal road model at load (`"map": "maps/e6mini.xodr"`). Vehicles
-  drive it as a `RaycastVehicle`: four ray-cast wheels on spring-damper
-  suspension, with real roll and pitch on the terrain — so on a super-elevated
-  curve it leans into the cant. In a road world the agent is **handed the map at
-  join** (lane
-  centerlines plus a connectivity graph), so it can lay a lane-following path,
-  or ask the server to **route** it from one point to another, across junctions
-  and lane changes.
+- **Arena** (no `map`). A flat, walled box. Vehicles move on the ground;
+  the arena's size and walls come from the scenario.
+- **Road** (`"map": ...`). A real road network. A graded, curved, and
+  optionally **banked** 3D road with lanes. The road is either the
+  built-in hand-authored `"demo"` road or a real **OpenDRIVE** (`.xodr`)
+  file baked into the same internal road model at load
+  (`"map": "maps/e6mini.xodr"`). Vehicles drive it as a `RaycastVehicle`.
+  Four ray-cast wheels on spring-damper suspension, with real roll and
+  pitch on the terrain, so on a super-elevated curve it leans into the
+  cant. In a road world the agent is **handed the map at join** (lane
+  centerlines plus a connectivity graph), so it can lay a lane-following
+  path, or ask the server to **route** it from one point to another,
+  across junctions and lane changes.
 
 ## Quick start
 
-Needs a recent Rust toolchain (pinned in `rust-toolchain.toml`) and, on Linux,
-the usual windowing/audio dev libraries Bevy requires (for the viewer). The
-one-command launcher starts the whole stack (server, viewer, and the demo
-agents) and tears it down on `Ctrl-C`:
+Needs a recent Rust toolchain (pinned in `rust-toolchain.toml`) and, on
+Linux, the usual windowing and audio dev libraries Bevy requires (for the
+viewer). The one-command launcher starts the whole stack (server, viewer,
+and the demo agents) and tears it down on `Ctrl-C`:
 
 ```sh
 scripts/run.sh                 # headless sim + viewer + two patrol agents
@@ -94,16 +95,16 @@ cargo run --bin viewer
 python3 clients/python/patrol_demo.py
 ```
 
-You'll see two vehicles circle the arena, each trailing its recent path and
-showing the waypoints ahead of it. `scenario.json` defines the arena size and
-the roster.
+You'll see two vehicles circle the arena, each trailing its recent path
+and showing the waypoints ahead of it. `scenario.json` defines the arena
+size and the roster.
 
-> **Stuttery viewer on a hybrid-GPU laptop?** Some GPUs (e.g. NVIDIA
-> Runtime-D3 laptops) suspend the dGPU between the viewer's frames and the
-> resume latency shows up as periodic hitches. Run the viewer with
-> `VIZ_GPU_KEEPALIVE=1` to render uncapped and keep the GPU awake (the portable
-> stand-in for running `vkcube` alongside; costs some power). `scripts/run.sh`
-> turns it on by default.
+> **Stuttery viewer on a hybrid-GPU laptop?** Some GPUs (NVIDIA
+> Runtime-D3 laptops, for example) suspend the dGPU between the viewer's
+> frames and the resume latency shows up as periodic hitches. Run the
+> viewer with `VIZ_GPU_KEEPALIVE=1` to render uncapped and keep the GPU
+> awake (the portable stand-in for running `vkcube` alongside; costs some
+> power). `scripts/run.sh` turns it on by default.
 
 ### More to try
 
@@ -123,8 +124,8 @@ scripts/run.sh scenario_banked_oval.json clients/python/banked_oval_demo.py
 # Brake for a *perceived* obstacle: the car sees a barrier on radar and stops
 scripts/run.sh scenario_road_obstacle.json clients/python/brake_road_demo.py
 
-# Same, but the radar is a frustum (finite vertical FOV) instead of a wedge --
-# press O in the viewer to see the sensing volume close top and bottom
+# Same, but the radar is a frustum (finite vertical FOV) instead of a wedge.
+# Press O in the viewer to see the sensing volume close top and bottom.
 scripts/run.sh scenario_road_frustum.json clients/python/brake_road_demo.py
 
 # Perception matters: two identical chasers, one with a short-range radar,
@@ -140,19 +141,20 @@ scripts/run.sh scenario_road_town.json clients/python/route_town_demo.py
 scripts/run.sh scenario_road_fleet.json clients/python/fleet_town_demo.py
 ```
 
-In the viewer: **F** follows/unfollows the nearest vehicle (chase-cam), **Tab**
-cycles vehicles, **P** toggles the perception overlay (what each agent detects),
-**O** toggles the sensing envelope (its range/field-of-view). **1**–**5**
-switch to the front, rear, left, right and top views: of the followed vehicle
-if there is one, of the whole arena if not. Pressing the active one again
-returns to the default chase/overview. A flank view is how you watch a wheel
-lock or the suspension compress; pick the side the corner turns toward.
+In the viewer: **F** follows or unfollows the nearest vehicle (chase-cam),
+**Tab** cycles vehicles, **P** toggles the perception overlay (what each
+agent detects), **O** toggles the sensing envelope (its range and FOV).
+**1** through **5** switch to the front, rear, left, right, and top views,
+of the followed vehicle if there is one, of the whole arena if not.
+Pressing the active one again returns to the default chase or overview. A
+flank view is how you watch a wheel lock or the suspension compress; pick
+the side the corner turns toward.
 
-Cars are drawn on their real wheels: each one steers, spins, and rides its own
-suspension travel. They are tinted by what the tire is doing: **red** for a
-locked wheel (stopped while the car is still sliding), **blue** for wheelspin,
-grey for a wheel off the ground. Chase-cam a car under a braking reflex and you
-can watch all four lock.
+Cars are drawn on their real wheels. Each one steers, spins, and rides its
+own suspension travel. They are tinted by what the tire is doing. **Red**
+for a locked wheel (stopped while the car is still sliding), **blue** for
+wheelspin, grey for a wheel off the ground. Chase-cam a car under a
+braking reflex and you can watch all four lock.
 
 ## Writing an agent
 
@@ -164,7 +166,7 @@ An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:
 
 // The server replies with `joined`, carrying your spawn position and, in a
 // road world, the `map`: every lane's centerline, width, and connectivity
-// (successors / predecessors / lane-change neighbors).
+// (successors, predecessors, lane-change neighbors).
 
 // -> a plan: a path of waypoints (position + target speed)
 { "type": "submit_plan", "waypoints": [
@@ -198,19 +200,20 @@ An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:
 ```
 
 The server pushes back `joined`, `state` snapshots, `reflex_fired` events
-(when a reflex overrides your plan), `route` replies, `tick` step pulses (if
-you subscribed), `off_road` (your vehicle left the drivable surface and was
-removed), `scenario_ended`, and `error`. The exact shapes live in
-[`crates/protocol`](crates/protocol/). The server does the pathfinding as a
-convenience; the returned plan (and its speed) is yours to submit, edit, or
-ignore.
+(when a reflex overrides your plan), `route` replies, `tick` step pulses
+(if you subscribed), `off_road` (your vehicle left the drivable surface
+and was removed), `scenario_ended`, and `error`. The exact shapes live in
+[`crates/protocol`](crates/protocol/). The server does the pathfinding as
+a convenience; the returned plan (and its speed) is yours to submit, edit,
+or ignore.
 
 Working clients under [`clients/python/`](clients/python/):
 [`agent_smoke.py`](clients/python/agent_smoke.py) (minimal),
-[`swarm_avoidance.py`](clients/python/swarm_avoidance.py) (re-plans every tick
-against neighbors), [`drive_road_demo.py`](clients/python/drive_road_demo.py)
-(lane-following), [`route_demo.py`](clients/python/route_demo.py) (routing),
-and the Rust [`rust_agent`](crates/server/examples/rust_agent.rs) example.
+[`swarm_avoidance.py`](clients/python/swarm_avoidance.py) (re-plans every
+tick against neighbors),
+[`drive_road_demo.py`](clients/python/drive_road_demo.py) (lane-following),
+[`route_demo.py`](clients/python/route_demo.py) (routing), and the Rust
+[`rust_agent`](crates/server/examples/rust_agent.rs) example.
 
 ## Layout
 
@@ -230,10 +233,10 @@ server        ── the headless simulation binary that wires it all together
 viewer        ── the reference 3D visualizer that renders the viz stream
 ```
 
-Three pathways meet at the `server`: agents talk over `transport` (control,
+Three pathways meet at the `server`. Agents talk over `transport` (control,
 `:4000`), viewers subscribe over `viz` (observation, `:4001`), and agents
 receive their simulated perception over `perception` (`:4002`). The library
-crates have runnable examples under `crates/<name>/examples/` (e.g.
+crates have runnable examples under `crates/<name>/examples/` (for example,
 `cargo run -p sensors --example reflex_brake`).
 
 ## Development
@@ -243,9 +246,10 @@ scripts/gate.sh          # fmt, clippy, the full test suite, and the client chec
 scripts/gate.sh clippy   # or a single step: fmt | clippy | test | lint | ...
 ```
 
-`gate.sh` is what CI runs. It splits the test step into batches on purpose: a
-single `cargo test --workspace` links every test binary at once and exhausts
-the linker (Bevy's debug info is large), so `server` is linked alone.
+`gate.sh` is what CI runs. It splits the test step into batches on purpose.
+A single `cargo test --workspace` links every test binary at once and
+exhausts the linker (Bevy's debug info is large), so `server` is linked
+alone.
 
 Conventions, architecture notes, and the correctness guardrails that aren't
 obvious from the code are in [CLAUDE.md](CLAUDE.md). This repository uses
@@ -256,50 +260,54 @@ Test-Driven Development.
 **Movement** ships five embodiments, selected per agent via the roster's
 `embodiment` field:
 
-- `Holonomic` — moves freely in any direction (a puck/drone).
-- `CarLike` — forward-only thrust, bounded turn rate, lateral grip.
-- `FullVehicle` — single-track "bicycle" dynamics: real physical yaw with
-  tire-slip lateral forces, so understeer/oversteer emerge.
-- `RaycastVehicle` — the road-driving vehicle: four ray-cast wheels with
-  spring-damper suspension and tire grip, roll and pitch as real physics, so it
-  follows the terrain (grade, banking). `scenario_carlike.json`,
+- `Holonomic`. Moves freely in any direction (a puck or drone).
+- `CarLike`. Forward-only thrust, bounded turn rate, lateral grip.
+- `FullVehicle`. Single-track "bicycle" dynamics. Real physical yaw with
+  tire-slip lateral forces, so understeer and oversteer emerge.
+- `RaycastVehicle`. The road-driving vehicle. Four ray-cast wheels with
+  spring-damper suspension and tire grip, roll and pitch as real physics,
+  so it follows the terrain (grade, banking). `scenario_carlike.json`,
   `scenario_bicycle.json`, and the `scenario_road_*.json` files run these.
-- `FmuVehicle` — a vehicle whose dynamics come from an external **FMU**
+- `FmuVehicle`. A vehicle whose dynamics come from an external **FMU**
   (Functional Mock-up Unit) co-simulation stepped each tick, instead of a
-  built-in model; the roster slot binds its inputs/outputs (see `AgentSlot.fmu`).
-  The server drapes it onto the road by its four wheels — each seated on the
-  (possibly banked) surface, the body tilted onto the cant — and feeds the local
-  bank back into the FMU. `scenario_banked_oval.json` runs one on a banked oval.
+  built-in model. The roster slot binds its inputs and outputs (see
+  `AgentSlot.fmu`). The server drapes it onto the road by its four wheels,
+  each seated on the (possibly banked) surface, the body tilted onto the
+  cant, and feeds the local bank back into the FMU.
+  `scenario_banked_oval.json` runs one on a banked oval.
 
-**Perception** ships both ground-truth readings *and* **simulated perception**:
-the world equips an agent with named devices (`AgentSlot.sensors`), each either
-perfect `ground_truth` or `simulated` with a spec: limited range, field of
-view, Gaussian position/velocity noise, and delivery latency. An agent receives
-its impaired perception on the `:4002` pathway, and a reflex rule reads
-whichever device it names, so imperfect perception has real consequences.
-`scenario_sensors.json` shows the impairments; the viewer draws each agent's
-perception as a debug overlay (**P** for detections, **O** for the sensing
-envelope).
+**Perception** ships both ground-truth readings *and* **simulated
+perception**. The world equips an agent with named devices
+(`AgentSlot.sensors`), each either perfect `ground_truth` or `simulated`
+with a spec: limited range, field of view, Gaussian position/velocity
+noise, and delivery latency. An agent receives its impaired perception on
+the `:4002` pathway, and a reflex rule reads whichever device it names, so
+imperfect perception has real consequences. `scenario_sensors.json` shows
+the impairments; the viewer draws each agent's perception as a debug
+overlay (**P** for detections, **O** for the sensing envelope).
 
-**Roads** come from an internal, format-agnostic road-network model (`map`).
-The built-in `demo` road is hand-authored; the `map-opendrive` crate is a pure-
-Rust **OpenDRIVE importer** that bakes a real `.xodr` file into that same model
-at load: line / arc / spiral / paramPoly3 / poly3 geometry, elevation,
-**superelevation** (banked curves), per-lane widths, lane offsets, and multiple
-lane sections. Superelevation is baked as a real cant — the surface tilts about
-the reference line through the curve, so an outer lane rides higher and a vehicle
-leans into the bank — not just painted on. Its geometry is cross-checked against
-the reference C++ [libOpenDRIVE](https://github.com/pageldev/libOpenDRIVE).
-`scenario_road_real.json` drives a real esmini highway; `scenario_road_town.json`
-loads CARLA's Town07; `scenario_banked_oval.json` laps a super-elevated oval.
+**Roads** come from an internal, format-agnostic road-network model
+(`map`). The built-in `demo` road is hand-authored; the `map-opendrive`
+crate is a pure-Rust **OpenDRIVE importer** that bakes a real `.xodr` file
+into that same model at load: line, arc, spiral, paramPoly3, and poly3
+geometry, elevation, **superelevation** (banked curves), per-lane widths,
+lane offsets, and multiple lane sections. Superelevation is baked as a
+real cant. The surface tilts about the reference line through the curve,
+so an outer lane rides higher and a vehicle leans into the bank, not just
+painted on. Its geometry is cross-checked against the reference C++
+[libOpenDRIVE](https://github.com/pageldev/libOpenDRIVE).
+`scenario_road_real.json` drives a real esmini highway;
+`scenario_road_town.json` loads CARLA's Town07;
+`scenario_banked_oval.json` laps a super-elevated oval.
 
 **Routing** turns the road network into "drive from A to B". The importer
-resolves road/lane links and junction connections into a **connectivity graph**
-(each lane's drivable successors, plus lane-change neighbors); a router
-(`map::RoadNetwork::route`) finds the shortest lane path over it and samples a
-plan. The graph is delivered to the agent at join, so an agent can route itself;
-the server also offers a `request_route` service that returns a ready plan.
-`route_town_demo.py` routes one car across Town07's junctions;
-`fleet_town_demo.py` routes a whole fleet of 20 at once: the server fans them
-out across the map's forward lanes, and each perceives the others through an
-impaired radar and brakes to yield when it closes on slower traffic.
+resolves road and lane links and junction connections into a
+**connectivity graph** (each lane's drivable successors, plus lane-change
+neighbors); a router (`map::RoadNetwork::route`) finds the shortest lane
+path over it and samples a plan. The graph is delivered to the agent at
+join, so an agent can route itself; the server also offers a
+`request_route` service that returns a ready plan. `route_town_demo.py`
+routes one car across Town07's junctions; `fleet_town_demo.py` routes a
+whole fleet of 20 at once. The server fans them out across the map's
+forward lanes, and each perceives the others through an impaired radar
+and brakes to yield when it closes on slower traffic.

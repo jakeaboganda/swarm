@@ -1,8 +1,9 @@
 # viewer
 
-The reference visualizer: a Bevy app that subscribes to the sim's viz
+The reference visualizer. A Bevy app that subscribes to the sim's viz
 stream and renders it. One of potentially many viewers (a browser viewer, a
-recorder, ...); it owns no simulation state, only what the stream tells it.
+recorder, and so on); it owns no simulation state, only what the stream
+tells it.
 
 ## Run
 
@@ -11,27 +12,28 @@ cargo run --bin viewer            # connects to ws://127.0.0.1:4001
 cargo run --bin viewer -- ws://host:4001
 ```
 
-Start it any time: before the sim, during a run, or after. It reconnects
-on its own and each reconnect delivers a fresh scene-init.
+Start it any time. Before the sim, during a run, or after. It reconnects on
+its own and each reconnect delivers a fresh scene-init.
 
 ## How it works
 
-- **`client`** — a background tokio task connects to the viz WebSocket,
+- **`client`**. A background tokio task connects to the viz WebSocket,
   sends the `Hello`, decodes MessagePack `ServerToViewer` messages, and
   forwards them to Bevy over a channel. Reconnects with backoff.
-- **`scene`** — `apply_stream` drains that channel and mirrors it into the
-  ECS: `SceneInit` rebuilds the world (a full reset, also how a reconnect
-  re-syncs), lifecycle events add/remove entities, and frames update
+- **`scene`**. `apply_stream` drains that channel and mirrors it into the
+  ECS. `SceneInit` rebuilds the world (a full reset, also how a reconnect
+  re-syncs), lifecycle events add and remove entities, and frames update
   transforms. It's defensive: spawns are idempotent and frames for unknown
   ids are ignored. Meshes are built from each node's `Geometry`.
-- **`overlay`** — draws the debug layer with gizmos: plan paths, reflex
-  highlight, viewer-derived motion trails, and the **perception overlay**:
-  per agent, a line to each perceived "ghost" (its noised position) with a
-  connector back to the entity's true position (the perception error), plus a
-  sensing **envelope** (range circle + FOV prism) from the entity's
+- **`overlay`**. Draws the debug layer with gizmos: plan paths, reflex
+  highlight, viewer-derived motion trails, and the **perception overlay**.
+  Per agent, a line to each perceived "ghost" (its noised position) with a
+  connector back to the entity's true position (the perception error), plus
+  a sensing **envelope** (range circle plus FOV prism) from the entity's
   `SensorView`. Toggle detections with **P**, the envelope with **O**.
 
-Playback runs on a sim-time render clock: `apply_stream` buffers each entity's
-recent poses and `advance_playback` interpolates them a few ticks behind the
-newest frame, so motion stays smooth under jittery frame arrival. The viewer
-never simulates: positions and orientations come straight off the wire.
+Playback runs on a sim-time render clock. `apply_stream` buffers each
+entity's recent poses and `advance_playback` interpolates them a few ticks
+behind the newest frame, so motion stays smooth under jittery frame
+arrival. The viewer never simulates. Positions and orientations come
+straight off the wire.
