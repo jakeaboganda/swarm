@@ -4,7 +4,8 @@ The headless simulation binary: loads a scenario, runs Rapier physics,
 drives the per-tick control loop, computes simulated perception, manages the
 scenario lifecycle, and streams the world to viewers. No window or rendering
 of its own; that's the `viewer`'s job. Depends on `protocol`, `movement`,
-`sensors`, `transport`, `viz`, and `perception`.
+`sensors`, `transport`, `viz`, `perception`, `map`, `map-opendrive`, and
+`dynamics-fmi`.
 
 ## Run
 
@@ -18,9 +19,11 @@ renders nothing on its own; run a `viewer` (or any viz client) to watch.
 
 ## Contents
 
-- **`world`** — spawns the arena (ground, four walls) and agent capsules as
-  physics bodies, each tagged with a `VizEntity` describing it for viewers.
-  Ground-constrained, rotation locked.
+- **`world`** — builds the world and spawns bodies, each tagged with a
+  `VizEntity` for viewers. The flat **arena** (ground + four walls) with
+  rotation-locked capsules, or a **road** world: the road-surface trimesh
+  collider plus vehicles draped onto it by their wheels. The road comes from
+  `map`'s `demo_road` or an imported `.xodr`.
 - **`scenario` / `scenario_state`** — scenario loading and the
   `WaitingForRoster → Running → Ended` state machine.
 - **`transport_bridge`** — drains `transport`'s channels: spawns agents on

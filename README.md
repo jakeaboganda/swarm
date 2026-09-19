@@ -199,11 +199,11 @@ An agent connects to `ws://<host>:4000` and exchanges JSON. The essentials:
 
 The server pushes back `joined`, `state` snapshots, `reflex_fired` events
 (when a reflex overrides your plan), `route` replies, `tick` step pulses (if
-you subscribed), `scenario_ended`, and `error`. The exact shapes live in
-[`crates/protocol`](crates/protocol/).
-Routing is your choice, not a mandate: the server does the pathfinding as a
-convenience, but the returned plan (and its speed) is yours to submit, edit,
-or ignore.
+you subscribed), `off_road` (your vehicle left the drivable surface and was
+removed), `scenario_ended`, and `error`. The exact shapes live in
+[`crates/protocol`](crates/protocol/). The server does the pathfinding as a
+convenience; the returned plan (and its speed) is yours to submit, edit, or
+ignore.
 
 Working clients under [`clients/python/`](clients/python/):
 [`agent_smoke.py`](clients/python/agent_smoke.py) (minimal),
@@ -214,7 +214,7 @@ and the Rust [`rust_agent`](crates/server/examples/rust_agent.rs) example.
 
 ## Layout
 
-A Cargo workspace of ten crates, each owning one concern:
+A Cargo workspace of eleven crates, each owning one concern:
 
 ```
 protocol      ── agent wire types (JSON messages) + the scenario schema
@@ -225,6 +225,7 @@ viz           ── the visualization pathway: scene wire types + broadcast ser
 perception    ── the sensor pathway: per-agent simulated-perception wire + server
 map           ── the road-network model: lanes, geometry, mesh, routing
 map-opendrive ── the pure-Rust OpenDRIVE (.xodr) importer that bakes into `map`
+dynamics-fmi  ── FMU (FMI 3.0) co-simulation core for the FmuVehicle embodiment
 server        ── the headless simulation binary that wires it all together
 viewer        ── the reference 3D visualizer that renders the viz stream
 ```
@@ -238,10 +239,13 @@ crates have runnable examples under `crates/<name>/examples/` (e.g.
 ## Development
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+scripts/gate.sh          # fmt, clippy, the full test suite, and the client checks
+scripts/gate.sh clippy   # or a single step: fmt | clippy | test | lint | ...
 ```
+
+`gate.sh` is what CI runs. It splits the test step into batches on purpose: a
+single `cargo test --workspace` links every test binary at once and exhausts
+the linker (Bevy's debug info is large), so `server` is linked alone.
 
 Conventions, architecture notes, and the correctness guardrails that aren't
 obvious from the code are in [CLAUDE.md](CLAUDE.md). This repository uses

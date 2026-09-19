@@ -23,7 +23,7 @@ on its own and each reconnect delivers a fresh scene-init.
   ECS: `SceneInit` rebuilds the world (a full reset, also how a reconnect
   re-syncs), lifecycle events add/remove entities, and frames update
   transforms. It's defensive: spawns are idempotent and frames for unknown
-  ids are ignored. Meshes are built from each entity's `Shape`.
+  ids are ignored. Meshes are built from each node's `Geometry`.
 - **`overlay`** — draws the debug layer with gizmos: plan paths, reflex
   highlight, viewer-derived motion trails, and the **perception overlay**:
   per agent, a line to each perceived "ghost" (its noised position) with a

@@ -1,7 +1,9 @@
 # movement
 
-Pluggable per-entity embodiment: turns a desired velocity into a physical
-force each tick. Independent of networking and scenario logic.
+Pluggable per-entity embodiment: how each agent's body moves each tick. Most
+models turn a desired velocity into a physical force; the raycast and FMU
+vehicles drive their bodies directly. Independent of networking and scenario
+logic.
 
 ## Contents
 
@@ -19,8 +21,17 @@ force each tick. Independent of networking and scenario logic.
   from a linear tire model (front/rear cornering forces + a yaw torque), so
   understeer/oversteer and sliding emerge instead of being scripted. A two-
   layer split: a *driver* maps `DesiredVelocity` to steering/drive controls,
-  a *plant* maps those to forces. The one embodiment that opts into yaw as a
-  real physical DOF.
+  a *plant* maps those to forces.
+- **`RaycastVehicle`** — the 3D, terrain-following cousin of `FullVehicle`:
+  four wheels ray-cast to the ground on spring-damper suspension, per-wheel
+  tire forces from slip, engine/brake torque on the wheels. Roll and pitch are
+  real physics, so it leans on banking and pitches on grade; weight transfer
+  emerges from the suspension. Applies its own per-wheel forces, so it doesn't
+  use the `drive` seam.
+- **`FmuVehicle`** — dynamics from an external FMI 3.0 co-simulation FMU
+  (via the `dynamics-fmi` crate), stepped each tick; the sim imposes the FMU's
+  integrated pose on a kinematic body. Like `FullVehicle`/`RaycastVehicle` its
+  yaw is a real DOF, so it carries `PhysicalYaw`. Doesn't use the `drive` seam.
 - **`DesiredVelocity`** — the shared control contract, written by `server`'s
   arbitration and read by the movement systems. Carries an `urgent` flag so
   brakes aren't limited by the cruising force cap.

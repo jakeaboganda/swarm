@@ -7,12 +7,14 @@ knows OpenDRIVE or OSM, so swapping the importer never touches downstream code.
 
 ## Contents
 
-- **`RoadNetwork`**: the baked map: a list of `Lane`s (road grouping + a
-  routing graph arrive with the OpenDRIVE importer). `nearest_lane` /
-  `driving_lanes` are the everyday queries; `surface_mesh` tessellates the road
-  for the collider and the viewer.
-- **`Lane`**: a drivable strip: centerline `Polyline` + width + direction. An
-  agent lays a path down the centerline; the vehicle drives it.
+- **`RoadNetwork`**: the baked map: a list of `Lane`s plus a lane connectivity
+  graph. `nearest_lane` / `driving_lanes` are the everyday queries;
+  `successors` / `predecessors` / `neighbors` walk the graph; `route(from, to)`
+  finds a lane path and samples it to a plan; `surface_mesh` tessellates the
+  road for the collider and the viewer.
+- **`Lane`**: a drivable strip: centerline `Polyline` + width + direction, with
+  its graph links (`successors`/`predecessors`/`neighbors`). An agent lays a
+  path down the centerline; the vehicle drives it.
 - **`Polyline` / `Pose` / `Projection`**: arc-length geometry. `pose_at(s)`
   gives position + heading along a lane; `project(point)` gives the nearest
   point, its arc length, and the signed lateral offset (the lane-keeping error).

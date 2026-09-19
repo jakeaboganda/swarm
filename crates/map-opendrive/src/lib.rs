@@ -6,10 +6,9 @@
 //! reference-line pivot); per-lane widths; `laneOffset`; multiple lane sections;
 //! and **drive-direction lane connectivity** -- road/lane `<link>`s and
 //! `<junction>`s resolved into each `Lane`'s `successors`/`predecessors` (see
-//! `links`). Not yet: `<lateralProfile>` `<shape>` (a per-`t` cross-section
-//! profile -- crowning/camber), and a higher-level routing/pathfinding API over
-//! the graph (see the DECISIONS "roll our own" note). Anything richer is future
-//! work.
+//! `links`). Routing over the resulting graph lives in `map` (`RoadNetwork::
+//! route`). Not yet: `<lateralProfile>` `<shape>` (a per-`t` cross-section
+//! profile -- crowning/camber). Anything richer is future work.
 //!
 //! ## Coordinate mapping
 //! OpenDRIVE is right-handed **Z-up** (reference line in the X-Y plane, `hdg`

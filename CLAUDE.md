@@ -84,11 +84,13 @@ selected per scenario.
   follows the road's grade (see `DECISIONS.md`, "Higher-fidelity vehicle
   dynamics"). Movement model is a **pluggable, per-entity** component/trait
   selected by each agent's `embodiment` (`Holonomic`, `CarLike`, `FullVehicle`,
-  `RaycastVehicle` ship). Force-based models implement
+  `RaycastVehicle`, `FmuVehicle` ship). Force-based models implement
   `drive(&mut self, desired, body, dt) -> Actuation` (a force plus a yaw
-  torque), carrying state that evolves over time (a car's steering angle); the
-  raycast vehicle is the exception: it applies its own per-wheel suspension /
-  drive / grip forces directly (it doesn't fit the `drive` seam).
+  torque), carrying state that evolves over time (a car's steering angle). Two
+  embodiments don't fit the `drive` seam: the raycast vehicle applies its own
+  per-wheel suspension / drive / grip forces directly, and `FmuVehicle` takes
+  its pose from an external FMI 3.0 co-simulation FMU stepped each tick (the FMU
+  integrates its own dynamics; the sim imposes the result on a kinematic body).
 - **Sensors are first-class, world-equipped devices.** Each agent's roster
   slot declares `sensors: Vec<SensorDef>`: named devices, each `ground_truth`
   or `simulated` (with a `spec`: range, FOV half-angle, position/velocity
@@ -131,18 +133,18 @@ selected per scenario.
 
 ## Crate layout
 
-Cargo workspace, ten crates:
+Cargo workspace, eleven crates:
 
 - **`protocol`** — shared `serde` types for the *agent* pathway: WebSocket
   messages (`join`, plan submission, reflex-rule registration, `request_route`,
   `subscribe`/`ack` for the step clock; `get_state`/snapshot, `joined` (which
   carries the delivered `map` in a road world), `reflex_fired`/`route`/`tick`/
-  `scenario_ended`/`error` events), and the scenario JSON schema (arena +
+  `off_road`/`scenario_ended`/`error` events), and the scenario JSON schema (arena +
   optional `map` + agent roster + per-agent `SensorDef`s + `seed` + optional
   `time` block). Depends on nothing else in the workspace.
 - **`movement`** — the pluggable embodiment trait +
-  `Holonomic`/`CarLike`/`FullVehicle`/`RaycastVehicle` implementations. No
-  networking/scenario knowledge.
+  `Holonomic`/`CarLike`/`FullVehicle`/`RaycastVehicle`/`FmuVehicle`
+  implementations. No networking/scenario knowledge.
 - **`sensors`** — sensor readings (`time_to_collision`/`distance_to`/`speed`),
   the perception-impairment pipeline (`perceive`: range/FOV cull + seeded
   Gaussian noise), and reflex-rule evaluation (`evaluate` resolves each
@@ -175,9 +177,16 @@ Cargo workspace, ten crates:
   networking, no OpenDRIVE knowledge.
 - **`map-opendrive`** — the pure-Rust **OpenDRIVE (`.xodr`) importer** that
   bakes a real map into `map::RoadNetwork` at load: line/arc/spiral/paramPoly3/
-  poly3 geometry, elevation, per-lane widths, lane offsets, multiple lane
-  sections, and road/lane/junction connectivity. Depends on `map` + `roxmltree`;
-  geometry cross-checked against the reference C++ libOpenDRIVE.
+  poly3 geometry, elevation, superelevation (banked curves), per-lane widths,
+  lane offsets, multiple lane sections, and road/lane/junction connectivity.
+  Depends on `map` + `roxmltree`; geometry cross-checked against the reference
+  C++ libOpenDRIVE.
+- **`dynamics-fmi`** — the engine-free core for the `FmuVehicle` embodiment: it
+  loads an FMI 3.0 co-simulation FMU, resolves the scenario's variable bindings
+  (steer/throttle/brake, ground query, pose outputs) to FMI value references,
+  maps a plan to pedals, and reads the FMU's integrated pose back out. No
+  `bevy`/`rapier` deps, so it unit-tests against an in-memory fake; `server`
+  steps it each tick and imposes the pose. Depends on the `fmi` crate.
 - **`server`** — the headless simulation: loads the scenario, builds the
   world (flat **arena**, or a **road** world: the road's trimesh collider +
   raycast-vehicle agents, from `demo_road` or an imported `.xodr`), runs Rapier
@@ -237,10 +246,10 @@ Cargo workspace, ten crates:
   silently skipped.
 - **Dependencies**: free to add anything already implied by this file
   (`bevy`, `bevy_rapier3d`, `tokio`, `tokio-tungstenite`, `serde`/
-  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree`; the
-  last for the OpenDRIVE importer) without asking. Anything outside that set
-  (a new crate not implied by an existing decision) gets flagged before adding,
-  even if minor.
+  `serde_json`, `rmp-serde`, `thiserror`, `anyhow`, `glam`, `roxmltree` for the
+  OpenDRIVE importer, `fmi` for the FMU embodiment) without asking. Anything
+  outside that set (a new crate not implied by an existing decision) gets
+  flagged before adding, even if minor.
 - **Commit messages**: must follow [Conventional Commits](https://www.conventionalcommits.org/)
   (`type(scope): summary`, e.g. `feat(sensors): add hysteresis to
   time_to_collision`).
@@ -291,10 +300,11 @@ which is:
 ```
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p protocol -p movement -p sensors -p transport \
+cargo test -p protocol -p dynamics-fmi -p movement -p sensors -p transport \
            -p viz -p perception -p map -p map-opendrive
 cargo test -p server -j 2
 cargo test -p viewer -j 2
+ruff check clients/python scripts
 (cd clients/python && python3 -m shotgun.selftest)
 python3 scripts/check_clients.py
 ```
@@ -304,11 +314,11 @@ test binary at once and exhausts the linker on this machine (bevy's debug info
 is enormous); `server` links alone with a reduced job count. CI runs exactly
 `scripts/gate.sh`, so the gate and CI cannot drift apart.
 
-The last two steps are the Python client side: `shotgun`'s self-test (the
-co-driver toolkit's maths), and a check that every client in
-`clients/python/*.py` byte-compiles *and imports*; importing is what
-resolves `from shotgun import lane_plan`, so a renamed helper fails in the
-gate instead of in front of a running sim.
+The last three steps are the Python client side: `ruff` (its config in
+`ruff.toml`), `shotgun`'s self-test (the co-driver toolkit's maths), and a
+check that every client in `clients/python/*.py` byte-compiles *and imports*;
+importing is what resolves `from shotgun import lane_plan`, so a renamed helper
+fails in the gate instead of in front of a running sim.
 
 ## Reference
 

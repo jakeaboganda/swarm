@@ -15,10 +15,14 @@ recorder, a USD/glTF exporter) can ignore the rest:
 
 - **Scene layer** (canonical/physical): `SceneInit` on connect → `SceneEvent`
   lifecycle changes (spawn/despawn, scenario state) → `Frame`s streamed at a
-  fixed rate. Entities carry a `Shape` + `Transform`; static geometry is
-  sent once and never appears in frames.
+  fixed rate. An entity is a **tree of `EntityNode`s**: each a local transform,
+  optional `Geometry` (a primitive, a baked `Mesh`, or an `Asset` URI), and
+  children — so a car is a body with four wheel children. A `Frame` carries only
+  the nodes that moved, addressed by `NodePath`; static geometry is sent once
+  and never appears in frames.
 - **Debug layer** (optional): `DebugFrame` with per-entity plan paths, reflex
-  flags, and the perception overlay: each agent's currently-perceived
+  flags, per-wheel slip and contact (`WheelDebug`, for tinting a locked or
+  spinning wheel), and the perception overlay: each agent's currently-perceived
   entities as `Blip`s (noised "ghost" positions). An `EntityDescriptor` also
   carries an optional `SensorView` (range + FOV) for the sensing-envelope
   overlay. All human-only diagnostics a viewer may render or ignore. Trails

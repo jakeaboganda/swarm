@@ -2,9 +2,10 @@
 //! into and every consumer reads. Right-handed, **Y-up, meters** (matching viz
 //! and Bevy). Format-agnostic: nothing here knows OpenDRIVE or OSM.
 //!
-//! Curves are baked to polylines, so consumers only ever sample points -- an
-//! importer (libOpenDRIVE today, a pure-Rust port later) does the clothoid math
-//! once at load. Road grouping and a routing graph arrive with that importer.
+//! Curves are baked to polylines, so consumers only ever sample points -- the
+//! importer (the pure-Rust `map-opendrive`) does the clothoid math once at load.
+//! The lane connectivity graph (`successors`/`predecessors`/`neighbors`) and the
+//! `route` pathfinder over it live here too.
 //!
 //! ## Importer contract
 //! An importer baking external (possibly malformed) map data must:
