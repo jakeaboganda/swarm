@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use dynamics_fmi::{Driver, FmuFrame, ResolvedBinding};
+use dynamics_fmi::{Controller, FmuFrame, ResolvedBinding};
 use movement::{
     wheel_offset, CarLike, DesiredVelocity, FmuStore, FmuVehicle, FullVehicle, Holonomic,
     PhysicalYaw, RaycastVehicle, Wheels,
@@ -759,7 +759,7 @@ pub fn spawn_agent(
             // it shows up in perception/collision and shoves dynamic bodies but
             // is never shoved. Rotation is unlocked because the FMU's yaw is
             // written straight into the Transform each tick, and `PhysicalYaw`
-            // keeps `face_velocity_direction` from clobbering it. The `Driver`
+            // keeps `face_velocity_direction` from clobbering it. The `Controller`
             // starts fresh; the resolved binding is validated at load.
             //
             // The FMU emits its OWN absolute pose from its OWN origin, in its
@@ -785,7 +785,7 @@ pub fn spawn_agent(
                         coefficient: 0.8,
                         combine_rule: CoefficientCombineRule::Average,
                     },
-                    FmuVehicle::new(Driver::default(), binding, frame, spawn_pos, spawn_yaw),
+                    FmuVehicle::new(Controller::default(), binding, frame, spawn_pos, spawn_yaw),
                     // Per-wheel suspension state, written each tick by
                     // `conform_fmu_to_track` so the wheels sit on the road (an FMU
                     // car has no raycast suspension of its own). `Wheels` alone

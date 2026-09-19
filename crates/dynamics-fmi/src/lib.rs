@@ -3,11 +3,11 @@
 //! The [`FmuInstance`] trait is the seam a real FMI 3.0 co-simulation instance
 //! satisfies (slice 2, the `fmi`-crate-backed impl). Everything else here is
 //! the Bevy/Rapier-free logic around it: [`BindingSpec`] resolution (roles ->
-//! FMI value references), the plan-to-pedals [`Driver`], and [`read_pose`]. No
+//! FMI value references), the plan-to-pedals [`Controller`], and [`read_pose`]. No
 //! `fmi`/engine deps, so it unit-tests in isolation against an in-memory fake.
 
 mod binding;
-mod driver;
+mod controller;
 mod fmu;
 mod frame;
 mod instance;
@@ -18,7 +18,7 @@ pub use binding::{
     BindError, BindingSpec, GroundBinding, InputBinding, OutputBinding, ResolvedBinding,
     ResolvedGround, ResolvedInputs, ResolvedOutputs,
 };
-pub use driver::{Controls, Driver, DriverConfig, DriverInput};
+pub use controller::{Controller, ControllerConfig, ControllerInput, Controls};
 pub use fmu::{Fmu, LoadError};
 pub use frame::{to_sim_local, FmuFrame};
 pub use instance::{FmuError, FmuInstance, StepOutcome, ValueReference};

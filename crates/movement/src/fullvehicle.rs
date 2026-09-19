@@ -23,7 +23,7 @@ pub struct Controls {
 /// instead of being scripted. Contrast `CarLike`, whose yaw is cosmetic and
 /// which can't slip.
 ///
-/// The model is two pure layers: a **driver** (`driver`) mapping the
+/// The model is two pure layers: a **controller** (`controller`) mapping the
 /// universal `DesiredVelocity` to `Controls`, and a **plant**
 /// (`bicycle_step`) mapping those controls + read-back `BodyState` to the
 /// forces Rapier then integrates.
@@ -78,7 +78,7 @@ impl Default for FullVehicle {
 
 impl MovementModel for FullVehicle {
     fn drive(&mut self, desired: DesiredVelocity, body: BodyState, dt: f32) -> Actuation {
-        let controls = driver(self, desired, body, dt);
+        let controls = controller(self, desired, body, dt);
         self.steer = controls.steer; // steering angle persists across ticks
         bicycle_step(self, body, controls)
     }
@@ -108,10 +108,10 @@ fn step_toward(current: f32, target: f32, max_step: f32) -> f32 {
     }
 }
 
-/// Driver (`DesiredVelocity` → `Controls`): the pedals + steering wheel.
+/// Controller (`DesiredVelocity` → `Controls`): the pedals + steering wheel.
 /// A proportional speed controller for the longitudinal force and a
 /// rate-limited proportional steering law for the wheel.
-fn driver(v: &FullVehicle, desired: DesiredVelocity, body: BodyState, dt: f32) -> Controls {
+fn controller(v: &FullVehicle, desired: DesiredVelocity, body: BodyState, dt: f32) -> Controls {
     let target = Vec3::new(desired.value.x, 0.0, desired.value.z);
     let target_speed = target.length();
 
@@ -257,7 +257,7 @@ mod tests {
         );
     }
 
-    // --- driver ----------------------------------------------------------
+    // --- controller ----------------------------------------------------------
 
     #[test]
     fn urgent_selects_the_brake_ceiling() {
@@ -265,7 +265,7 @@ mod tests {
         // Moving fast forward, commanded to stop → large negative force that
         // clamps differently depending on `urgent`.
         let fast = body(Vec3::new(30.0, 0.0, 0.0), 0.0);
-        let normal = driver(
+        let normal = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::ZERO,
@@ -275,7 +275,7 @@ mod tests {
             fast,
             1.0 / 60.0,
         );
-        let urgent = driver(
+        let urgent = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::ZERO,
@@ -293,7 +293,7 @@ mod tests {
     fn steers_toward_the_desired_side() {
         let v = FullVehicle::default();
         // Heading +X, desired points left (−Z) → positive steer.
-        let controls = driver(
+        let controls = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::new(0.0, 0.0, -5.0),
@@ -314,7 +314,7 @@ mod tests {
         };
         let dt = 1.0 / 60.0;
         // Hard left desired, but one tick can't exceed steer_rate·dt.
-        let controls = driver(
+        let controls = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::new(0.0, 0.0, -5.0),
@@ -341,7 +341,7 @@ mod tests {
             ..Default::default()
         };
         for urgent in [false, true] {
-            let controls = driver(
+            let controls = controller(
                 &v,
                 DesiredVelocity {
                     value: Vec3::ZERO,

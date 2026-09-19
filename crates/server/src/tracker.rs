@@ -31,7 +31,7 @@ pub const ARRIVAL_TOLERANCE: f32 = 0.5;
 /// a routed car permanently inside the ramp.
 pub const ARRIVE_RADIUS: f32 = 2.0;
 
-/// Lookahead per unit speed (seconds of travel ahead) -- the driver's preview
+/// Lookahead per unit speed (seconds of travel ahead) -- the controller's preview
 /// time, and the tracker's one real tuning constant.
 ///
 /// It sets the whole tradeoff. A pursuit tracker holds a curve by sitting

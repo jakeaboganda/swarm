@@ -85,7 +85,7 @@ impl Default for WheelSpec {
     }
 }
 
-/// This tick's contact conditions and driver commands for one wheel.
+/// This tick's contact conditions and controller commands for one wheel.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WheelInput {
     pub omega: f32,

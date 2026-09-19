@@ -106,7 +106,7 @@ impl RaycastVehicle {
     }
 }
 
-/// Actuator commands from the driver: a steering angle plus separate throttle
+/// Actuator commands from the controller: a steering angle plus separate throttle
 /// and brake.
 ///
 /// They are separate because brake torque opposes *wheel rotation* and clamps
@@ -144,10 +144,10 @@ pub fn wheel_offset(index: usize, vehicle: &RaycastVehicle) -> Vec3 {
     )
 }
 
-/// Driver: `DesiredVelocity` -> `VehicleControls`, i.e. the pedals + wheel. A
+/// Controller: `DesiredVelocity` -> `VehicleControls`, i.e. the pedals + wheel. A
 /// proportional speed controller split across throttle and brake, and a
 /// rate-limited **pure pursuit** steering law.
-pub(crate) fn driver(
+pub(crate) fn controller(
     vehicle: &RaycastVehicle,
     desired: DesiredVelocity,
     heading: Vec3,
@@ -265,7 +265,7 @@ fn horizontal(v: Vec3) -> Vec3 {
     Vec3::new(v.x, 0.0, v.z).normalize_or(Vec3::X)
 }
 
-/// Drives every `RaycastVehicle`: run the driver, then per wheel cast a ray to
+/// Drives every `RaycastVehicle`: run the controller, then per wheel cast a ray to
 /// the ground, step its spin against the tire, and apply suspension + tire
 /// forces to the chassis (overwriting `ExternalForce`). Runs before the physics
 /// step. Reads the physics context (immutably) to raycast against the world's
@@ -294,7 +294,7 @@ pub fn drive_raycast_vehicles(
         let up = *transform.up();
         let right = *transform.right();
         let forward = *transform.forward();
-        // Horizontal heading for the driver; the full (possibly tilted) body
+        // Horizontal heading for the controller; the full (possibly tilted) body
         // axes place the wheels and orient their forces.
         let heading = horizontal(forward);
         // Rapier applies `ExternalForce::torque` about the centre of mass, so
@@ -302,7 +302,7 @@ pub fn drive_raycast_vehicles(
         let com = center + rotation * vehicle.center_of_mass;
 
         let forward_speed = velocity.linear.dot(heading);
-        let controls = driver(&vehicle, *desired, heading, forward_speed, dt);
+        let controls = controller(&vehicle, *desired, heading, forward_speed, dt);
         vehicle.steer = controls.steer;
         let steer_rot = Quat::from_axis_angle(up, vehicle.steer);
         let filter = QueryFilter::default().exclude_rigid_body(entity);
@@ -538,10 +538,10 @@ mod tests {
     }
 
     #[test]
-    fn driver_accelerates_toward_target_speed() {
+    fn controller_accelerates_toward_target_speed() {
         let v = vehicle();
         // Want 5 m/s forward, currently stopped -> throttle, no brake.
-        let c = driver(
+        let c = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::new(5.0, 0.0, 0.0),
@@ -557,10 +557,10 @@ mod tests {
     }
 
     #[test]
-    fn driver_brakes_when_overspeed() {
+    fn controller_brakes_when_overspeed() {
         let v = vehicle();
         // Moving 10 m/s but target is stop -> brake, and no throttle at all.
-        let c = driver(
+        let c = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::ZERO,
@@ -577,11 +577,11 @@ mod tests {
 
     #[test]
     fn urgent_selects_the_brake_ceiling_not_the_cruise_one() {
-        // The CLAUDE.md guardrail, at the driver: a reflex stop must not be
+        // The CLAUDE.md guardrail, at the controller: a reflex stop must not be
         // limited by the ceiling tuned for ordinary deceleration.
         let v = vehicle();
         let overspeed = |urgent, speed| {
-            driver(
+            controller(
                 &v,
                 DesiredVelocity {
                     value: Vec3::ZERO,
@@ -632,11 +632,11 @@ mod tests {
     }
 
     #[test]
-    fn driver_steers_toward_a_sideways_aim_point() {
+    fn controller_steers_toward_a_sideways_aim_point() {
         let v = vehicle();
         // Heading +X, aim point 6 m away toward +X rotated left (-Z) ->
         // nonzero steer to the left, rate-limited within one tick.
-        let c = driver(
+        let c = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::new(3.0, 0.0, -3.0),
@@ -659,7 +659,7 @@ mod tests {
         // guessing.
         let mut v = vehicle();
         v.steer = 0.2;
-        let c = driver(
+        let c = controller(
             &v,
             DesiredVelocity {
                 value: Vec3::new(3.0, 0.0, -3.0),
@@ -702,7 +702,7 @@ mod tests {
     fn an_aim_point_behind_the_car_asks_for_full_lock() {
         // sin(alpha) shrinks back toward zero past 90 degrees, so the raw
         // geometry would unwind the wheel toward straight for an aim point
-        // over the driver's shoulder. The tightest circle available is the
+        // over the controller's shoulder. The tightest circle available is the
         // honest answer.
         let v = vehicle();
         let behind_left = Vec3::new(-8.0, 0.0, -1.0);
@@ -722,7 +722,7 @@ mod tests {
         let mut v = vehicle();
         v.steer = 0.2;
         for urgent in [false, true] {
-            let c = driver(
+            let c = controller(
                 &v,
                 DesiredVelocity {
                     value: Vec3::ZERO,

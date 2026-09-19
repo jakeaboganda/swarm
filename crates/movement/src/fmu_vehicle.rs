@@ -12,7 +12,7 @@
 //! The FMU handle is `!Send + !Sync` (a foreign native binary), so it cannot be
 //! an ECS component; it lives in the [`FmuStore`] `NonSend` resource, keyed by
 //! entity, which confines FMU stepping to the main thread. The per-entity
-//! plain-data ([`FmuVehicle`]) -- the driver and the resolved binding -- is an
+//! plain-data ([`FmuVehicle`]) -- the controller and the resolved binding -- is an
 //! ordinary component. `server` (its scenario layer) builds both at spawn.
 
 use std::collections::HashMap;
@@ -22,8 +22,8 @@ use bevy_rapier3d::prelude::{
     DefaultRapierContext, QueryFilter, RapierConfiguration, ReadRapierContext, Velocity,
 };
 use dynamics_fmi::{
-    read_pose, to_sim_local, Controls, Driver, DriverInput, FmuError, FmuFrame, FmuInstance, Pose,
-    ResolvedBinding, StepOutcome,
+    read_pose, to_sim_local, Controller, ControllerInput, Controls, FmuError, FmuFrame,
+    FmuInstance, Pose, ResolvedBinding, StepOutcome,
 };
 
 use crate::model::DesiredVelocity;
@@ -42,7 +42,7 @@ const DEFAULT_FRICTION: f32 = 1.0;
 const FLAT_GROUND_HEIGHT: f32 = 0.0;
 
 /// Per-entity FMU-vehicle state that is plain data (so it is a normal, `Send +
-/// Sync` component): the driver (carrying its PI integrator) and the resolved
+/// Sync` component): the controller (carrying its PI integrator) and the resolved
 /// role -> value-reference binding, plus the FMU's running communication-point
 /// time. The FMU handle itself lives in [`FmuStore`], not here.
 ///
@@ -54,7 +54,7 @@ const FLAT_GROUND_HEIGHT: f32 = 0.0;
 #[derive(Component, Debug, Clone)]
 pub struct FmuVehicle {
     /// Plan -> pedals controller; `&mut` each tick (holds integrator state).
-    pub driver: Driver,
+    pub controller: Controller,
     /// Role -> FMI value references, resolved once at spawn.
     pub binding: ResolvedBinding,
     /// The coordinate frame the FMU emits its pose in (see
@@ -91,14 +91,14 @@ pub struct FmuVehicle {
 
 impl FmuVehicle {
     pub fn new(
-        driver: Driver,
+        controller: Controller,
         binding: ResolvedBinding,
         frame: FmuFrame,
         spawn_pos: Vec3,
         spawn_yaw: f32,
     ) -> Self {
         Self {
-            driver,
+            controller,
             binding,
             frame,
             spawn_pos,
@@ -159,23 +159,23 @@ pub struct FmuStep {
 /// *bound* ground roles are written (an FMU that exposes no `friction` input has
 /// `None` there). The `StepOutcome` is returned, never swallowed: a terminating
 /// or early-returning FMU is the caller's to handle.
-// Each argument is a distinct input to one FMU step (driver, binding, instance,
+// Each argument is a distinct input to one FMU step (controller, binding, instance,
 // plan-derived input, ground, bank, time, dt); grouping them into a struct would
 // be ceremony that hides what the step actually consumes.
 #[allow(clippy::too_many_arguments)]
 pub fn fmu_control_step(
-    driver: &mut Driver,
+    controller: &mut Controller,
     binding: &ResolvedBinding,
     fmu: &mut dyn FmuInstance,
-    input: DriverInput,
+    input: ControllerInput,
     ground: GroundSample,
     bank: f32,
     time: f64,
     dt: f32,
 ) -> Result<FmuStep, FmuError> {
-    let controls = driver.control(input, dt);
+    let controls = controller.control(input, dt);
 
-    // Driver actuators (always bound).
+    // Controller actuators (always bound).
     fmu.set_input(binding.inputs.steer, controls.steer as f64)?;
     fmu.set_input(binding.inputs.throttle, controls.throttle as f64)?;
     fmu.set_input(binding.inputs.brake, controls.brake as f64)?;
@@ -283,7 +283,7 @@ pub fn drive_fmu_vehicles(
 
         let heading = horizontal(*transform.forward());
         let speed = velocity.linear.dot(heading);
-        let input = DriverInput {
+        let input = ControllerInput {
             desired_velocity: desired.value,
             lookahead: desired.lookahead,
             heading,
@@ -309,13 +309,13 @@ pub fn drive_fmu_vehicles(
                 },
             };
 
-        // Split-borrow the plain component so the driver (mut) and binding
+        // Split-borrow the plain component so the controller (mut) and binding
         // (shared) can be passed together; copy the time out first.
         let veh = &mut *vehicle;
         let time_now = veh.elapsed;
         let bank = veh.road_bank;
         match fmu_control_step(
-            &mut veh.driver,
+            &mut veh.controller,
             &veh.binding,
             fmu.as_mut(),
             input,
@@ -457,8 +457,8 @@ mod tests {
         }
     }
 
-    fn cruise_input() -> DriverInput {
-        DriverInput {
+    fn cruise_input() -> ControllerInput {
+        ControllerInput {
             // Aim straight ahead (+X), moderate speed, already heading +X so no
             // steering is called for.
             desired_velocity: Vec3::new(6.0, 0.0, 0.0),
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn inputs_land_on_the_bound_value_references() {
-        let mut driver = Driver::default();
+        let mut controller = Controller::default();
         let binding = test_binding();
         let mut fmu = FakeFmu::new();
         // Seed the pose outputs the fake will report back.
@@ -481,7 +481,7 @@ mod tests {
         fmu.values.insert(OUT_YAW, 0.25);
 
         let step = fmu_control_step(
-            &mut driver,
+            &mut controller,
             &binding,
             &mut fmu,
             cruise_input(),
@@ -492,7 +492,7 @@ mod tests {
         )
         .expect("step");
 
-        // Driver actuators reached their references.
+        // Controller actuators reached their references.
         assert_eq!(fmu.values[&STEER], step.controls.steer as f64);
         assert_eq!(fmu.values[&THROTTLE], step.controls.throttle as f64);
         assert_eq!(fmu.values[&BRAKE], step.controls.brake as f64);
@@ -506,14 +506,14 @@ mod tests {
 
     #[test]
     fn unbound_ground_role_is_not_set() {
-        let mut driver = Driver::default();
+        let mut controller = Controller::default();
         let binding = test_binding(); // friction: None
         let mut fmu = FakeFmu::new();
         for vr in [OUT_X, OUT_Y, OUT_Z, OUT_YAW] {
             fmu.values.insert(vr, 0.0);
         }
         fmu_control_step(
-            &mut driver,
+            &mut controller,
             &binding,
             &mut fmu,
             cruise_input(),
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn pose_is_read_from_the_bound_outputs() {
-        let mut driver = Driver::default();
+        let mut controller = Controller::default();
         let binding = test_binding();
         let mut fmu = FakeFmu::new();
         fmu.values.insert(OUT_X, 3.0);
@@ -540,7 +540,7 @@ mod tests {
         fmu.values.insert(OUT_YAW, 1.5);
 
         let step = fmu_control_step(
-            &mut driver,
+            &mut controller,
             &binding,
             &mut fmu,
             cruise_input(),
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn urgent_commands_full_brake_through_to_the_fmu() {
-        let mut driver = Driver::default();
+        let mut controller = Controller::default();
         let binding = test_binding();
         let mut fmu = FakeFmu::new();
         for vr in [OUT_X, OUT_Y, OUT_Z, OUT_YAW] {
@@ -566,7 +566,7 @@ mod tests {
         input.urgent = true;
 
         let step = fmu_control_step(
-            &mut driver,
+            &mut controller,
             &binding,
             &mut fmu,
             input,
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn terminate_outcome_is_surfaced_not_swallowed() {
-        let mut driver = Driver::default();
+        let mut controller = Controller::default();
         let binding = test_binding();
         let mut fmu = FakeFmu::new();
         for vr in [OUT_X, OUT_Y, OUT_Z, OUT_YAW] {
@@ -594,7 +594,7 @@ mod tests {
         fmu.outcome.terminate_simulation = true;
 
         let step = fmu_control_step(
-            &mut driver,
+            &mut controller,
             &binding,
             &mut fmu,
             cruise_input(),
@@ -680,11 +680,11 @@ mod tests {
                 Err(FmuError::GetOutput { vr })
             }
         }
-        let mut driver = Driver::default();
+        let mut controller = Controller::default();
         let binding = test_binding();
         let mut fmu = Rejecting;
         let result = fmu_control_step(
-            &mut driver,
+            &mut controller,
             &binding,
             &mut fmu,
             cruise_input(),

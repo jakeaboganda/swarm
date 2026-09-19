@@ -3,8 +3,8 @@ use thiserror::Error;
 use crate::instance::ValueReference;
 use crate::model::{BaseType, Causality, ModelDescription};
 
-/// The driver-actuator inputs every FMU vehicle exposes, named by the FMU's own
-/// variable names. Fed from the [`crate::Driver`]; all three are required.
+/// The controller-actuator inputs every FMU vehicle exposes, named by the FMU's own
+/// variable names. Fed from the [`crate::Controller`]; all three are required.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputBinding {
     pub steer: String,
@@ -48,7 +48,7 @@ pub struct BindingSpec {
     pub outputs: OutputBinding,
 }
 
-/// Resolved driver inputs: names replaced by the value references the FMU
+/// Resolved controller inputs: names replaced by the value references the FMU
 /// addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedInputs {

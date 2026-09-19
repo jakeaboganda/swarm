@@ -1,6 +1,6 @@
 use glam::Vec3;
 
-/// The driver-actuator commands the FMU plant consumes. `steer` is a steering
+/// The controller-actuator commands the FMU plant consumes. `steer` is a steering
 /// angle in radians, positive = counter-clockwise about +Y (a left turn in a
 /// right-handed, Y-up frame); a real FMU with the opposite convention gets the
 /// sign flipped in its binding later. `throttle`/`brake` are `0.0..=1.0` and
@@ -15,7 +15,7 @@ pub struct Controls {
 /// The universal control target for one tick, translated from the server's
 /// `DesiredVelocity` seam into Bevy-free terms.
 #[derive(Debug, Clone, Copy)]
-pub struct DriverInput {
+pub struct ControllerInput {
     /// Desired world velocity: its horizontal magnitude is the target speed and
     /// its horizontal direction is where to aim.
     pub desired_velocity: Vec3,
@@ -30,9 +30,9 @@ pub struct DriverInput {
     pub urgent: bool,
 }
 
-/// Tunables for the driver. Defaults suit a ~2.5 m-wheelbase car.
+/// Tunables for the controller. Defaults suit a ~2.5 m-wheelbase car.
 #[derive(Debug, Clone, Copy)]
-pub struct DriverConfig {
+pub struct ControllerConfig {
     /// Wheelbase (m), the pure-pursuit geometry length.
     pub wheelbase: f32,
     /// Steering angle clamp (rad).
@@ -45,7 +45,7 @@ pub struct DriverConfig {
     pub integral_limit: f32,
 }
 
-impl Default for DriverConfig {
+impl Default for ControllerConfig {
     fn default() -> Self {
         Self {
             wheelbase: 2.5,
@@ -60,15 +60,15 @@ impl Default for DriverConfig {
 /// Converts the universal `DesiredVelocity` target into plant pedals + steer.
 /// Carries the longitudinal PI integrator, so it is stepped `&mut` per tick.
 #[derive(Debug, Clone, Default)]
-pub struct Driver {
-    config: DriverConfig,
+pub struct Controller {
+    config: ControllerConfig,
     speed_integral: f32,
     /// Last steer angle we commanded, held through a reflex stop (see `control`).
     last_steer: f32,
 }
 
-impl Driver {
-    pub fn new(config: DriverConfig) -> Self {
+impl Controller {
+    pub fn new(config: ControllerConfig) -> Self {
         Self {
             config,
             speed_integral: 0.0,
@@ -77,7 +77,7 @@ impl Driver {
     }
 
     /// One tick: target velocity + body state -> controls.
-    pub fn control(&mut self, input: DriverInput, dt: f32) -> Controls {
+    pub fn control(&mut self, input: ControllerInput, dt: f32) -> Controls {
         if input.urgent {
             // Reflex stop: full brake and bleed the integrator so we do not
             // lunge forward when the reflex later clears. The wheel is *held*
@@ -102,7 +102,7 @@ impl Driver {
         }
     }
 
-    fn steer(&self, input: &DriverInput) -> f32 {
+    fn steer(&self, input: &ControllerInput) -> f32 {
         let desired = horizontal(input.desired_velocity);
         let heading = horizontal(input.heading);
         if input.lookahead <= 0.0
@@ -120,7 +120,7 @@ impl Driver {
         steer.clamp(-self.config.max_steer, self.config.max_steer)
     }
 
-    fn longitudinal(&mut self, input: &DriverInput, dt: f32) -> (f32, f32) {
+    fn longitudinal(&mut self, input: &ControllerInput, dt: f32) -> (f32, f32) {
         let target = horizontal(input.desired_velocity).length();
         let error = target - input.speed;
         self.speed_integral = (self.speed_integral + error * dt)
@@ -146,8 +146,8 @@ mod tests {
 
     /// Facing -Z, aiming straight forward at `target_speed`, currently at
     /// `current`.
-    fn straight(target_speed: f32, current: f32) -> DriverInput {
-        DriverInput {
+    fn straight(target_speed: f32, current: f32) -> ControllerInput {
+        ControllerInput {
             desired_velocity: Vec3::new(0.0, 0.0, -target_speed),
             lookahead: 5.0,
             heading: Vec3::new(0.0, 0.0, -1.0),
@@ -158,14 +158,14 @@ mod tests {
 
     #[test]
     fn straight_ahead_needs_no_steer() {
-        let mut d = Driver::default();
+        let mut d = Controller::default();
         let c = d.control(straight(5.0, 5.0), DT);
         assert!(c.steer.abs() < 1e-5, "steer={}", c.steer);
     }
 
     #[test]
     fn under_target_speed_opens_throttle_not_brake() {
-        let mut d = Driver::default();
+        let mut d = Controller::default();
         let c = d.control(straight(8.0, 2.0), DT);
         assert!(c.throttle > 0.0);
         assert_eq!(c.brake, 0.0);
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn over_target_speed_brakes_not_throttles() {
-        let mut d = Driver::default();
+        let mut d = Controller::default();
         let c = d.control(straight(2.0, 8.0), DT);
         assert_eq!(c.throttle, 0.0);
         assert!(c.brake > 0.0);
@@ -181,9 +181,9 @@ mod tests {
 
     #[test]
     fn urgent_full_brake_holds_the_wheel_rather_than_centring_it() {
-        let mut d = Driver::default();
+        let mut d = Controller::default();
         // A non-urgent turning tick commands a nonzero steer...
-        let turning = DriverInput {
+        let turning = ControllerInput {
             desired_velocity: Vec3::new(-1.0, 0.0, -1.0),
             lookahead: 5.0,
             heading: Vec3::new(0.0, 0.0, -1.0),
@@ -207,8 +207,8 @@ mod tests {
     #[test]
     fn aiming_counter_clockwise_of_heading_steers_positive() {
         // Heading -Z; aim toward forward-and--X, which is CCW about +Y.
-        let mut d = Driver::default();
-        let input = DriverInput {
+        let mut d = Controller::default();
+        let input = ControllerInput {
             desired_velocity: Vec3::new(-1.0, 0.0, -1.0),
             lookahead: 5.0,
             heading: Vec3::new(0.0, 0.0, -1.0),
@@ -221,12 +221,12 @@ mod tests {
 
     /// A tight-lookahead aim in `dir` (world), heading -Z, that would demand a
     /// steer past the clamp.
-    fn hard_turn(dir: Vec3) -> (Driver, DriverInput) {
-        let d = Driver::new(DriverConfig {
+    fn hard_turn(dir: Vec3) -> (Controller, ControllerInput) {
+        let d = Controller::new(ControllerConfig {
             max_steer: 0.4,
             ..Default::default()
         });
-        let input = DriverInput {
+        let input = ControllerInput {
             desired_velocity: dir,
             lookahead: 0.5,
             heading: Vec3::new(0.0, 0.0, -1.0),
@@ -257,7 +257,7 @@ mod tests {
         // Isolate the integral term (kp=0, ki=1) with a small integral_limit, so
         // the steady throttle equals ki*integral_limit and cannot wind past it.
         // Without the clamp, a persistent positive error drives throttle to 1.0.
-        let mut d = Driver::new(DriverConfig {
+        let mut d = Controller::new(ControllerConfig {
             speed_kp: 0.0,
             speed_ki: 1.0,
             integral_limit: 0.5,

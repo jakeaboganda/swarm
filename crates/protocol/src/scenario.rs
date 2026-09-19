@@ -29,7 +29,7 @@ pub enum Embodiment {
 /// `SensorDef` may not reuse this name.
 pub const GROUND_TRUTH_SENSOR: &str = "ground_truth";
 
-/// The driver-actuator inputs every FMU vehicle exposes, named by the FMU's
+/// The controller-actuator inputs every FMU vehicle exposes, named by the FMU's
 /// own variable names. Mirrors `dynamics_fmi::binding::InputBinding` exactly,
 /// so the `protocol` -> `dynamics-fmi` map is 1:1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
